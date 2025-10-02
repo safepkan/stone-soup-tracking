@@ -30,10 +30,7 @@ import numpy as np
 # StoneSoup
 from stonesoup.reader.generic import DictionaryDetectionReader
 from stonesoup.feeder.multi import FIFOMultiDataFeeder
-from stonesoup.feeder.time import (  # noqa: F401
-    TimeBufferedFeeder,
-    TimeSyncFeeder,
-)  # (optional wrappers)
+from stonesoup.feeder.time import TimeBufferedFeeder, TimeSyncFeeder  # optional wrappers
 from stonesoup.models.transition.linear import (
     ConstantVelocity,
     CombinedLinearGaussianTransitionModel,
@@ -101,7 +98,7 @@ class SensorCfg:
     rate_hz: float
     pos_noise_std: float
     phase: float = 0.0
-    start: dt.datetime | None = None  # if None, set at init
+    start: dt.datetime = None  # if None, set at init
 
 
 class SensorDictStream:
@@ -121,7 +118,6 @@ class SensorDictStream:
 
     def __iter__(self) -> Iterator[Dict[str, Any]]:
         k = 0
-        assert self.cfg.start is not None
         t = self.cfg.start
         dt_s = 1.0 / self.cfg.rate_hz
 
@@ -136,11 +132,11 @@ class SensorDictStream:
         # Precompute per-target parameters
         params = []
         for i in range(n_targets):
-            vx = 1.1 + 0.2 * i  # m/s
-            amp = 4.0 + 0.8 * (i % 2)  # sine amplitude
-            omega = 0.35 + 0.05 * i  # rad/s
-            phase = self.cfg.phase + 0.8 * i  # phase offset
-            x0 = base_x + 3.0 * i  # staggered starts
+            vx = 1.1 + 0.2 * i                 # m/s
+            amp = 4.0 + 0.8 * (i % 2)          # sine amplitude
+            omega = 0.35 + 0.05 * i            # rad/s
+            phase = self.cfg.phase + 0.8 * i   # phase offset
+            x0 = base_x + 3.0 * i              # staggered starts
             y0 = base_y + 2.0 * i
             params.append((x0, y0, vx, amp, omega, phase))
 
@@ -148,14 +144,12 @@ class SensorDictStream:
             tsec = k * dt_s
 
             # Emit ALL targets at the same timestamp t (grouped into one detection set)
-            for x0, y0, vx, amp, omega, phase in params:
+            for (x0, y0, vx, amp, omega, phase) in params:
                 x = x0 + vx * tsec
                 y = y0 + amp * math.sin(omega * tsec + phase)
 
                 # add measurement noise
-                meas = np.array([x, y]) + np.random.normal(
-                    0.0, self.cfg.pos_noise_std, 2
-                )
+                meas = np.array([x, y]) + np.random.normal(0.0, self.cfg.pos_noise_std, 2)
 
                 yield {
                     "time": t,  # same timestamp for all targets this tick
@@ -243,10 +237,7 @@ def build_tracker() -> tuple[MultiTargetTracker, LinearGaussian]:
     )
     updater = KalmanUpdater(measurement_model=meas_model)
     hypothesiser = DistanceHypothesiser(
-        predictor=predictor,
-        updater=updater,
-        measure=Mahalanobis(),
-        missed_distance=12.0,
+        predictor=predictor, updater=updater, measure=Mahalanobis(), missed_distance=12.0
     )
     associator = NearestNeighbour(hypothesiser)
 
@@ -292,9 +283,7 @@ def run(runtime_s: float = 12.0):
     r2 = build_dict_reader(iter(s2))
 
     # readers -> FIFO feeder (optionally enforce time ordering or sync windows)
-    feeder = build_fifo_feeder(
-        [r1, r2], max_queue=256, time_ordering=False, time_window_s=None
-    )
+    feeder = build_fifo_feeder([r1, r2], max_queue=256, time_ordering=False, time_window_s=None)
 
     # tracker
     tracker, _ = build_tracker()
