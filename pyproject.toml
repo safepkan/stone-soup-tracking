@@ -1,0 +1,34 @@
+[tool.black]
+target-version = ['py312']
+include = '\.pyi?$'
+exclude = '''
+
+(
+  /(
+      \.eggs         # exclude a few common directories in the
+    | \.git          # root of the project
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | buck-out
+    | build
+    | dist
+  )/
+)
+'''
+
+[tool.flake8]
+max-line-length = 88
+# E203: whitespace before ':'
+# E501: line too long
+# E741: ambigous variable name 'I', 'O' or 'l'
+# W503: line break before binary operator
+extend-ignore = ['E203', 'E501', 'E741', 'W503']
+exclude = [".git", "venv", "build"]
+
+[tool.mypy]
+[[tool.mypy.overrides]]
+module = ["matplotlib.*", "scipy.*", "stonesoup.*"]
+ignore_missing_imports = true

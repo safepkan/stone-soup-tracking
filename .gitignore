@@ -1,0 +1,25 @@
+# Python
+venv/
+*.py[cod]
+__pycache__/
+*.so
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data files
+*.mcap
+*.zip
+
+# Misc
+.DS_Store
+.cache/
+.hypothesis/
+local/
