@@ -22,11 +22,12 @@ def _check_command(cmd: List[str]) -> bool:
 def _get_python_files() -> List[str]:
     """Get all Python files in the repository."""
     all_py_files = list(Path(".").rglob("*.py"))
-    # Exclude venv and other common directories
+    # Exclude venv, external, and other common directories
+    excluded_dirs = {"venv", "external"}
     py_files = [
         str(f)
         for f in all_py_files
-        if not any(part.startswith(".") or part == "venv" for part in f.parts)
+        if not any(part.startswith(".") or part in excluded_dirs for part in f.parts)
     ]
     return py_files
 
