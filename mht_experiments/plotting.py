@@ -108,8 +108,11 @@ def plot_tracks_stable_xy(
     """Plot track means with stable colours/styles independent of container iteration order."""
     artists = []
 
-    # Stable *within a run* even if `tracks` is a set
-    ordered_tracks = sorted(tracks, key=id)
+    def sort_key(tr: Track) -> int:
+        tid = tr.metadata.get("track_id", None)
+        return int(tid) if tid is not None else id(tr)
+
+    ordered_tracks = sorted(tracks, key=sort_key)
 
     style_iter = cycle(styles)
     for track in ordered_tracks:
