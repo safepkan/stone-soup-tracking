@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypeAlias
 
 from stonesoup.hypothesiser.mfa import MFAHypothesiser
 from stonesoup.hypothesiser.probability import PDAHypothesiser
@@ -11,8 +12,8 @@ from stonesoup.dataassociator.mfa import MFADataAssociator
 from mht_experiments.scenarios.crossing_targets import ScenarioConfig
 
 
-PredictorT = KalmanPredictor | UnscentedKalmanPredictor
-UpdaterT = KalmanUpdater | UnscentedKalmanUpdater
+PredictorT: TypeAlias = KalmanPredictor | UnscentedKalmanPredictor
+UpdaterT: TypeAlias = KalmanUpdater | UnscentedKalmanUpdater
 
 
 @dataclass
@@ -22,7 +23,9 @@ class MFAComponents:
     data_associator: MFADataAssociator
 
 
-def _build_mfa_data_associator(predictor: PredictorT, updater: UpdaterT, config: ScenarioConfig) -> MFADataAssociator:
+def _build_mfa_data_associator(
+    predictor: PredictorT, updater: UpdaterT, config: ScenarioConfig
+) -> MFADataAssociator:
     base = PDAHypothesiser(
         predictor,
         updater,
@@ -36,7 +39,9 @@ def _build_mfa_data_associator(predictor: PredictorT, updater: UpdaterT, config:
     )
 
 
-def build_mfa_components_linear(transition_model, measurement_model, config: ScenarioConfig) -> MFAComponents:
+def build_mfa_components_linear(
+    transition_model, measurement_model, config: ScenarioConfig
+) -> MFAComponents:
     predictor = KalmanPredictor(transition_model)
     updater = KalmanUpdater(measurement_model)
     return MFAComponents(
@@ -46,7 +51,9 @@ def build_mfa_components_linear(transition_model, measurement_model, config: Sce
     )
 
 
-def build_mfa_components_ukf(transition_model, measurement_model, config: ScenarioConfig) -> MFAComponents:
+def build_mfa_components_ukf(
+    transition_model, measurement_model, config: ScenarioConfig
+) -> MFAComponents:
     predictor = UnscentedKalmanPredictor(transition_model)
     updater = UnscentedKalmanUpdater(measurement_model)
     return MFAComponents(

@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass
-from typing import List, Set, Tuple
+from typing import List, Tuple
 
 import numpy as np
 from ordered_set import OrderedSet
 
 from stonesoup.models.measurement.nonlinear import CartesianToBearingRange
-from stonesoup.models.transition.linear import CombinedLinearGaussianTransitionModel, ConstantVelocity
-from stonesoup.simulator.simple import MultiTargetGroundTruthSimulator, SimpleDetectionSimulator
+from stonesoup.models.transition.linear import (
+    CombinedLinearGaussianTransitionModel,
+    ConstantVelocity,
+)
+from stonesoup.simulator.simple import (
+    MultiTargetGroundTruthSimulator,
+    SimpleDetectionSimulator,
+)
 from stonesoup.types.array import CovarianceMatrix, StateVector
 from stonesoup.types.detection import Detection
 from stonesoup.types.groundtruth import GroundTruthPath
@@ -43,16 +48,17 @@ def create_bearing_range_mht_example() -> Tuple[
     prob_detection = 0.99
     clutter_area = np.array([[-1, 1], [-1, 1]]) * 150
     clutter_rate = 9
-    surveillance_area = ((clutter_area[0, 1] - clutter_area[0, 0]) *
-                         (clutter_area[1, 1] - clutter_area[1, 0]))
+    surveillance_area = (clutter_area[0, 1] - clutter_area[0, 0]) * (
+        clutter_area[1, 1] - clutter_area[1, 0]
+    )
     clutter_spatial_density = clutter_rate / surveillance_area
 
     config = ScenarioConfig(
         prob_detect=prob_detection,
-        prob_gate=0.9999,               # as per example :contentReference[oaicite:2]{index=2}
+        prob_gate=0.9999,  # as per example :contentReference[oaicite:2]{index=2}
         clutter_density=clutter_spatial_density,
         v_bounds=clutter_area,
-        slide_window=3,                 # as per example :contentReference[oaicite:3]{index=3}
+        slide_window=3,  # as per example :contentReference[oaicite:3]{index=3}
     )
 
     initial_state = GaussianState(
@@ -105,7 +111,9 @@ def create_bearing_range_mht_example() -> Tuple[
     return truths, scans, timestamps, transition_model, measurement_model, config
 
 
-def initial_mfa_tracks_for_bearing_range(start_time: datetime.datetime) -> Set[Track]:
+def initial_mfa_tracks_for_bearing_range(
+    start_time: datetime.datetime,
+) -> OrderedSet[Track]:
     """Create the 3 priors used in the Stone Soup example. :contentReference[oaicite:4]{index=4}"""
     cov = np.diag([10, 1, 10, 1])
 
@@ -115,17 +123,19 @@ def initial_mfa_tracks_for_bearing_range(start_time: datetime.datetime) -> Set[T
         StateVector([-10, -1, 10, 1]),
     ]
 
-    tracks: Set[Track] = set()
+    tracks: OrderedSet[Track] = OrderedSet()
     for sv in priors:
-        gm = GaussianMixture([
-            TaggedWeightedGaussianState(
-                sv,
-                cov,
-                timestamp=start_time,
-                weight=Probability(1),
-                tag=[],
-            )
-        ])
+        gm = GaussianMixture(
+            [
+                TaggedWeightedGaussianState(
+                    sv,
+                    cov,
+                    timestamp=start_time,
+                    weight=Probability(1),
+                    tag=[],
+                )
+            ]
+        )
         tracks.add(Track([gm]))
 
     return tracks

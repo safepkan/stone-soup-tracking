@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Iterable, List, Optional
+from itertools import cycle
 
 import numpy as np
 from matplotlib.axes import Axes
@@ -73,7 +74,7 @@ def plot_tracks(
             parents.append(component)
             mini_tracks.append(parents)
 
-        drawn_states = set()
+        drawn_states: set[object] = set()
         for mini_track in mini_tracks:
             # Avoid re-plotting drawn trajectory
             states_to_plot = [s for s in mini_track if s not in drawn_states]
@@ -91,9 +92,30 @@ def plot_tracks(
 
             # Avoid re-plotting drawn ellipses
             for state in set(states_to_plot) - drawn_states:
-                artists.append(
-                    plot_covar(state, ax, measurement_model, plot_style[0])
-                )
+                artists.append(plot_covar(state, ax, measurement_model, plot_style[0]))
                 drawn_states.add(state)
+
+    return artists
+
+
+def plot_tracks_stable_xy(
+    tracks: Iterable[Track],
+    ax: Axes,
+    *,
+    mapping: tuple[int, int] = (0, 2),
+    styles: tuple[str, ...] = ("r-", "b-", "g-", "m-", "c-", "y-", "k-"),
+):
+    """Plot track means with stable colours/styles independent of container iteration order."""
+    artists = []
+
+    # Stable *within a run* even if `tracks` is a set
+    ordered_tracks = sorted(tracks, key=id)
+
+    style_iter = cycle(styles)
+    for track in ordered_tracks:
+        style = next(style_iter)
+        xs = [state.state_vector[mapping[0], 0] for state in track]
+        ys = [state.state_vector[mapping[1], 0] for state in track]
+        artists.extend(ax.plot(xs, ys, style))
 
     return artists
