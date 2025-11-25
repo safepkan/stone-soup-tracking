@@ -16,6 +16,11 @@ from stonesoup.models.transition.linear import (
 from stonesoup.types.detection import Clutter, Detection, TrueDetection
 from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
 
+from stonesoup.types.mixture import GaussianMixture
+from stonesoup.types.numeric import Probability
+from stonesoup.types.state import TaggedWeightedGaussianState
+from stonesoup.types.track import Track
+
 
 # ----- Global-ish parameters for this scenario -----
 
@@ -39,6 +44,7 @@ _SLIDE_WINDOW = 3  # MFA slide window length (in scans)
 @dataclass(frozen=True)
 class ScenarioConfig:
     """Configuration parameters that both scenario and tracker care about."""
+
     prob_detect: float
     prob_gate: float
     clutter_density: float
@@ -87,7 +93,7 @@ def create_crossing_scenario() -> Tuple[
     measurement_model = LinearGaussian(
         ndim_state=4,
         mapping=(0, 2),
-        noise_covar=np.array([[0.7 ** 2, 0.0], [0.0, 0.7 ** 2]]),
+        noise_covar=np.array([[0.7**2, 0.0], [0.0, 0.7**2]]),
     )
 
     # Ground truth: two crossing targets
@@ -162,3 +168,31 @@ def create_crossing_scenario() -> Tuple[
         scans.append(detections)
 
     return truths, scans, start_time, transition_model, measurement_model, _CONFIG
+
+
+def initial_mfa_tracks_for_crossing(start_time: datetime.datetime) -> OrderedSet[Track]:
+    prior1 = GaussianMixture(
+        [
+            TaggedWeightedGaussianState(
+                [[0.0], [1.0], [0.0], [1.0]],
+                np.diag([1.5, 0.5, 1.5, 0.5]),
+                timestamp=start_time,
+                weight=Probability(1.0),
+                tag=[],
+            )
+        ]
+    )
+
+    prior2 = GaussianMixture(
+        [
+            TaggedWeightedGaussianState(
+                [[0.0], [1.0], [20.0], [-1.0]],
+                np.diag([1.5, 0.5, 1.5, 0.5]),
+                timestamp=start_time,
+                weight=Probability(1.0),
+                tag=[],
+            )
+        ]
+    )
+
+    return OrderedSet((Track([prior1]), Track([prior2])))
