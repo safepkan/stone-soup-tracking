@@ -1,3 +1,33 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mht-experiments"  # choose any name; doesn't have to match the folder name
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+  "stonesoup",
+  "stonesoup[mfa]",
+  "numpy",
+  "scipy",
+  "matplotlib",
+  "ordered-set",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black",
+  "flake8",
+  "Flake8-pyproject",
+  "mypy",
+  "nbformat",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mht_experiments*"]
+
 [tool.black]
 target-version = ['py312']
 include = '\.pyi?$'
