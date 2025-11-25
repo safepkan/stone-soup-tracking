@@ -11,6 +11,9 @@ from stonesoup.predictor.kalman import KalmanPredictor, UnscentedKalmanPredictor
 from stonesoup.types.detection import Detection
 from stonesoup.types.track import Track
 from stonesoup.updater.kalman import KalmanUpdater, UnscentedKalmanUpdater
+from stonesoup.initiator.simple import SimpleMeasurementInitiator
+
+from mht_experiments.helpers.hypothesiser import RobustPDAHypothesiser
 
 
 PredictorT: TypeAlias = KalmanPredictor | UnscentedKalmanPredictor
@@ -23,6 +26,12 @@ class TOMHTParams:
     max_children_per_track: int = 5
     max_missed: int = 5
     log_epsilon: float = 1e-12
+
+    # births (phase 1)
+    max_births_per_scan: int = 2
+    birth_log_penalty: float = (
+        8.0  # subtract this from log-weight per birth (i.e. add -8.0)
+    )
 
 
 @dataclass(frozen=True)
@@ -56,18 +65,23 @@ class TOMHTTracker:
         updater: UpdaterT,
         tracks: Iterable[Track],
         *,
+        initiator: SimpleMeasurementInitiator | None = None,
         params: TOMHTParams = TOMHTParams(),
     ) -> None:
         self.hypothesiser = hypothesiser
         self.updater = updater
         self.params = params
+        self.initiator = initiator
 
         init_tracks_by_id: dict[int, Track] = {}
+        max_tid = -1
         for i, tr in enumerate(list(tracks)):
             tr.metadata.setdefault("track_id", i)
-            tr.metadata.setdefault("log_weight", 0.0)
             tr.metadata.setdefault("missed_count", 0)
             init_tracks_by_id[int(tr.metadata["track_id"])] = tr
+            max_tid = max(max_tid, int(tr.metadata["track_id"]))
+
+        self._next_track_id = max_tid + 1
 
         self.global_hypotheses: list[GlobalHypothesis] = [
             GlobalHypothesis(tracks_by_id=init_tracks_by_id, log_weight=0.0)
@@ -98,6 +112,47 @@ class TOMHTTracker:
     def _copy_track(track: Track) -> Track:
         # Track is list-like; copying states is enough for our simple bookkeeping
         return Track(list(track.states))
+
+    def _used_det_keys_in_global(self, gh: GlobalHypothesis) -> set[int]:
+        used: set[int] = set()
+        for tr in gh.tracks_by_id.values():
+            last = tr.states[-1]
+            hyp = getattr(last, "hypothesis", None)
+            meas = getattr(hyp, "measurement", None) if hyp is not None else None
+            if meas is not None:
+                used.add(self._det_key(meas))
+        return used
+
+    def _with_births(
+        self, gh: GlobalHypothesis, detections: list[Detection], timestamp
+    ) -> GlobalHypothesis:
+        if self.initiator is None:
+            return gh
+
+        used = self._used_det_keys_in_global(gh)
+        unassoc = {d for d in detections if self._det_key(d) not in used}
+        if not unassoc:
+            return gh
+
+        born = list(self.initiator.initiate(unassoc, timestamp))
+        if not born:
+            return gh
+
+        born = born[: self.params.max_births_per_scan]
+
+        new_tracks_by_id = dict(gh.tracks_by_id)
+        new_log = gh.log_weight
+
+        for tr in born:
+            tid = self._next_track_id
+            self._next_track_id += 1
+
+            tr.metadata["track_id"] = tid
+            tr.metadata.setdefault("missed_count", 0)
+            new_tracks_by_id[tid] = tr
+            new_log -= self.params.birth_log_penalty
+
+        return GlobalHypothesis(tracks_by_id=new_tracks_by_id, log_weight=new_log)
 
     def _candidates_for_track(
         self,
@@ -215,6 +270,15 @@ class TOMHTTracker:
         expanded.sort(key=lambda g: g.log_weight, reverse=True)
         self.global_hypotheses = expanded[: self.params.max_global_hypotheses]
 
+        # Optional births (phase 1): apply to each surviving global hypothesis
+        if self.initiator is not None:
+            with_births = [
+                self._with_births(gh, det_list, timestamp)
+                for gh in self.global_hypotheses
+            ]
+            with_births.sort(key=lambda g: g.log_weight, reverse=True)
+            self.global_hypotheses = with_births[: self.params.max_global_hypotheses]
+
         # Output MAP global hypothesis
         if not self.global_hypotheses:
             return set()
@@ -231,6 +295,7 @@ def build_tomht_linear(
     prob_gate: float,
     clutter_density: float,
     tracks: Iterable[Track],
+    initiator: SimpleMeasurementInitiator | None = None,
     params: TOMHTParams = TOMHTParams(),
 ) -> TOMHTTracker:
     predictor = KalmanPredictor(transition_model)
@@ -242,7 +307,9 @@ def build_tomht_linear(
         prob_gate=prob_gate,
         prob_detect=prob_detect,
     )
-    return TOMHTTracker(hypothesiser, updater, tracks, params=params)
+    return TOMHTTracker(
+        hypothesiser, updater, tracks, initiator=initiator, params=params
+    )
 
 
 def build_tomht_ukf(
@@ -253,15 +320,18 @@ def build_tomht_ukf(
     prob_gate: float,
     clutter_density: float,
     tracks: Iterable[Track],
+    initiator: SimpleMeasurementInitiator | None = None,
     params: TOMHTParams = TOMHTParams(),
 ) -> TOMHTTracker:
     predictor = UnscentedKalmanPredictor(transition_model)
     updater = UnscentedKalmanUpdater(measurement_model)
-    hypothesiser = PDAHypothesiser(
+    hypothesiser = RobustPDAHypothesiser(
         predictor,
         updater,
         clutter_density,
         prob_gate=prob_gate,
         prob_detect=prob_detect,
     )
-    return TOMHTTracker(hypothesiser, updater, tracks, params=params)
+    return TOMHTTracker(
+        hypothesiser, updater, tracks, initiator=initiator, params=params
+    )

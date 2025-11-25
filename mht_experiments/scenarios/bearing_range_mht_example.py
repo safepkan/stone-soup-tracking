@@ -11,6 +11,7 @@ from stonesoup.models.transition.linear import (
     CombinedLinearGaussianTransitionModel,
     ConstantVelocity,
 )
+from stonesoup.initiator.simple import SimpleMeasurementInitiator
 from stonesoup.simulator.simple import (
     MultiTargetGroundTruthSimulator,
     SimpleDetectionSimulator,
@@ -139,3 +140,27 @@ def initial_mfa_tracks_for_bearing_range(
         tracks.add(Track([gm]))
 
     return tracks
+
+
+def initial_tomht_tracks_for_bearing_range(start_time) -> list[Track]:
+    """Initial tracks for TO-MHT (single Gaussian, not a mixture)."""
+    cov = CovarianceMatrix(np.diag([10.0, 1.0, 10.0, 1.0]))
+    priors = [
+        StateVector([[10.0], [1.0], [10.0], [1.0]]),
+        StateVector([[-10.0], [-1.0], [-10.0], [-1.0]]),
+        StateVector([[-10.0], [-1.0], [10.0], [1.0]]),
+    ]
+    return [Track([GaussianState(p, covar=cov, timestamp=start_time)]) for p in priors]
+
+
+def tomht_initiator_for_bearing_range(
+    start_time, measurement_model
+) -> SimpleMeasurementInitiator:
+    prior = GaussianState(
+        state_vector=StateVector([[0.0], [0.0], [0.0], [0.0]]),
+        covar=CovarianceMatrix(np.diag([200.0, 20.0, 200.0, 20.0])),
+        timestamp=start_time,
+    )
+    return SimpleMeasurementInitiator(
+        prior_state=prior, measurement_model=measurement_model
+    )

@@ -13,12 +13,15 @@ from stonesoup.models.transition.linear import (
     CombinedLinearGaussianTransitionModel,
     ConstantVelocity,
 )
+from stonesoup.initiator.simple import SimpleMeasurementInitiator
+
 from stonesoup.types.detection import Clutter, Detection, TrueDetection
 from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
-
+from stonesoup.types.array import CovarianceMatrix, StateVector
 from stonesoup.types.mixture import GaussianMixture
 from stonesoup.types.numeric import Probability
 from stonesoup.types.state import TaggedWeightedGaussianState
+from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 
 
@@ -196,3 +199,29 @@ def initial_mfa_tracks_for_crossing(start_time: datetime.datetime) -> OrderedSet
     )
 
     return OrderedSet((Track([prior1]), Track([prior2])))
+
+
+def initial_tomht_tracks_for_crossing(start_time) -> list[Track]:
+    """Initial tracks for TO-MHT (single Gaussian, not a mixture)."""
+    cov = CovarianceMatrix(np.diag([1.5, 0.5, 1.5, 0.5]))
+    s1 = GaussianState(
+        StateVector([[0.0], [1.0], [0.0], [1.0]]), covar=cov, timestamp=start_time
+    )
+    s2 = GaussianState(
+        StateVector([[0.0], [1.0], [20.0], [-1.0]]), covar=cov, timestamp=start_time
+    )
+    return [Track([s1]), Track([s2])]
+
+
+def tomht_initiator_for_crossing(
+    start_time, measurement_model
+) -> SimpleMeasurementInitiator:
+    # Broad-ish prior; tune later if needed
+    prior = GaussianState(
+        state_vector=StateVector([[0.0], [0.0], [0.0], [0.0]]),
+        covar=CovarianceMatrix(np.diag([50.0, 5.0, 50.0, 5.0])),
+        timestamp=start_time,
+    )
+    return SimpleMeasurementInitiator(
+        prior_state=prior, measurement_model=measurement_model
+    )
