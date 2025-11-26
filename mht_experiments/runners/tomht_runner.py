@@ -89,7 +89,7 @@ def run_tomht(setup: SetupName) -> None:
             timestamps[0], transition_model, measurement_model
         )
         # initiator = None  # Skip births
-        # tracks = []  # No initial tracks
+        tracks = []  # No initial tracks
         tracker = build_tomht_ukf(
             transition_model,
             measurement_model,
@@ -101,8 +101,10 @@ def run_tomht(setup: SetupName) -> None:
                 max_global_hypotheses=10,
                 max_children_per_track=3,
                 max_missed=5,
-                max_births_per_scan=1,
-                birth_log_penalty=15.0,
+                max_births_per_scan=2,
+                birth_log_penalty=2.0,
+                unused_det_log_penalty=4.0,
+                prob_gate=0.99,
             ),
         )
         styles = ("g-",)

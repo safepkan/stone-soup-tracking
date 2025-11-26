@@ -41,6 +41,12 @@ from stonesoup.types.track import Track
 from mht_experiments.scenarios.common import ScenarioConfig
 
 
+def _det_sort_key(det: Detection) -> tuple[float, float]:
+    # bearing, range
+    z = det.state_vector
+    return (float(z[0, 0]), float(z[1, 0]))
+
+
 def create_bearing_range_mht_example() -> Tuple[
     OrderedSet[GroundTruthPath],
     List[OrderedSet[Detection]],
@@ -53,7 +59,7 @@ def create_bearing_range_mht_example() -> Tuple[
     Refactor of Stone Soup v1.4 "General Multi Hypotheses tracking implementation example".
     Uses a CartesianToBearingRange measurement model and is intended for UKF.
     """
-    np.random.seed(1908)  # as per example :contentReference[oaicite:1]{index=1}
+    np.random.seed(1908)  # as per MFT example
 
     start_time = datetime.datetime.now().replace(microsecond=0)
     simulation_steps = 50
@@ -69,10 +75,10 @@ def create_bearing_range_mht_example() -> Tuple[
 
     config = ScenarioConfig(
         prob_detect=prob_detection,
-        prob_gate=0.9999,  # as per example :contentReference[oaicite:2]{index=2}
+        prob_gate=0.9999,  # as per MFT example
         clutter_density=clutter_spatial_density,
         v_bounds=clutter_area,
-        slide_window=3,  # as per example :contentReference[oaicite:3]{index=3}
+        slide_window=3,  # as per MFT example
     )
 
     initial_state = GaussianState(
@@ -119,7 +125,8 @@ def create_bearing_range_mht_example() -> Tuple[
 
     for time, dets in detection_sim:
         truths |= OrderedSet(ground_truth_simulator.groundtruth_paths)
-        scans.append(OrderedSet(dets))
+        dets_sorted = sorted(dets, key=_det_sort_key)
+        scans.append(OrderedSet(dets_sorted))
         timestamps.append(time)
 
     return truths, scans, timestamps, transition_model, measurement_model, config
@@ -128,7 +135,7 @@ def create_bearing_range_mht_example() -> Tuple[
 def initial_mfa_tracks_for_bearing_range(
     start_time: datetime.datetime,
 ) -> OrderedSet[Track]:
-    """Create the 3 priors used in the Stone Soup example. :contentReference[oaicite:4]{index=4}"""
+    """Create the 3 priors used in the Stone Soup MFT example."""
     cov = np.diag([10, 1, 10, 1])
 
     priors = [
@@ -187,7 +194,7 @@ def tomht_initiator_for_bearing_range(start_time, transition_model, measurement_
     Confirmation-style initiator to avoid single-detection clutter tracks.
 
     Uses NoHistoryMultiMeasurementInitiator, which is like MultiMeasurementInitiator
-    but releases confirmed tracks with only one state (holding history moved to metadata). :contentReference[oaicite:2]{index=2}
+    but releases confirmed tracks with only one state (holding history moved to metadata).
     """
     predictor = UnscentedKalmanPredictor(transition_model)
     updater = UnscentedKalmanUpdater(measurement_model)
@@ -207,7 +214,7 @@ def tomht_initiator_for_bearing_range(start_time, transition_model, measurement_
     # Prior for unmapped dims (vel); mapped dims replaced via reversible model inverse
     prior = GaussianState(
         state_vector=StateVector([[0.0], [0.0], [0.0], [0.0]]),
-        covar=CovarianceMatrix(np.diag([0.0, 50.0, 0.0, 50.0])),
+        covar=CovarianceMatrix(np.diag([1.0, 50.0, 1.0, 50.0])),
         timestamp=start_time,
     )
 
