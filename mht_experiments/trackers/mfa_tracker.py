@@ -1,30 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
 
 from stonesoup.hypothesiser.mfa import MFAHypothesiser
 from stonesoup.hypothesiser.probability import PDAHypothesiser
 from stonesoup.predictor.kalman import KalmanPredictor, UnscentedKalmanPredictor
 from stonesoup.updater.kalman import KalmanUpdater, UnscentedKalmanUpdater
 from stonesoup.dataassociator.mfa import MFADataAssociator
+from stonesoup.predictor.base import Predictor
+from stonesoup.updater.base import Updater
 
 from mht_experiments.scenarios.crossing_targets import ScenarioConfig
 
 
-PredictorT: TypeAlias = KalmanPredictor | UnscentedKalmanPredictor
-UpdaterT: TypeAlias = KalmanUpdater | UnscentedKalmanUpdater
-
-
 @dataclass
 class MFAComponents:
-    predictor: PredictorT
-    updater: UpdaterT
+    predictor: Predictor
+    updater: Updater
     data_associator: MFADataAssociator
 
 
 def _build_mfa_data_associator(
-    predictor: PredictorT, updater: UpdaterT, config: ScenarioConfig
+    predictor: Predictor, updater: Updater, config: ScenarioConfig
 ) -> MFADataAssociator:
     base = PDAHypothesiser(
         predictor,

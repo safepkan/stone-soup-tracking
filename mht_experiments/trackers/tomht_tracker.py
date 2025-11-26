@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import log
 from ordered_set import OrderedSet
-from typing import Iterable, TypeAlias
+from typing import Iterable
 
 import numpy as np
 
@@ -16,12 +16,9 @@ from stonesoup.types.track import Track
 from stonesoup.types.update import Update
 from stonesoup.updater.kalman import KalmanUpdater, UnscentedKalmanUpdater
 from stonesoup.initiator.simple import SimpleMeasurementInitiator
+from stonesoup.updater.base import Updater
 
 from mht_experiments.helpers.hypothesiser import RobustPDAHypothesiser
-
-
-PredictorT: TypeAlias = KalmanPredictor | UnscentedKalmanPredictor
-UpdaterT: TypeAlias = KalmanUpdater | UnscentedKalmanUpdater
 
 
 @dataclass(frozen=True)
@@ -78,7 +75,7 @@ class TOMHTTracker:
     def __init__(
         self,
         hypothesiser: PDAHypothesiser,
-        updater: UpdaterT,
+        updater: Updater,
         tracks: Iterable[Track],
         *,
         initiator: SimpleMeasurementInitiator | None = None,
