@@ -103,6 +103,42 @@ class TOMHTTracker:
             GlobalHypothesis(tracks_by_id=init_tracks_by_id, log_weight=0.0)
         ]
 
+    def display_global_hypotheses(self, det_list: list[Detection]) -> None:
+        for gh in self.global_hypotheses[: self.params.debug_globals_max]:
+            used = len(self._used_det_keys_for_tracks(gh.tracks_by_id))
+            unused = len(det_list) - used
+            print(
+                f"logW={gh.log_weight:.3f}, "
+                f"tracks={len(gh.tracks_by_id)}, "
+                f"used={used}, unused={unused}, "
+                f"ids={sorted(gh.tracks_by_id.keys())}"
+            )
+
+            for tid, tr in sorted(gh.tracks_by_id.items()):
+                last = tr.states[-1].state_vector
+                ldk = tr.metadata.get("last_det_key", None)
+                miss = int(tr.metadata.get("missed_count", 0))
+                dk = self._used_det_key_for_track(tr)
+                used_str = "MISS" if dk is None else "HIT"
+                age = int(tr.metadata.get("age", len(tr)))
+                hits = int(tr.metadata.get("hits", 0))
+                print(
+                    f"  id={tid}, {used_str}, age={age}, hits={hits}, miss={miss}, ldk={ldk}, last={self._fmt_state_xyvxvy(last)}"
+                )
+
+    def display_births(
+        self, born: list[Track], det_index_by_obj: dict[int, int]
+    ) -> None:
+        for tr in born[: self.params.debug_births_max]:
+            used = self._birth_used_key(tr, det_index_by_obj)
+            support, age, misses = self._birth_support_age_misses(tr)
+            covtr = self._birth_covar_trace(tr)
+            last = tr.states[-1].state_vector
+            print(
+                f"  used={used}, support={support}, age={age}, misses={misses}, covtr={covtr:.2g}, "
+                f"last={self._fmt_state_xyvxvy(last)}"
+            )
+
     @staticmethod
     def _fmt_state_xyvxvy(state_vector) -> str:
         sv = np.asarray(state_vector, dtype=float)
@@ -408,29 +444,13 @@ class TOMHTTracker:
                 print(
                     f"\nBirth candidates at {timestamp} (pre-limit): {len(born_scored)}"
                 )
-                for key, tr in born_scored[: self.params.debug_births_max]:
-                    used = self._birth_used_key(tr, det_index_by_obj)
-                    support, age, misses = self._birth_support_age_misses(tr)
-                    covtr = self._birth_covar_trace(tr)
-                    last = tr.states[-1].state_vector
-                    print(
-                        f"  used={used}, support={support}, age={age}, misses={misses}, covtr={covtr:.2g}, "
-                        f"last={self._fmt_state_xyvxvy(last)}"
-                    )
+                self.display_births(born, det_index_by_obj)
 
             born = born[: self.params.max_births_per_scan]
 
             if self.params.debug_display_births:
                 print(f"Births kept (post-limit): {len(born)}")
-                for tr in born[: self.params.debug_births_max]:
-                    used = self._birth_used_key(tr, det_index_by_obj)
-                    support, age, misses = self._birth_support_age_misses(tr)
-                    covtr = self._birth_covar_trace(tr)
-                    last = tr.states[-1].state_vector
-                    print(
-                        f"  used={used}, support={support}, age={age}, misses={misses}, covtr={covtr:.2g}, "
-                        f"last={self._fmt_state_xyvxvy(last)}"
-                    )
+                self.display_births(born, det_index_by_obj)
 
             if born:
                 # Allocate stable IDs once for these births (shared across variants)
@@ -453,11 +473,6 @@ class TOMHTTracker:
                         for (tid, tr, used) in birth_templates
                         if used is None or used not in used_in_gh
                     ]
-
-                    if self.params.debug_display_births:
-                        print(
-                            f"  GH logW={gh.log_weight:.3f}: compatible_births={len(compatible)}"
-                        )
 
                     # Always allow "no birth" variant (except for empty start heuristic, see above)
                     # and then branch with births one-by-one.
@@ -577,27 +592,7 @@ class TOMHTTracker:
 
         if self.params.debug_display_hypotheses:
             print(f"\nGlobal hypotheses at timestamp {timestamp}:")
-            for gh in self.global_hypotheses[: self.params.debug_globals_max]:
-                used = len(self._used_det_keys_for_tracks(gh.tracks_by_id))
-                unused = len(det_list) - used
-                print(
-                    f"logW={gh.log_weight:.3f}, "
-                    f"tracks={len(gh.tracks_by_id)}, "
-                    f"used={used}, unused={unused}, "
-                    f"ids={sorted(gh.tracks_by_id.keys())}"
-                )
-
-                for tid, tr in sorted(gh.tracks_by_id.items()):
-                    last = tr.states[-1].state_vector
-                    ldk = tr.metadata.get("last_det_key", None)
-                    miss = int(tr.metadata.get("missed_count", 0))
-                    dk = self._used_det_key_for_track(tr)
-                    used_str = "MISS" if dk is None else "HIT"
-                    age = int(tr.metadata.get("age", len(tr)))
-                    hits = int(tr.metadata.get("hits", 0))
-                    print(
-                        f"  id={tid}, {used_str}, age={age}, hits={hits}, miss={miss}, ldk={ldk}, last={self._fmt_state_xyvxvy(last)}"
-                    )
+            self.display_global_hypotheses(det_list)
 
         # Output MAP global hypothesis
         if not self.global_hypotheses:
