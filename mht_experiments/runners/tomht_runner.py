@@ -10,7 +10,7 @@ from matplotlib import animation
 from stonesoup.plotter import Plotter
 
 from mht_experiments.plotting import plot_tracks_stable_xy
-from mht_experiments.scenarios.bearing_range_mht_example import (
+from mht_experiments.scenarios.bearing_range import (
     create_bearing_range_mht_example,
     initial_tomht_tracks_for_bearing_range,
     tomht_initiator_for_bearing_range,

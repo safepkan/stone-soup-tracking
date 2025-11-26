@@ -18,7 +18,7 @@ from mht_experiments.scenarios.crossing_targets import (
     create_crossing_scenario,
     initial_mfa_tracks_for_crossing,
 )
-from mht_experiments.scenarios.bearing_range_mht_example import (
+from mht_experiments.scenarios.bearing_range import (
     create_bearing_range_mht_example,
     initial_mfa_tracks_for_bearing_range,
 )
