@@ -18,7 +18,7 @@ from mht_experiments.scenarios.bearing_range_mht_example import (
 from mht_experiments.scenarios.crossing_targets import (
     create_crossing_scenario,
     initial_tomht_tracks_for_crossing,
-    tomht_initiator_for_crossing,
+    tomht_initiator_for_crossing_simple,
 )
 from mht_experiments.trackers.tomht_tracker import (
     TOMHTParams,
@@ -62,18 +62,22 @@ def run_tomht(setup: SetupName) -> None:
             start_time + datetime.timedelta(seconds=i) for i in range(len(scans))
         ]
         tracks = initial_tomht_tracks_for_crossing(start_time)
-        initiator = tomht_initiator_for_crossing(start_time, measurement_model)
-        # initiator = None  # Skip births
+        initiator = tomht_initiator_for_crossing_simple(start_time, measurement_model)
+        initiator = None  # Skip births
         # tracks = []  # No initial tracks
         tracker = build_tomht_linear(
             transition_model,
             measurement_model,
             prob_detect=config.prob_detect,
-            prob_gate=config.prob_gate,
             clutter_density=config.clutter_density,
             tracks=tracks,
             initiator=initiator,
-            params=TOMHTParams(max_children_per_track=5, max_missed=5),
+            params=TOMHTParams(
+                max_children_per_track=5,
+                max_missed=5,
+                prob_gate=0.9999,
+                birth_log_penalty=15.0,
+            ),
         )
         styles = ("r-", "b-")
     else:
@@ -81,18 +85,25 @@ def run_tomht(setup: SetupName) -> None:
             create_bearing_range_mht_example()
         )
         tracks = initial_tomht_tracks_for_bearing_range(timestamps[0])
-        initiator = tomht_initiator_for_bearing_range(timestamps[0], measurement_model)
+        initiator = tomht_initiator_for_bearing_range(
+            timestamps[0], transition_model, measurement_model
+        )
         # initiator = None  # Skip births
         # tracks = []  # No initial tracks
         tracker = build_tomht_ukf(
             transition_model,
             measurement_model,
             prob_detect=config.prob_detect,
-            prob_gate=config.prob_gate,
             clutter_density=config.clutter_density,
             tracks=tracks,
             initiator=initiator,
-            params=TOMHTParams(max_children_per_track=5, max_missed=5),
+            params=TOMHTParams(
+                max_global_hypotheses=10,
+                max_children_per_track=3,
+                max_missed=5,
+                max_births_per_scan=1,
+                birth_log_penalty=15.0,
+            ),
         )
         styles = ("g-",)
 

@@ -27,6 +27,8 @@ class TOMHTParams:
     max_missed: int = 5
     log_epsilon: float = 1e-12
 
+    prob_gate: float = 0.99
+
     # births (phase 1)
     max_births_per_scan: int = 2
     birth_log_penalty: float = (
@@ -292,7 +294,6 @@ def build_tomht_linear(
     measurement_model: MeasurementModel,
     *,
     prob_detect: float,
-    prob_gate: float,
     clutter_density: float,
     tracks: Iterable[Track],
     initiator: SimpleMeasurementInitiator | None = None,
@@ -304,7 +305,7 @@ def build_tomht_linear(
         predictor,
         updater,
         clutter_density,
-        prob_gate=prob_gate,
+        prob_gate=params.prob_gate,
         prob_detect=prob_detect,
     )
     return TOMHTTracker(
@@ -317,7 +318,6 @@ def build_tomht_ukf(
     measurement_model: MeasurementModel,
     *,
     prob_detect: float,
-    prob_gate: float,
     clutter_density: float,
     tracks: Iterable[Track],
     initiator: SimpleMeasurementInitiator | None = None,
@@ -329,7 +329,7 @@ def build_tomht_ukf(
         predictor,
         updater,
         clutter_density,
-        prob_gate=prob_gate,
+        prob_gate=params.prob_gate,
         prob_detect=prob_detect,
     )
     return TOMHTTracker(

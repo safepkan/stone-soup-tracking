@@ -11,11 +11,23 @@ from stonesoup.models.transition.linear import (
     CombinedLinearGaussianTransitionModel,
     ConstantVelocity,
 )
-from stonesoup.initiator.simple import SimpleMeasurementInitiator
+
+from stonesoup.predictor.kalman import UnscentedKalmanPredictor
+from stonesoup.updater.kalman import UnscentedKalmanUpdater
+from stonesoup.dataassociator.neighbour import GNNWith2DAssignment
+from stonesoup.hypothesiser.distance import DistanceHypothesiser
+from stonesoup.deleter.error import CovarianceBasedDeleter
+from stonesoup.initiator.simple import (
+    SimpleMeasurementInitiator,
+    NoHistoryMultiMeasurementInitiator,
+)
+
 from stonesoup.simulator.simple import (
     MultiTargetGroundTruthSimulator,
     SimpleDetectionSimulator,
 )
+
+from stonesoup.measures import Mahalanobis
 from stonesoup.types.array import CovarianceMatrix, StateVector
 from stonesoup.types.detection import Detection
 from stonesoup.types.groundtruth import GroundTruthPath
@@ -25,7 +37,8 @@ from stonesoup.types.numeric import Probability
 from stonesoup.types.state import TaggedWeightedGaussianState
 from stonesoup.types.track import Track
 
-from mht_experiments.scenarios.crossing_targets import ScenarioConfig
+
+from mht_experiments.scenarios.common import ScenarioConfig
 
 
 def create_bearing_range_mht_example() -> Tuple[
@@ -153,9 +166,12 @@ def initial_tomht_tracks_for_bearing_range(start_time) -> list[Track]:
     return [Track([GaussianState(p, covar=cov, timestamp=start_time)]) for p in priors]
 
 
-def tomht_initiator_for_bearing_range(
+def tomht_initiator_for_bearing_range_simple(
     start_time, measurement_model
 ) -> SimpleMeasurementInitiator:
+    """
+    Simple initiator based on SimpleMeasurementInitiator.
+    """
     prior = GaussianState(
         state_vector=StateVector([[0.0], [0.0], [0.0], [0.0]]),
         covar=CovarianceMatrix(np.diag([200.0, 20.0, 200.0, 20.0])),
@@ -163,4 +179,44 @@ def tomht_initiator_for_bearing_range(
     )
     return SimpleMeasurementInitiator(
         prior_state=prior, measurement_model=measurement_model
+    )
+
+
+def tomht_initiator_for_bearing_range(start_time, transition_model, measurement_model):
+    """
+    Confirmation-style initiator to avoid single-detection clutter tracks.
+
+    Uses NoHistoryMultiMeasurementInitiator, which is like MultiMeasurementInitiator
+    but releases confirmed tracks with only one state (holding history moved to metadata). :contentReference[oaicite:2]{index=2}
+    """
+    predictor = UnscentedKalmanPredictor(transition_model)
+    updater = UnscentedKalmanUpdater(measurement_model)
+
+    # Association inside the initiator’s “holding” logic (small internal tracker)
+    hypothesiser = DistanceHypothesiser(
+        predictor,
+        updater,
+        measure=Mahalanobis(),
+        missed_distance=2.0,  # tune
+    )
+    data_associator = GNNWith2DAssignment(hypothesiser)
+
+    # Delete uncertain holding tracks (tune threshold)
+    deleter = CovarianceBasedDeleter(covar_trace_thresh=1e4)
+
+    # Prior for unmapped dims (vel); mapped dims replaced via reversible model inverse
+    prior = GaussianState(
+        state_vector=StateVector([[0.0], [0.0], [0.0], [0.0]]),
+        covar=CovarianceMatrix(np.diag([0.0, 50.0, 0.0, 50.0])),
+        timestamp=start_time,
+    )
+
+    return NoHistoryMultiMeasurementInitiator(
+        prior_state=prior,
+        measurement_model=measurement_model,
+        deleter=deleter,
+        data_associator=data_associator,
+        updater=updater,
+        min_points=3,
+        updates_only=True,
     )

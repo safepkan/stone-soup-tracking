@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import List, Tuple
 
 import datetime
@@ -25,6 +24,9 @@ from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 
 
+from mht_experiments.scenarios.common import ScenarioConfig
+
+
 # ----- Global-ish parameters for this scenario -----
 
 # Reproduce the original example behaviour
@@ -42,17 +44,6 @@ _PROB_GATE = chi2.cdf(_GATE_LEVEL, 2)  # gating probability
 _CLUTTER_DENSITY = _LAMBDA_V / np.prod(_V_BOUNDS[:, 0] - _V_BOUNDS[:, 1])
 
 _SLIDE_WINDOW = 3  # MFA slide window length (in scans)
-
-
-@dataclass(frozen=True)
-class ScenarioConfig:
-    """Configuration parameters that both scenario and tracker care about."""
-
-    prob_detect: float
-    prob_gate: float
-    clutter_density: float
-    v_bounds: np.ndarray
-    slide_window: int
 
 
 _CONFIG = ScenarioConfig(
@@ -213,7 +204,7 @@ def initial_tomht_tracks_for_crossing(start_time) -> list[Track]:
     return [Track([s1]), Track([s2])]
 
 
-def tomht_initiator_for_crossing(
+def tomht_initiator_for_crossing_simple(
     start_time, measurement_model
 ) -> SimpleMeasurementInitiator:
     # Broad-ish prior; tune later if needed
