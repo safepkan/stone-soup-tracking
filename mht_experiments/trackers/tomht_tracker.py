@@ -76,7 +76,7 @@ class TOMHTTracker:
         self,
         hypothesiser: PDAHypothesiser,
         updater: Updater,
-        tracks: Iterable[Track],
+        initial_tracks: Iterable[Track],
         *,
         initiator: SimpleMeasurementInitiator | None = None,
         params: TOMHTParams = TOMHTParams(),
@@ -88,7 +88,7 @@ class TOMHTTracker:
 
         init_tracks_by_id: dict[int, Track] = {}
         max_tid = -1
-        for i, tr in enumerate(list(tracks)):
+        for i, tr in enumerate(list(initial_tracks)):
             tr.metadata.setdefault("track_id", i)
             tr.metadata.setdefault("missed_count", 0)
             init_tracks_by_id[int(tr.metadata["track_id"])] = tr
@@ -100,7 +100,7 @@ class TOMHTTracker:
             GlobalHypothesis(tracks_by_id=init_tracks_by_id, log_weight=0.0)
         ]
 
-    def display_global_hypotheses(self, det_list: list[Detection]) -> None:
+    def _display_global_hypotheses(self, det_list: list[Detection]) -> None:
         for gh in self.global_hypotheses[: self.params.debug_globals_max]:
             used = len(self._used_det_keys_for_tracks(gh.tracks_by_id))
             unused = len(det_list) - used
@@ -123,7 +123,7 @@ class TOMHTTracker:
                     f"  id={tid}, {used_str}, age={age}, hits={hits}, miss={miss}, ldk={ldk}, last={self._fmt_state_xyvxvy(last)}"
                 )
 
-    def display_births(
+    def _display_births(
         self, born: list[Track], det_index_by_obj: dict[int, int]
     ) -> None:
         for tr in born[: self.params.debug_births_max]:
@@ -441,13 +441,13 @@ class TOMHTTracker:
                 print(
                     f"\nBirth candidates at {timestamp} (pre-limit): {len(born_scored)}"
                 )
-                self.display_births(born, det_index_by_obj)
+                self._display_births(born, det_index_by_obj)
 
             born = born[: self.params.max_births_per_scan]
 
             if self.params.debug_display_births:
                 print(f"Births kept (post-limit): {len(born)}")
-                self.display_births(born, det_index_by_obj)
+                self._display_births(born, det_index_by_obj)
 
             if born:
                 # Allocate stable IDs once for these births (shared across variants)
@@ -558,7 +558,7 @@ class TOMHTTracker:
         det_list = list(detections)
         det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}
 
-        # Expand globals with current set of detections
+        # Expand globals with current batch of detections
         expanded: list[GlobalHypothesis] = []
         for gh in self.global_hypotheses:
             expanded.extend(
@@ -589,7 +589,7 @@ class TOMHTTracker:
 
         if self.params.debug_display_hypotheses:
             print(f"\nGlobal hypotheses at timestamp {timestamp}:")
-            self.display_global_hypotheses(det_list)
+            self._display_global_hypotheses(det_list)
 
         # Output MAP global hypothesis
         if not self.global_hypotheses:
