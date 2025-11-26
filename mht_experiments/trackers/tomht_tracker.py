@@ -112,11 +112,6 @@ class TOMHTTracker:
         vy = float(sv[3, 0])
         return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
 
-    @staticmethod
-    def _det_key(det: Detection) -> int:
-        # Per-scan identity; OK for exclusivity constraint
-        return id(det)
-
     def _hyp_probability(self, hyp) -> float:
         p = getattr(hyp, "probability", None)
         if p is None:
@@ -464,30 +459,88 @@ class TOMHTTracker:
                             f"  GH logW={gh.log_weight:.3f}: compatible_births={len(compatible)}"
                         )
 
-                    if compatible:
+                    # Always allow "no birth" variant (except for empty start heuristic, see above)
+                    # and then branch with births one-by-one.
+                    for tid, template, used in compatible:
                         tracks_by_id = dict(gh.tracks_by_id)
-                        for tid, template, used in compatible:
-                            tr_copy = self._copy_track(template)
-                            tr_copy.metadata["track_id"] = tid
-                            tr_copy.metadata["age"] = 1
-                            tr_copy.metadata["hits"] = 1 if used is not None else 0
-                            tr_copy.metadata["missed_count"] = 0
-                            tr_copy.metadata["last_det_key"] = used
-                            tr_copy.metadata["last_det_hit"] = used is not None
-                            tracks_by_id[tid] = tr_copy
 
+                        tr_copy = self._copy_track(template)
+                        tr_copy.metadata["track_id"] = tid
+                        tr_copy.metadata["age"] = 1
+                        tr_copy.metadata["hits"] = 1 if used is not None else 0
+                        tr_copy.metadata["missed_count"] = 0
+                        tr_copy.metadata["last_det_key"] = used
+                        tr_copy.metadata["last_det_hit"] = used is not None
+
+                        tracks_by_id[tid] = tr_copy
                         new_globals.append(
                             GlobalHypothesis(
                                 tracks_by_id=tracks_by_id,
                                 log_weight=gh.log_weight
-                                - self.params.birth_log_penalty * len(compatible),
+                                - self.params.birth_log_penalty,
                             )
                         )
+
+                    # Optional: also include the "two births at once" variant when exactly 2 are compatible.
+                    use_two_births = True
+                    if use_two_births:
+                        if (
+                            len(compatible) >= 2
+                            and self.params.max_births_per_scan >= 2
+                        ):
+                            (tid1, t1, u1), (tid2, t2, u2) = (
+                                compatible[0],
+                                compatible[1],
+                            )
+                            if (
+                                u1 is None or u2 is None or u1 != u2
+                            ):  # should always hold, but be safe
+                                tracks_by_id = dict(gh.tracks_by_id)
+
+                                for tid, template, used in [
+                                    (tid1, t1, u1),
+                                    (tid2, t2, u2),
+                                ]:
+                                    tr_copy = self._copy_track(template)
+                                    tr_copy.metadata["track_id"] = tid
+                                    tr_copy.metadata["age"] = 1
+                                    tr_copy.metadata["hits"] = (
+                                        1 if used is not None else 0
+                                    )
+                                    tr_copy.metadata["missed_count"] = 0
+                                    tr_copy.metadata["last_det_key"] = used
+                                    tr_copy.metadata["last_det_hit"] = used is not None
+                                    tracks_by_id[tid] = tr_copy
+
+                                new_globals.append(
+                                    GlobalHypothesis(
+                                        tracks_by_id=tracks_by_id,
+                                        log_weight=gh.log_weight
+                                        - 2.0 * self.params.birth_log_penalty,
+                                    )
+                                )
 
                 new_globals.sort(key=lambda g: g.log_weight, reverse=True)
                 self.global_hypotheses = new_globals[
                     : self.params.max_global_hypotheses
                 ]
+
+    def _dedupe_globals_by_last_keys(
+        self, globals: list[GlobalHypothesis]
+    ) -> list[GlobalHypothesis]:
+        """Keep best log_weight per (track_id -> last_det_key) signature."""
+        best: dict[tuple[tuple[int, int | None], ...], GlobalHypothesis] = {}
+        for gh in globals:
+            sig = tuple(
+                sorted(
+                    (tid, gh.tracks_by_id[tid].metadata.get("last_det_key", None))
+                    for tid in gh.tracks_by_id
+                )
+            )
+            prev = best.get(sig)
+            if prev is None or gh.log_weight > prev.log_weight:
+                best[sig] = gh
+        return list(best.values())
 
     def step(self, detections: Iterable[Detection], timestamp) -> set[Track]:
         det_list = list(detections)
@@ -506,6 +559,9 @@ class TOMHTTracker:
         expanded = [
             self._apply_unused_detection_penalty(gh, det_list) for gh in expanded
         ]
+
+        # Dedupe
+        expanded = self._dedupe_globals_by_last_keys(expanded)
 
         # Keep top-K globals (beam)
         expanded.sort(key=lambda g: g.log_weight, reverse=True)
