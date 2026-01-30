@@ -45,12 +45,16 @@ The `step()` method roughly does:
 1. **Prepare detections**
 
    - Convert `detections` into a `det_list: list[Detection]`.
-   - Build a deterministic per-scan index:
+   - Build a per-scan index:
      ```python
      det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}
      ```
 
    This index is used as the canonical detection key for the current scan.
+
+   > **Note:** if the incoming `detections` is a `set` (or otherwise unordered), `list(detections)` may be nondeterministic across runs. Since the tracker uses the index in `det_list` as the per-scan detection key (`last_det_key`), this can cause silent nondeterminism.
+   >
+   > **Next step:** explicitly sort `det_list` by a deterministic key before assigning indices.
 
 2. **Expand global hypotheses via existing tracks**
 

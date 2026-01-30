@@ -18,11 +18,11 @@ Local PDFs are kept under:
 - `papers/Classic & conceptual/Reid - MHT (1979).pdf`
 
 **Citation:**  
-D. B. Reid, “An Algorithm for Tracking Multiple Targets,” *IEEE Transactions on Automatic Control*, vol. AC-24, no. 6, pp. 843–854, 1979. :contentReference[oaicite:0]{index=0}  
+D. B. Reid, “An Algorithm for Tracking Multiple Targets,” *IEEE Transactions on Automatic Control*, vol. AC-24, no. 6, pp. 843–854, 1979.  
 
 **Online:**  
 - PDF (Stanford graphics / various mirrors):  
-  https://graphics.stanford.edu/courses/cs428-03-spring/Papers/readings/CollaborativeProcessing/Reid_MHT_ieee_trans_ac_1979.pdf :contentReference[oaicite:1]{index=1}  
+  https://graphics.stanford.edu/courses/cs428-03-spring/Papers/readings/CollaborativeProcessing/Reid_MHT_ieee_trans_ac_1979.pdf  
 
 **Notes / what it’s good for:**
 
@@ -38,11 +38,11 @@ D. B. Reid, “An Algorithm for Tracking Multiple Targets,” *IEEE Transactions
 - `papers/Classic & conceptual/Blackman - MHT for MTT (2004).pdf`
 
 **Citation:**  
-S. S. Blackman, “Multiple Hypothesis Tracking for Multiple Target Tracking,” *IEEE Aerospace and Electronic Systems Magazine*, vol. 19, no. 1, pp. 5–18, Jan. 2004. :contentReference[oaicite:2]{index=2}  
+S. S. Blackman, “Multiple Hypothesis Tracking for Multiple Target Tracking,” *IEEE Aerospace and Electronic Systems Magazine*, vol. 19, no. 1, pp. 5–18, Jan. 2004.  
 
 **Online:**  
 - IEEE Xplore / secondary mirrors (PDF available via institutional access):  
-  https://ieeexplore.ieee.org/document/1263228 :contentReference[oaicite:3]{index=3}  
+  https://ieeexplore.ieee.org/document/1263228  
 
 **Notes:**
 
@@ -60,7 +60,7 @@ S. S. Blackman, “Multiple Hypothesis Tracking for Multiple Target Tracking,”
 
 **Online:**  
 - Lecture notes “Multi-Target Tracking: multi-hypothesis tracking” (Le 5):  
-  https://rt.isy.liu.se/student/graduate/targettracking/file/le5.pdf :contentReference[oaicite:4]{index=4}  
+  https://rt.isy.liu.se/student/graduate/targettracking/file/le5.pdf  
 
 **Notes:**
 
@@ -81,12 +81,12 @@ S. S. Blackman, “Multiple Hypothesis Tracking for Multiple Target Tracking,”
 - `papers/Implementation/Sun-et-al - Efficient implementation of TO-MHT (2012).pdf`
 
 **Citation (journal version):**  
-J. Sun, Y. Li, S. Sun, X. Li, and X. Hu, “An Efficient Implementation of Track-Oriented Multiple Hypothesis Tracker Using Graphical Model Approaches,” *International Journal of Distributed Sensor Networks*, vol. 2017, Article ID 8061561. :contentReference[oaicite:5]{index=5}  
+J. Sun, Y. Li, S. Sun, X. Li, and X. Hu, “An Efficient Implementation of Track-Oriented Multiple Hypothesis Tracker Using Graphical Model Approaches,” *International Journal of Distributed Sensor Networks*, vol. 2017, Article ID 8061561.  
 
 **Online:**
 
 - Wiley / Hindawi PDF:  
-  https://onlinelibrary.wiley.com/doi/10.1155/2017/8061561 :contentReference[oaicite:6]{index=6}  
+  https://onlinelibrary.wiley.com/doi/10.1155/2017/8061561  
 
 **Notes:**
 
@@ -104,12 +104,12 @@ J. Sun, Y. Li, S. Sun, X. Li, and X. Hu, “An Efficient Implementation of Track
 - `papers/Implementation/He-et-al - TO-MHT based on Tabu search and Gibbs sampling (2018).pdf`
 
 **Citation:**  
-S. He, H.-S. Shin, and A. Tsourdos, “Track-Oriented Multiple Hypothesis Tracking Based on Tabu Search and Gibbs Sampling,” *IEEE Sensors Journal*, vol. 18, no. 17, pp. 7213–7226, 2018. :contentReference[oaicite:7]{index=7}  
+S. He, H.-S. Shin, and A. Tsourdos, “Track-Oriented Multiple Hypothesis Tracking Based on Tabu Search and Gibbs Sampling,” *IEEE Sensors Journal*, vol. 18, no. 17, pp. 7213–7226, 2018.  
 
 **Online:**
 
 - PDF (core / other mirrors):  
-  https://core.ac.uk/download/pdf/188364739.pdf :contentReference[oaicite:8]{index=8}  
+  https://core.ac.uk/download/pdf/188364739.pdf  
 
 **Notes:**
 
@@ -129,12 +129,12 @@ S. He, H.-S. Shin, and A. Tsourdos, “Track-Oriented Multiple Hypothesis Tracki
 - `papers/Survey/Chong-Mori-Reid - Forty Years of MHT (2019).pdf`
 
 **Citation:**  
-C.-Y. Chong, S. Mori, and D. B. Reid, “Forty Years of Multiple Hypothesis Tracking – A Review of Key Developments,” *Journal of Advances in Information Fusion*, vol. 14, no. 2, pp. 131–153, Dec. 2019. :contentReference[oaicite:9]{index=9}  
+C.-Y. Chong, S. Mori, and D. B. Reid, “Forty Years of Multiple Hypothesis Tracking – A Review of Key Developments,” *Journal of Advances in Information Fusion*, vol. 14, no. 2, pp. 131–153, Dec. 2019.  
 
 **Online:**
 
 - JAIF PDF (ISIF):  
-  https://isif.org/media/forty-years-multiple-hypothesis-tracking :contentReference[oaicite:10]{index=10}  
+  https://isif.org/media/forty-years-multiple-hypothesis-tracking  
 
 **Notes:**
 
@@ -153,12 +153,12 @@ C.-Y. Chong, S. Mori, and D. B. Reid, “Forty Years of Multiple Hypothesis Trac
 - `papers/Survey/Frank-et-al - Graphical model of TO-MHT (2012).pdf`  
 
 **Citation:**  
-A. Frank, P. Smyth, and A. Ihler, “A Graphical Model Representation of the Track-Oriented Multiple Hypothesis Tracker,” in *Proc. IEEE Statistical Signal Processing Workshop*, 2012. :contentReference[oaicite:11]{index=11}  
+A. Frank, P. Smyth, and A. Ihler, “A Graphical Model Representation of the Track-Oriented Multiple Hypothesis Tracker,” in *Proc. IEEE Statistical Signal Processing Workshop*, 2012.  
 
 **Online:**
 
 - PDF:  
-  https://ics.uci.edu/~ihler/papers/ssp12.pdf :contentReference[oaicite:12]{index=12}  
+  https://ics.uci.edu/~ihler/papers/ssp12.pdf  
 
 **Notes:**
 
@@ -177,12 +177,12 @@ A. Frank, P. Smyth, and A. Ihler, “A Graphical Model Representation of the Tra
 - `papers/Survey/Frank-Smyth-Ihler - Beyond MAP with TO-MHT (2014).pdf`
 
 **Citation:**  
-A. Frank, P. Smyth, and A. Ihler, “Beyond MAP Estimation With the Track-Oriented Multiple Hypothesis Tracker,” *IEEE Transactions on Signal Processing*, vol. 62, no. 10, pp. 2413–2423, 2014. :contentReference[oaicite:13]{index=13}  
+A. Frank, P. Smyth, and A. Ihler, “Beyond MAP Estimation With the Track-Oriented Multiple Hypothesis Tracker,” *IEEE Transactions on Signal Processing*, vol. 62, no. 10, pp. 2413–2423, 2014.  
 
 **Online:**
 
 - Journal page / PDF via IEEE or publisher:  
-  https://doi.org/10.1109/TSP.2014.2311962 :contentReference[oaicite:14]{index=14}  
+  https://doi.org/10.1109/TSP.2014.2311962  
 
 **Notes:**
 
@@ -207,5 +207,21 @@ Very briefly:
   - and alternative search strategies (message passing, Tabu, Gibbs).
 - **Frank/Smyth/Ihler (2012, 2014)** connect TO-MHT with graphical models and inference:
   - Helps when we want to refine our scoring model or think about marginals instead of just MAP.
+
+### Stone Soup PDA probabilities vs MHT scoring
+
+Stone Soup's `PDAHypothesiser` returns normalised association probabilities (β) per track
+(including a missed detection hypothesis), not raw likelihoods.
+
+Internally it computes unnormalised weights like:
+- Miss: `w0 = 1 - P_D * P_G`
+- Hit: `wi = (pdf_i * P_D) / lambda`
+and then normalises.
+
+For TO-MHT global hypothesis scoring we want unnormalised likelihood-ratio-style increments.
+A practical bridge is:
+`logLi ≈ log(betai) - log(beta0) + log(1 - P_D * P_G)`
+
+This is our planned “v1.5 scoring” step before moving to a more explicit MHT log-likelihood model.
 
 As the implementation evolves (e.g. when we design Scoring v2 or N-scan-lite), we can link specific design decisions in `TO_MHT_NEXT_STEPS.md` back to these references and sections here.

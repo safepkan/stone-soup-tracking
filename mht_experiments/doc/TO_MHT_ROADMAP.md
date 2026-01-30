@@ -39,27 +39,34 @@ This document gives the big-picture view of where the project is going, without 
 - [x] Add basic heuristics and instrumentation:
   - Unused-detection penalty.
   - Max-missed per track.
-  - Debug flags, deterministic ordering, sanity checks for numeric blow-ups.
+  - Debug flags, sanity checks for numeric blow-ups, and basic determinism controls (full stable detection ordering is a Phase 2 task).
   - Simple deduplication of “presently identical” global hypotheses.
 
 Result: a working multi-hypothesis tracker that produces sensible tracks on the test scenarios, but with a lot of shortcuts and ad-hoc scoring.
 
-### Phase 2 — Scoring v2 and N-scan-lite (next) ⚙️
+### Phase 2 — Determinism + Scoring v2 + N-scan-lite (next) ⚙️
 
-**Goal:** Move from heuristic scores toward a simple, explicit MHT log-likelihood model, and introduce N-scan-like commitment to stabilise track identities.
+**Goal:** Move from heuristic scores toward a simple, explicit MHT log-likelihood model,
+then introduce N-scan-like commitment to stabilise track identities.
 
-Planned tasks:
+Planned tasks (in order):
 
-- Define a per-scan log-likelihood increment model that includes:
-  - Hit likelihood: measurement vs predicted measurement under clutter + detection probability.
-  - Miss likelihood: missed detection probability.
-  - Clutter term for unused detections.
-  - Simple existence/birth terms.
-- Map this model onto Stone Soup’s available quantities (likelihoods from hypothesisers, clutter density, etc.).
-- Implement a short per-track association history (e.g. last N detection indices).
-- Implement N-scan-lite:
-  - Commit association decisions older than N scans when surviving globals agree.
-  - Optionally merge track trees when committed histories are identical.
+1) **Determinism prerequisite**
+   - Make per-scan detection ordering stable before assigning detection indices.
+   - (This is required because `last_det_key` uses the per-scan index.)
+
+2) **Scoring v2**
+   - Introduce a `ScoringModel` abstraction.
+   - Implement a first “v1.5” scoring bridge using Stone Soup PDA hypothesis probabilities (β-ratio trick).
+   - Replace/retire `unused_det_log_penalty` as clutter scoring becomes explicit and explainable.
+
+3) **Association history**
+   - Store a short per-track association history (e.g. last N detection keys).
+   - Update deduplication/merging to consider short history (not only current-scan keys).
+
+4) **N-scan-lite**
+   - Commit association decisions older than N scans when surviving globals agree.
+   - Optionally merge track trees when committed histories are identical.
 
 ### Phase 3 — Track initiation and existence modelling 🎯
 
@@ -99,4 +106,4 @@ Also consider:
   - N-scan/commitment only approximated via present-state deduplication.
   - Initiation relies on an external Stone Soup initiator with heuristic integration.
 
-Next up: **Phase 2 — Scoring v2 + N-scan-lite.**
+Next up: **Phase 2 — Determinism + Scoring v2 + N-scan-lite.**
