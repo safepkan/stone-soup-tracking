@@ -18,24 +18,25 @@ def _setup_headless_cache_dirs() -> None:
 
 _setup_headless_cache_dirs()
 
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-from matplotlib import animation
+# Matplotlib needs cache env vars set above; keep import after setup.  # noqa: E402
+import matplotlib as mpl  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib import animation  # noqa: E402
 
-from stonesoup.plotter import Plotter
+from stonesoup.plotter import Plotter  # noqa: E402
 
-from mht_experiments.plotting import plot_tracks_stable_xy
-from mht_experiments.scenarios.bearing_range import (
+from mht_experiments.plotting import plot_tracks_stable_xy  # noqa: E402
+from mht_experiments.scenarios.bearing_range import (  # noqa: E402
     create_bearing_range_mht_example,
     initial_tomht_tracks_for_bearing_range,
     tomht_initiator_for_bearing_range,
 )
-from mht_experiments.scenarios.crossing_targets import (
+from mht_experiments.scenarios.crossing_targets import (  # noqa: E402
     create_crossing_scenario,
     initial_tomht_tracks_for_crossing,
     tomht_initiator_for_crossing_simple,
 )
-from mht_experiments.trackers.tomht_tracker import (
+from mht_experiments.trackers.tomht_tracker import (  # noqa: E402
     TOMHTParams,
     build_tomht_linear,
     build_tomht_ukf,

@@ -104,6 +104,7 @@ class TOMHTTracker:
     def _det_sort_key(det: Detection) -> tuple:
         """Stable per-scan ordering key for detections."""
         ts = getattr(det, "timestamp", None)
+        ts_key: tuple[int, float | str]
         if ts is None:
             ts_key = (0, 0.0)
         elif hasattr(ts, "timestamp"):

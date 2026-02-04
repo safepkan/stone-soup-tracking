@@ -201,7 +201,7 @@ class IMMUpdater(Updater):
         comps = {c.tag: c for c in predicted.components}
 
         updated_components: List[TaggedWeightedGaussianStateUpdate] = []
-        post_mode_unnorm = []
+        post_mode_unnorm_list: list[float] = []
 
         for tag, upd in zip(self.model_tags, self.updaters):
             pred_comp = comps[tag]
@@ -219,7 +219,7 @@ class IMMUpdater(Updater):
             S = np.asarray(mp.covar, dtype=float)
             lh = float(multivariate_normal.pdf(z, mean=mean, cov=S))
 
-            post_mode_unnorm.append(float(pred_comp.weight) * lh)
+            post_mode_unnorm_list.append(float(pred_comp.weight) * lh)
 
             updated_components.append(
                 TaggedWeightedGaussianStateUpdate(
@@ -232,7 +232,7 @@ class IMMUpdater(Updater):
                 )
             )
 
-        post_mode_unnorm = np.asarray(post_mode_unnorm, dtype=float)
+        post_mode_unnorm = np.asarray(post_mode_unnorm_list, dtype=float)
         post_mode = post_mode_unnorm / np.sum(post_mode_unnorm)
 
         for cpt, w in zip(updated_components, post_mode):
