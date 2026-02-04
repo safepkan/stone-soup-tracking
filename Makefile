@@ -9,3 +9,8 @@ setup_venv:
 .PHONY: update_venv
 update_venv:
 	./venv/bin/pip install -r requirements.txt
+
+.PHONY: smoke
+smoke:
+	MPLBACKEND=Agg TOMHT_NO_SHOW=1 ./venv/bin/python mht_experiments/run_tomht_crossing.py
+	MPLBACKEND=Agg TOMHT_NO_SHOW=1 ./venv/bin/python mht_experiments/run_tomht_bearing_range.py

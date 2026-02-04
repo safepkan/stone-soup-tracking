@@ -2,6 +2,10 @@
 
 Experimental repository for exploring Stone Soup tracking capabilities.
 
+## Working with the Coding Agent
+
+See `AGENTS.md` for the collaboration workflow and expectations on keeping the docs in `mht_experiments/doc` synchronized with code changes.
+
 ## Setup
 
 ```bash

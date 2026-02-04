@@ -1,7 +1,22 @@
 from __future__ import annotations
 
 import datetime
+import os
+from pathlib import Path
 from typing import List, Literal
+
+
+def _setup_headless_cache_dirs() -> None:
+    """Ensure Matplotlib/fontconfig can write caches in headless environments."""
+    cache_dir = Path(os.environ.get("XDG_CACHE_HOME", "/tmp/.cache"))
+    mpl_dir = Path(os.environ.get("MPLCONFIGDIR", "/tmp/mplconfig"))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    mpl_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("XDG_CACHE_HOME", str(cache_dir))
+    os.environ.setdefault("MPLCONFIGDIR", str(mpl_dir))
+
+
+_setup_headless_cache_dirs()
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -41,12 +56,25 @@ def _running_in_ipython_kernel() -> bool:
 
 
 def _show_animation(ani) -> None:
-    if _running_in_ipython_kernel():
+    backend = mpl.get_backend().lower()
+    headless_backends = ("agg", "pdf", "ps", "svg", "cairo", "pgf")
+    force_show = os.environ.get("TOMHT_SHOW", "").lower() in {"1", "true", "yes"}
+    force_skip = os.environ.get("TOMHT_NO_SHOW", "").lower() in {"1", "true", "yes"}
+    is_headless = backend.startswith(headless_backends)
+
+    if force_skip:
+        print("Animation display disabled via TOMHT_NO_SHOW.")
+        plt.close(ani._fig)
+    elif _running_in_ipython_kernel():
         mpl.rcParams["animation.html"] = "jshtml"
         mpl.rcParams["animation.embed_limit"] = 100
         from IPython.display import HTML, display  # type: ignore
 
         display(HTML(ani.to_jshtml()))
+        plt.close(ani._fig)
+    elif is_headless and not force_show:
+        # Avoid calling plt.show() on non-interactive backends (e.g., Agg in CI/headless)
+        print("Headless backend detected; skipping animation display.")
         plt.close(ani._fig)
     else:
         plt.show()
