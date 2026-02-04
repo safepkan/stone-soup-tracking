@@ -44,27 +44,26 @@ This document gives the big-picture view of where the project is going, without 
 
 Result: a working multi-hypothesis tracker that produces sensible tracks on the test scenarios, but with a lot of shortcuts and ad-hoc scoring.
 
-### Phase 2 — Determinism + Scoring v2 + N-scan-lite (next) ⚙️
+### Phase 2 — Scoring v2 + N-scan-lite (next) ⚙️
 
 **Goal:** Move from heuristic scores toward a simple, explicit MHT log-likelihood model,
 then introduce N-scan-like commitment to stabilise track identities.
 
 Planned tasks (in order):
 
-1) **Determinism prerequisite**
-   - Make per-scan detection ordering stable before assigning detection indices.
-   - (This is required because `last_det_key` uses the per-scan index.)
+0) **Determinism prerequisite — done**
+   - Per-scan detection ordering is now stable before assigning detection indices.
 
-2) **Scoring v2**
+1) **Scoring v2**
    - Introduce a `ScoringModel` abstraction.
    - Implement a first “v1.5” scoring bridge using Stone Soup PDA hypothesis probabilities (β-ratio trick).
    - Replace/retire `unused_det_log_penalty` as clutter scoring becomes explicit and explainable.
 
-3) **Association history**
+2) **Association history**
    - Store a short per-track association history (e.g. last N detection keys).
    - Update deduplication/merging to consider short history (not only current-scan keys).
 
-4) **N-scan-lite**
+3) **N-scan-lite**
    - Commit association decisions older than N scans when surviving globals agree.
    - Optionally merge track trees when committed histories are identical.
 
@@ -103,7 +102,7 @@ Also consider:
 - TO-MHT v0.5 prototype: **implemented and running**.
 - Known limitations:
   - Scoring is heuristic and somewhat hand-tuned.
-  - N-scan/commitment only approximated via present-state deduplication.
-  - Initiation relies on an external Stone Soup initiator with heuristic integration.
+- N-scan/commitment only approximated via present-state deduplication.
+- Initiation relies on an external Stone Soup initiator with heuristic integration.
 
-Next up: **Phase 2 — Determinism + Scoring v2 + N-scan-lite.**
+Next up: **Phase 2 — Scoring v2 + N-scan-lite.**

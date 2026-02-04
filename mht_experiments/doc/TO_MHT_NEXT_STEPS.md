@@ -2,42 +2,6 @@
 
 This document is for planning upcoming work in more detail than the high-level roadmap. It will evolve as we implement each step.
 
-## 0. Step 0: Stable detection ordering and per-scan detection keys (prerequisite) — implemented
-
-### 0.1 Why this matters
-
-The tracker currently assigns a per-scan "detection key" by:
-
-- converting the incoming detection collection to `det_list = list(detections)`
-- using the list index as `last_det_key` / `used_det_key`
-
-This is only deterministic if the incoming `detections` already has a stable iteration order. If `detections` is a `set` (common in Stone Soup-style measurement sets), the ordering may vary, which will silently affect:
-
-- `last_det_key` stored in track metadata
-- global deduplication signatures
-- residual detection selection for births
-- (later) per-track association history for N-scan-lite
-
-So: before we touch scoring or history, we must make detection ordering explicit and stable.
-
-### 0.2 Proposed approach
-
-Add a scan-local stable ordering step before we assign indices:
-
-- Sort detections by `(timestamp bucket, measurement length, flattened state_vector with type-tagged elements)`.
-  - Timestamps are normalised to `(none < datetime-like < numeric < other-stringified)`.
-  - Measurement elements sort with finite floats first (NaN/inf → +inf), then non-numerics by `str(x)`.
-  - No `id(det)` tiebreaker; true duplicates fall back to the input iterable’s order (stable sort). Using unordered inputs like `set` will still give arbitrary ordering for exact duplicates.
-- Then assign indices from the sorted list.
-
-### 0.3 Acceptance criteria
-
-- Running the same scenario twice yields identical:
-  - detection ordering per scan,
-  - `last_det_key` sequences per track,
-  - residual sets for birth initiation,
-  - MAP result (modulo any remaining RNG elsewhere).
-
 ## 1. Scoring v2: toward a simple MHT log-likelihood
 
 ### 1.1. Desired model (conceptual)
