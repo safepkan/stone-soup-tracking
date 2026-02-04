@@ -1,12 +1,19 @@
 # Working Approach
 
+- The goal is to implement a TO-MHT-style tracker in Python on top of Stone Soup.
 - High-level planning happens with ChatGPT via the web UI; coding and execution happen here in the CLI.
-- When code changes are made, update the relevant Markdown in `mht_experiments/doc` (state, roadmap, next steps, references) so docs track the code.
+- Markdown documents in `mht_experiments/doc`:
+  - `TO_MHT_CURRENT_STATE.md` — what the tracker currently does
+  - `TO_MHT_NEXT_STEPS.md` — the ordered task list
+  - `TO_MHT_ROADMAP.md` — phases / milestones / sequencing
+  - `TO_MHT_REFERENCE.md` — references and notes
+- When code changes are made, update the relevant Markdown so docs track the code.
 - Prefer concise updates near the top of the appropriate doc rather than duplicating content.
 - Keep references current; if a new paper or PDF is used, add it to `TO_MHT_REFERENCE.md` and the `papers/` folder if available.
 - Mark completed items in `TO_MHT_NEXT_STEPS.md` as implemented (and tighten the wording to match what was actually done if the original listed options), but leave them in place; they can be batch-cleaned in separate commits later.
 - Ask before running commands that modify environments outside the repo or require new dependencies.
 - Default to README/AGENTS for workflow notes; keep design/algorithm rationale in the doc files.
+- For starting a fresh ChatGPT thread, paste `mht_experiments/doc/CHAT_CONTEXT.md` into the first message.
 
 ## Code Guidelines
 
