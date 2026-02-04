@@ -188,7 +188,14 @@ Some important differences and simplifications:
    - Tracks are deleted when `missed_count > max_missed`.
    - There is no explicit existence probability or death process.
 
-## 4. Summary
+## 4. Reproducibility (current status)
+
+- Scenario generation is seeded (`crossing_targets.py` uses `np.random.seed(2001)`, `bearing_range.py` uses `np.random.seed(1908)`), so truths and detections are repeatable on the same Python/NumPy stack.
+- Per-scan detection ordering is made explicit and deterministic (`_sorted_detections`), which fixes `last_det_key` and residual selection.
+- Global hypothesis branching/pruning uses deterministic sort keys; the tracker itself does no additional sampling.
+- `make smoke` (both scenarios, headless) produces identical logs across repeated runs except for wall-clock timestamps in the debug output.
+
+## 5. Summary
 
 The current implementation is best thought of as a **TO-MHT-flavoured multi-hypothesis tracker**:
 
