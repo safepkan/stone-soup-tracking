@@ -139,6 +139,9 @@ def run_tomht(setup: SetupName) -> None:
         styles = ("g-",)
 
     plotter = Plotter()
+    # The base Plotter sets aspect='equal', which collides with manual x/y limits
+    # and emits Matplotlib warnings in headless smoke runs. Relax to automatic aspect.
+    plotter.ax.set_aspect("auto")
     frames: List[list] = []
 
     for n, (timestamp, detections) in enumerate(zip(timestamps, scans)):
