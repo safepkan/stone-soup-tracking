@@ -2,7 +2,7 @@
 
 This document is for planning upcoming work in more detail than the high-level roadmap. It will evolve as we implement each step.
 
-## 0. Step 0: Stable detection ordering and per-scan detection keys (prerequisite)
+## 0. Step 0: Stable detection ordering and per-scan detection keys (prerequisite) — implemented
 
 ### 0.1 Why this matters
 
@@ -22,11 +22,9 @@ So: before we touch scoring or history, we must make detection ordering explicit
 
 ### 0.2 Proposed approach
 
-Add a scan-local stable ordering step before we assign indices. For example:
+Add a scan-local stable ordering step before we assign indices:
 
-- Define a deterministic sort key derived from detection content, e.g.
-  - `(timestamp, measurement_vector_components...)`
-- Sort `det_list` using that key.
+- Sort detections by `(timestamp -> float seconds, flattened state_vector, id(det) tiebreaker)`.
 - Then assign indices from the sorted list.
 
 ### 0.3 Acceptance criteria

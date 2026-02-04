@@ -100,6 +100,39 @@ class TOMHTTracker:
             GlobalHypothesis(tracks_by_id=init_tracks_by_id, log_weight=0.0)
         ]
 
+    @staticmethod
+    def _det_sort_key(det: Detection) -> tuple:
+        """Stable per-scan ordering key for detections."""
+        ts = getattr(det, "timestamp", None)
+        if ts is None:
+            ts_key = (0, 0.0)
+        elif hasattr(ts, "timestamp"):
+            ts_key = (1, float(ts.timestamp()))
+        elif isinstance(ts, (int, float)):
+            ts_key = (2, float(ts))
+        else:
+            ts_key = (3, str(ts))
+
+        vec = np.asarray(det.state_vector).ravel()
+
+        def _elem_key(x) -> float | str:
+            try:
+                xf = float(x)
+                if np.isfinite(xf):
+                    return xf
+                return float("inf")
+            except Exception:
+                return str(x)
+
+        vec_key = tuple(_elem_key(x) for x in vec)
+
+        return (ts_key, len(vec_key), vec_key, id(det))
+
+    def _sorted_detections(self, detections: Iterable[Detection]) -> list[Detection]:
+        det_list = list(detections)
+        det_list.sort(key=self._det_sort_key)
+        return det_list
+
     def _display_global_hypotheses(self, det_list: list[Detection]) -> None:
         for gh in self.global_hypotheses[: self.params.debug_globals_max]:
             used = len(self._used_det_keys_for_tracks(gh.tracks_by_id))
@@ -555,7 +588,10 @@ class TOMHTTracker:
         return list(best.values())
 
     def step(self, detections: Iterable[Detection], timestamp) -> set[Track]:
-        det_list = list(detections)
+        det_list = self._sorted_detections(detections)
+        # Use id(det) because Stone Soup hypotheses keep the original Detection
+        # objects; hash/equality isn't defined on Detection, but identity is
+        # stable within a scan.
         det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}
 
         # Expand globals with current batch of detections

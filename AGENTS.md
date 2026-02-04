@@ -4,6 +4,7 @@
 - When code changes are made, update the relevant Markdown in `mht_experiments/doc` (state, roadmap, next steps, references) so docs track the code.
 - Prefer concise updates near the top of the appropriate doc rather than duplicating content.
 - Keep references current; if a new paper or PDF is used, add it to `TO_MHT_REFERENCE.md` and the `papers/` folder if available.
+- Mark completed items in `TO_MHT_NEXT_STEPS.md` as implemented (and tighten the wording to match what was actually done if the original listed options), but leave them in place; they can be batch-cleaned in separate commits later.
 - Ask before running commands that modify environments outside the repo or require new dependencies.
 - Default to README/AGENTS for workflow notes; keep design/algorithm rationale in the doc files.
 
