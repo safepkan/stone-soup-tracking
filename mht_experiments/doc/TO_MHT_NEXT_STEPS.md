@@ -25,6 +25,21 @@ At this stage, the aim is not a perfect derivation, but a **consistent and expla
 
 ### 1.2. Mapping to existing Stone Soup objects
 
+#### 1.2.1 PDA β probabilities and a practical "v1.5" bridge
+
+Stone Soup's `PDAHypothesiser` typically returns *normalised* association probabilities β per track
+(including a missed-detection hypothesis β₀). For global MHT scoring we usually want unnormalised
+likelihood-ratio-style increments. As a practical bridge that stays within Stone Soup's existing outputs:
+
+- Let `beta0` be the miss hypothesis probability, and `betai` a hit probability.
+- Define an approximate per-association likelihood ratio term:
+
+  `logL_i ≈ log(betai) - log(beta0) + log(1 - P_D * P_G)`
+
+This is not a perfect derivation, but it is consistent and easy to reason about as an initial scoring model.
+
+**Numerical note:** clamp `betai` and `beta0` by an `epsilon` before taking logs to avoid `-inf` / NaNs.
+
 Questions to resolve:
 
 - What does the current `Hypothesis` probability/weight represent?
@@ -35,29 +50,6 @@ Questions to resolve:
 - How to approximate clutter likelihood:
   - Use existing clutter density or area from the scenarios.
   - Relate `unused_det_log_penalty` to `log(lambda)` instead of a hand-tuned constant.
-
-### 1.2.1 What Stone Soup's PDAHypothesiser gives us (important)
-
-Stone Soup's `PDAHypothesiser` computes *unnormalised* weights roughly like:
-
-- Miss: `w0 = 1 - P_D * P_G`
-- Hit i: `wi = (pdf_i * P_D) / lambda`
-
-and then returns `SingleProbabilityHypothesis` objects inside a `MultipleHypothesis(..., normalise=True)`.
-This means each returned `hyp.probability` is a *normalised association probability* (β), i.e. the per-track
-hypotheses sum to 1 (including the miss hypothesis).
-
-For global MHT scoring we generally want something closer to the unnormalised likelihood / likelihood ratio per association.
-We can "undo" the normalisation up to a constant using the ratio trick:
-
-- Let `beta0` be the miss hypothesis probability, and `betai` a hit probability.
-- Then (up to constants): `Li ≈ (betai / beta0) * (1 - P_D * P_G)`
-- So: `logLi ≈ log(betai) - log(beta0) + log(1 - P_D * P_G)`
-
-This gives a practical "v1.5 scoring" path:
-- Use `log(1 - P_D * P_G)` for miss.
-- Use `logLi` for hit hypotheses.
-- Defer more exact modelling (Poisson clutter constants, existence priors) until after behaviour matches expectations.
 
 ### 1.3. Concrete changes planned in code
 
@@ -74,28 +66,30 @@ This gives a practical "v1.5 scoring" path:
   - implicit hypothesis probabilities
   with a more explicit combination, while trying to remain backward compatible enough to compare behaviours.
 
-### 1.3.1 Proposed ScoringModel API (implementation guide)
+#### 1.3.1 Proposed ScoringModel API (implementation guide)
 
-Goal: keep scoring logic out of `TOMHTTracker` so we can iterate on scoring without touching hypothesis-generation.
-
-Suggested minimal interface:
+Introduce a `ScoringModel` abstraction so scoring can evolve independently from hypothesis generation,
+pruning, and N-scan-lite logic.
 
 ```python
+from dataclasses import dataclass
+from typing import Any, Iterable, Mapping, Protocol
+
 @dataclass(frozen=True)
 class ScanContext:
     timestamp: Any
-    detections: list[Detection]           # already stably ordered
-    det_index_by_obj: dict[int, int]      # id(det) -> index in detections
+    detections: list  # already stably ordered
+    det_index_by_obj: dict[int, int]  # id(det) -> index in detections
 
 class ScoringModel(Protocol):
     def score_track_hypotheses(
         self,
         *,
-        track: Track,
-        multihyp: Any,       # Stone Soup MultipleHypothesis
+        track: Any,
+        hypotheses: Iterable,   # iterable of SingleHypothesis objects
         ctx: ScanContext,
-    ) -> dict[Any, float]:
-        """Return {hypothesis_object: log_delta} for each hypothesis in multihyp."""
+    ) -> Mapping[object, float]:
+        """Return {hypothesis_object: log_delta} for each hypothesis."""
 
     def score_unused_detections(
         self,
@@ -103,27 +97,28 @@ class ScoringModel(Protocol):
         used_det_keys: set[int],
         ctx: ScanContext,
     ) -> float:
-        """Return log_delta for clutter / unused detections for the global hypothesis."""
+        """Return a log_delta for clutter / unused detections for the global hypothesis."""
 
     def score_birth(
         self,
         *,
-        birth_track: Track,
+        birth_track: Any,
         used_det_key: int | None,
         ctx: ScanContext,
     ) -> float:
-        """Return log_delta for adding a birth (prior / evidence)."""
-
+        """Return a log_delta for adding a birth (prior / evidence)."""
 ```
+
+Implementation notes:
+- The interface is *hypothesis-driven* (we pass hypothesis objects), so we can later compute raw likelihoods
+  from `measurement_prediction` without changing the tracker loop.
+- If using the β-ratio bridge, use log-space with an `epsilon` clamp for numerical stability.
 
 ### 1.4. Open design questions
 
 - How much do we want to rely on the Stone Soup `Hypothesis` probabilities vs rolling our own likelihoods from innovations?
+- Should the `ScoringModel` operate directly on `Hypothesis` objects (for access to `measurement_prediction` / raw likelihood scoring later)?
 - Do we want to start with a **very simple** likelihood (e.g. Mahalanobis distance with a scaled constant) or go straight to a more accurate derivation?
 - Should we integrate initiation evidence (holding track stats) into the global score explicitly, or keep it as a separate heuristic for birth ranking for now?
-- Scoring work order:
-  - First: make detection ordering stable (Step 0).
-  - Then: implement ScoringModel + v1.5 scoring (β-ratio) as a bridge.
-  - Only after scoring is consistent: start N-scan-lite and association history.
-  
+
 *(More sections will be added here for N-scan-lite, initiation rework, etc.)*
