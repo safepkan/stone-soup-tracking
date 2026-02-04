@@ -48,8 +48,9 @@ The `step()` method roughly does:
 
    - Convert `detections` into a `det_list: list[Detection]`, sorted by a deterministic key:
      - timestamp (float seconds when available),
-     - flattened measurement vector,
-     - object id as a final tiebreaker.
+     - measurement vector length,
+     - flattened measurement vector with type-tagged elements (`float` values ordered first; NaN/inf treated as `+inf`; non-numerics ordered by `str(x)`).
+     - If two detections are identical on those fields, their relative order falls back to the input iterable’s order (Python sort is stable); unordered inputs like `set` will therefore give nondeterministic duplicate ordering.
    - Build a per-scan index:
      ```python
      det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}

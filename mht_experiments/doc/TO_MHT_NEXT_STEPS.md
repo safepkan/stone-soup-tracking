@@ -24,7 +24,10 @@ So: before we touch scoring or history, we must make detection ordering explicit
 
 Add a scan-local stable ordering step before we assign indices:
 
-- Sort detections by `(timestamp -> float seconds, flattened state_vector, id(det) tiebreaker)`.
+- Sort detections by `(timestamp bucket, measurement length, flattened state_vector with type-tagged elements)`.
+  - Timestamps are normalised to `(none < datetime-like < numeric < other-stringified)`.
+  - Measurement elements sort with finite floats first (NaN/inf → +inf), then non-numerics by `str(x)`.
+  - No `id(det)` tiebreaker; true duplicates fall back to the input iterable’s order (stable sort). Using unordered inputs like `set` will still give arbitrary ordering for exact duplicates.
 - Then assign indices from the sorted list.
 
 ### 0.3 Acceptance criteria

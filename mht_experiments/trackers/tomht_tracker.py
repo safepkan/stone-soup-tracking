@@ -116,18 +116,23 @@ class TOMHTTracker:
 
         vec = np.asarray(det.state_vector).ravel()
 
-        def _elem_key(x) -> float | str:
+        def _elem_key(x) -> tuple[int, float | str]:
             try:
                 xf = float(x)
                 if np.isfinite(xf):
-                    return xf
-                return float("inf")
+                    return (0, xf)
+                return (0, float("inf"))
             except Exception:
-                return str(x)
+                return (1, str(x))
 
         vec_key = tuple(_elem_key(x) for x in vec)
 
-        return (ts_key, len(vec_key), vec_key, id(det))
+        # Note: if two detections are perfect duplicates (same timestamp + same state_vector),
+        # they are indistinguishable by content. Their relative order will then fall back to the
+        # input iterable’s iteration order. Python’s sort is stable, so if the input order is
+        # deterministic (e.g. a list), the result is deterministic; if the input is an unordered
+        # container (e.g. a set), duplicate ordering may vary between runs.
+        return (ts_key, len(vec_key), vec_key)
 
     def _sorted_detections(self, detections: Iterable[Detection]) -> list[Detection]:
         det_list = list(detections)
