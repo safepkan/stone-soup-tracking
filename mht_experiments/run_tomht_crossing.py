@@ -7,12 +7,6 @@ from mht_experiments.runners.tomht_runner import run_tomht
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run TO-MHT crossing scenario.")
     parser.add_argument(
-        "--scoring-mode",
-        choices=["beta_ratio", "legacy"],
-        default=None,
-        help="Override scoring mode (default: tracker default).",
-    )
-    parser.add_argument(
         "--births",
         dest="births",
         action=argparse.BooleanOptionalAction,
@@ -29,7 +23,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     run_tomht(
         "crossing",
-        scoring_mode=args.scoring_mode,
         use_initiator=args.births,
         use_initial_tracks=args.initial_tracks,
     )

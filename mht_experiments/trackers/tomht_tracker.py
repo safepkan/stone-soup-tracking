@@ -28,7 +28,7 @@ class TOMHTParams:
     max_children_per_track: int = 5
     max_missed: int = 5
     log_epsilon: float = 1e-12
-    scoring_mode: str = "beta_ratio"  # "legacy" or "beta_ratio"
+    scoring_mode: str = "beta_ratio"  # Only beta_ratio is supported.
 
     prob_gate: float = 0.99
 
@@ -100,49 +100,6 @@ class ScoringModel(Protocol):
         ctx: ScanContext,
     ) -> float:
         """Return a log_delta to add for a birth (usually negative)."""
-
-
-@dataclass(frozen=True)
-class LegacyScoringModel:
-    """Preserve the previous heuristic scoring."""
-
-    log_epsilon: float
-    unused_det_log_penalty: float
-    birth_log_penalty: float
-
-    def _hyp_probability(self, hyp) -> float:
-        p = getattr(hyp, "probability", None)
-        if p is None:
-            w = getattr(hyp, "weight", 0.0)
-            try:
-                return float(w)
-            except Exception:
-                return 0.0
-        try:
-            return float(p)
-        except Exception:
-            return 0.0
-
-    def _hyp_log_delta(self, hyp) -> float:
-        return log(max(self._hyp_probability(hyp), self.log_epsilon))
-
-    def score_track_hypotheses(
-        self, *, track: Track, hypotheses: Iterable, ctx: ScanContext
-    ) -> Mapping[int, float]:
-        return {id(hyp): self._hyp_log_delta(hyp) for hyp in hypotheses}
-
-    def score_unused_detections(
-        self, *, used_det_keys: set[int], ctx: ScanContext
-    ) -> float:
-        unused = len(ctx.detections) - len(used_det_keys)
-        if unused <= 0:
-            return 0.0
-        return -self.unused_det_log_penalty * float(unused)
-
-    def score_birth(
-        self, *, birth_track: Track, used_det_key: int | None, ctx: ScanContext
-    ) -> float:
-        return -self.birth_log_penalty
 
 
 @dataclass(frozen=True)
@@ -253,10 +210,9 @@ class TOMHTTracker:
                     birth_log_penalty=params.birth_log_penalty,
                 )
             else:
-                scoring_model = LegacyScoringModel(
-                    log_epsilon=params.log_epsilon,
-                    unused_det_log_penalty=params.unused_det_log_penalty,
-                    birth_log_penalty=params.birth_log_penalty,
+                raise ValueError(
+                    f"Unsupported scoring_mode='{params.scoring_mode}'. "
+                    "Only 'beta_ratio' is available now."
                 )
         self.scoring_model = scoring_model
         # Optional sanity log for clutter term.

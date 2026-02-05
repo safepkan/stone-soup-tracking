@@ -4,7 +4,7 @@ This document is for planning upcoming work in more detail than the high-level r
 
 ## 1. Scoring v2: toward a simple MHT log-likelihood
 
-**Update (implemented in code):** Added a pluggable `ScoringModel` with a default **beta-ratio** mode that converts PDA β values into per-association log deltas and replaces the fixed unused-detection penalty with a clutter-density term. Misses now use the same common term `log(1 - P_D * P_G)` as the hit baseline (previously 0). A legacy mode preserves the previous scoring. See `tomht_tracker.py` for the new `scoring_mode` parameter. (Details mirrored into `TO_MHT_CURRENT_STATE.md` for longer-term reference.)
+**Update (implemented in code):** Added a pluggable `ScoringModel` with a single active **beta-ratio v1.5** implementation. Legacy scoring has been removed; `scoring_mode` now raises if set to anything other than `beta_ratio`, and runners no longer expose a scoring toggle. Misses use the same common term `log(1 - P_D * P_G)` as the hit baseline, and clutter uses `len(unused) * log(clutter_density)` (falling back to the old unused-det penalty if density ≤ 0). Details mirrored into `TO_MHT_CURRENT_STATE.md`.
 
 ### 1.1. Desired model (conceptual)
 
@@ -61,14 +61,22 @@ Questions to resolve:
     - `P_D` and `1-P_D`.
   - Compute a log penalty for each unused detection based on a clutter intensity parameter.
   - Optionally, include simple existence terms for tracks and births.
-- **Done (beta-ratio v1):** `ScoringModel` abstraction added with `BetaRatioScoringModel` (default) and `LegacyScoringModel` switchable via `TOMHTParams.scoring_mode`. Beta mode uses `log(betai) - log(beta0) + log(1 - P_D * P_G)` for hits, zero for misses, and `len(unused) * log(clutter_density)` for clutter; births still use `birth_log_penalty`.
-- **A/B hooks:** `run_tomht_crossing.py` and `run_tomht_bearing_range.py` accept `--scoring-mode` to flip between `beta_ratio` and `legacy`, plus `--births/--no-births` and `--initial-tracks/--no-initial-tracks` to toggle initiator and initial-track usage without editing code.
+- **Done (beta-ratio v1.5):** `ScoringModel` abstraction with `BetaRatioScoringModel` as the only option. Hit: `log(betai) - log(beta0) + log(1 - P_D * P_G)`; miss: same common term; clutter: `len(unused) * log(clutter_density)` with fallback to `unused_det_log_penalty` when density ≤ 0; births: `-birth_log_penalty`.
+- **A/B hooks:** `run_tomht_crossing.py` and `run_tomht_bearing_range.py` keep `--births/--no-births` and `--initial-tracks/--no-initial-tracks` for toggling initiator and scenario initial tracks without code changes.
 
 - Replace the current mixture of:
   - `birth_log_penalty`
   - `unused_det_log_penalty`
   - implicit hypothesis probabilities
   with a more explicit combination, while trying to remain backward compatible enough to compare behaviours.
+
+### 1.5. Future scoring work (deferred)
+
+- move from β-ratio to raw likelihood using `measurement_prediction` (optional)
+- refine clutter/unused term units + calibration
+- birth prior evidence terms (if you want)
+
+**Next actionable step after scoring:** start the association-history / N-scan-lite groundwork (see Roadmap Phase 2 item 2).
 
 #### 1.3.1 Proposed ScoringModel API (implementation guide)
 

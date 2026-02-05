@@ -44,22 +44,21 @@ This document gives the big-picture view of where the project is going, without 
 
 Result: a working multi-hypothesis tracker that produces sensible tracks on the test scenarios, but with a lot of shortcuts and ad-hoc scoring.
 
-### Phase 2 — Scoring v2 + N-scan-lite (next) ⚙️
+### Phase 2 — Scoring v2 + N-scan-lite (in progress) ⚙️
 
 **Goal:** Move from heuristic scores toward a simple, explicit MHT log-likelihood model,
 then introduce N-scan-like commitment to stabilise track identities.
 
-Planned tasks (in order):
+Progress and ordering:
 
 0) **Determinism prerequisite — done**
    - Per-scan detection ordering is now stable before assigning detection indices.
 
-1) **Scoring v2**
-   - Introduce a `ScoringModel` abstraction.
-   - Implement a first “v1.5” scoring bridge using Stone Soup PDA hypothesis probabilities (β-ratio trick).
-   - Replace/retire `unused_det_log_penalty` as clutter scoring becomes explicit and explainable.
+1) **Scoring v2 — done (beta-ratio v1.5)**
+   - `ScoringModel` abstraction in place with BetaRatioScoringModel as the sole implementation.
+   - Legacy scoring removed; clutter handled via `log(clutter_density)` fallback to unused-det penalty when needed.
 
-2) **Association history**
+2) **Association history — next**
    - Store a short per-track association history (e.g. last N detection keys).
    - Update deduplication/merging to consider short history (not only current-scan keys).
 
@@ -105,4 +104,4 @@ Also consider:
 - N-scan/commitment only approximated via present-state deduplication.
 - Initiation relies on an external Stone Soup initiator with heuristic integration.
 
-Next up: **Phase 2 — Scoring v2 + N-scan-lite.**
+Next up: **Phase 2, item 2 — association history (N-scan-lite groundwork).**

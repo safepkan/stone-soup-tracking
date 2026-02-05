@@ -66,9 +66,9 @@ The `step()` method roughly does:
    - For each track in `gh.tracks_by_id`:
      - Call `hypothesiser.hypothesise(track, det_list, timestamp)` (Stone Soup).
      - Collect the resulting `Hypothesis` objects (hit and miss).
-     - Score each hypothesis via the pluggable `ScoringModel` (default: **beta-ratio**):
-       - Beta mode: for a hit, `log(betai) - log(beta0) + log(1 - P_D * P_G)`; for a miss, `0.0`.
-       - Legacy mode (select via `TOMHTParams.scoring_mode="legacy"`): `log(max(probability, epsilon))` as before.
+   - Score each hypothesis via the `ScoringModel` (currently **beta-ratio v1.5** only):
+       - Hit: `log(betai) - log(beta0) + log(1 - P_D * P_G)`.
+       - Miss: same common term `log(1 - P_D * P_G)`.
      - Prune to at most `max_children_per_track`, ensuring that at least one miss is kept if present.
      - Build `ChildCandidate` objects for each kept hypothesis:
        - `child_track`: a copy of the parent track with:
@@ -168,19 +168,15 @@ Some important differences and simplifications:
      - do formal N-scan back-pruning,
      - reason about hypothesis trees as explicit trees.
 
-2. **Scoring model (beta-ratio by default)**
+2. **Scoring model (beta-ratio v1.5)**
 
-   - Pluggable via `TOMHTParams.scoring_mode` (`beta_ratio` default, `legacy` available).
-   - Beta-ratio mode:
-     - Uses PDA β values (normalised per-track association probs) to approximate MHT-style log increments.
+   - Scoring is routed through a `ScoringModel`; only the **beta_ratio** implementation is active.
+   - Beta-ratio v1.5:
+     - Uses PDA β values (normalised per-track association probabilities) to approximate MHT-style log increments.
      - Hit: `log(betai) - log(beta0) + log(1 - P_D * P_G)` where `beta0` is the miss β.
-     - Miss: `log(1 - P_D * P_G)` (same common term as the hit baseline).
+     - Miss: same common term `log(1 - P_D * P_G)`.
      - Unused detections: `len(unused) * log(clutter_density)`; if clutter density ≤ 0, falls back to `-unused_det_log_penalty * len(unused)`.
-     - Births: `-birth_log_penalty` per birth (same as legacy).
-   - Legacy mode:
-     - Hit/miss scored as `log(probability)` (with epsilon clamp).
-     - Unused detections penalised by `-unused_det_log_penalty * len(unused)`.
-     - Births: `-birth_log_penalty`.
+     - Births: `-birth_log_penalty` per birth.
 
 3. **Initiation is external and opaque**
 
@@ -208,7 +204,6 @@ Some important differences and simplifications:
 - Global hypothesis branching/pruning uses deterministic sort keys; the tracker itself does no additional sampling.
 - `make smoke` (both scenarios, headless) produces identical logs across repeated runs except for wall-clock timestamps in the debug output.
 - A/B convenience: `run_tomht_crossing.py` / `run_tomht_bearing_range.py` accept:
-  - `--scoring-mode {beta_ratio,legacy}` to switch scoring,
   - `--births` / `--no-births` (BooleanOptionalAction) to toggle initiator use,
   - `--initial-tracks` / `--no-initial-tracks` (BooleanOptionalAction) to toggle scenario-provided initial tracks (defaults match each scenario: crossing = births on, initial tracks off; bearing_range = births on, initial tracks off).
 

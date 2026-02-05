@@ -84,12 +84,10 @@ def _show_animation(ani) -> None:
 def run_tomht(
     setup: SetupName,
     *,
-    scoring_mode: str | None = None,
     use_initiator: bool = True,
     use_initial_tracks: bool = False,
 ) -> None:
     styles: tuple[str, ...]
-    scoring_mode = scoring_mode or TOMHTParams().scoring_mode
     if setup == "crossing":
         truths, scans, start_time, transition_model, measurement_model, config = (
             create_crossing_scenario()
@@ -117,7 +115,6 @@ def run_tomht(
                 max_missed=5,
                 prob_gate=0.9999,
                 birth_log_penalty=15.0,
-                scoring_mode=scoring_mode,
             ),
         )
         styles = ("r-", "b-")
@@ -152,7 +149,6 @@ def run_tomht(
                 birth_log_penalty=2.0,
                 unused_det_log_penalty=4.0,
                 prob_gate=0.99,
-                scoring_mode=scoring_mode,
             ),
         )
         styles = ("g-",)
