@@ -200,7 +200,6 @@ Some important differences and simplifications:
 - Scenario generation is seeded (`crossing_targets.py` uses `np.random.seed(2001)`, `bearing_range.py` uses `np.random.seed(1908)`), so truths and detections are repeatable on the same Python/NumPy stack.
 - Per-scan detection ordering is made explicit and deterministic (`_sorted_detections`), which fixes `last_det_key` and residual selection.
 - Per-scan data is bundled into a `ScanContext` (timestamp, ordered detections, per-scan det index); it is passed to scoring and birth logic to keep inputs consistent across helper functions.
-- Per-scan data is bundled into a `ScanContext` (timestamp, ordered detections, per-scan det index); it is passed to scoring and birth logic to keep inputs consistent across helper functions.
 - Global hypothesis branching/pruning uses deterministic sort keys; the tracker itself does no additional sampling.
 - `make smoke` (both scenarios, headless) produces identical logs across repeated runs except for wall-clock timestamps in the debug output.
 - A/B convenience: `run_tomht_crossing.py` / `run_tomht_bearing_range.py` accept:
@@ -215,8 +214,6 @@ The current implementation is best thought of as a **TO-MHT-flavoured multi-hypo
 - It uses Stone Soup’s hypothesis machinery for local association and updating.
 - It glues this together with beam search, simple penalties, and a Stone Soup initiator.
 
-It is already useful as a playground/experimental platform, but it **intentionally shortcuts** many of the details of a “proper” TO-MHT. The next major steps are:
-
-- A clearer probabilistic scoring model (Scoring v2).
+It is already useful as a playground/experimental platform, but it **intentionally shortcuts** many of the details of a “proper” TO-MHT. The next major steps are the N-scan-lite groundwork (association history) and further scoring refinements (beyond the current beta-ratio v1.5 bridge).
 - A more principled N-scan-lite commitment / merging mechanism.
 - Cleaner integration (or replacement) of the external initiator.

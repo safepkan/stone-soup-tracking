@@ -66,6 +66,8 @@ Progress and ordering:
    - Commit association decisions older than N scans when surviving globals agree.
    - Optionally merge track trees when committed histories are identical.
 
+Optional (deferred): move beyond β-ratio to raw likelihood scoring; calibrate clutter/birth terms.
+
 ### Phase 3 — Track initiation and existence modelling 🎯
 
 **Goal:** Treat initiation and existence more cleanly inside the TO-MHT framework.
@@ -100,7 +102,7 @@ Also consider:
 - MFA scaffolding: **done**.
 - TO-MHT v0.5 prototype: **implemented and running**.
 - Known limitations:
-  - Scoring is heuristic and somewhat hand-tuned.
+  - Scoring is an approximate bridge (beta-ratio v1.5) and still heuristic.
 - N-scan/commitment only approximated via present-state deduplication.
 - Initiation relies on an external Stone Soup initiator with heuristic integration.
 
