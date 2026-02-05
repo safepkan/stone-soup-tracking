@@ -174,7 +174,7 @@ Some important differences and simplifications:
    - Beta-ratio mode:
      - Uses PDA β values (normalised per-track association probs) to approximate MHT-style log increments.
      - Hit: `log(betai) - log(beta0) + log(1 - P_D * P_G)` where `beta0` is the miss β.
-     - Miss: `0.0` (reference baseline).
+     - Miss: `log(1 - P_D * P_G)` (same common term as the hit baseline).
      - Unused detections: `len(unused) * log(clutter_density)`; if clutter density ≤ 0, falls back to `-unused_det_log_penalty * len(unused)`.
      - Births: `-birth_log_penalty` per birth (same as legacy).
    - Legacy mode:

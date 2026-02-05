@@ -183,15 +183,17 @@ class BetaRatioScoringModel:
         self, *, track: Track, hypotheses: Iterable, ctx: ScanContext
     ) -> Mapping[int, float]:
         beta0, prob_map = self._beta_values(hypotheses)
-        common = log(max(1.0 - self.prob_detect * self.prob_gate, self.log_epsilon))
+        pd_pg = min(1.0, max(0.0, self.prob_detect * self.prob_gate))
+        common = log(max(1.0 - pd_pg, self.log_epsilon))
 
         out: dict[int, float] = {}
         for hyp_id, (beta, is_miss) in prob_map.items():
             beta_clamped = max(beta, self.log_epsilon)
+            beta0_clamped = max(beta0, self.log_epsilon)
             if is_miss:
-                out[hyp_id] = 0.0
+                out[hyp_id] = common
             else:
-                out[hyp_id] = log(beta_clamped) - log(beta0) + common
+                out[hyp_id] = log(beta_clamped) - log(beta0_clamped) + common
         return out
 
     def score_unused_detections(
@@ -257,6 +259,21 @@ class TOMHTTracker:
                     birth_log_penalty=params.birth_log_penalty,
                 )
         self.scoring_model = scoring_model
+        # Optional sanity log for clutter term.
+        if isinstance(self.scoring_model, BetaRatioScoringModel):
+            clutter = self.scoring_model.clutter_density
+            per_unused = (
+                float("-inf")
+                if clutter <= 0.0
+                else log(max(clutter, self.params.log_epsilon))
+            )
+            assert (
+                per_unused <= 0.0
+            ), "Clutter density > 1.0 would reward unused detections; check units/config."
+            print(
+                f"[Scoring] beta_ratio: clutter_density={clutter}, "
+                f"per_unused_delta={per_unused:+.3f}"
+            )
 
         init_tracks_by_id: dict[int, Track] = {}
         max_tid = -1
@@ -451,7 +468,11 @@ class TOMHTTracker:
             track=track, hypotheses=singles, ctx=ctx
         )
 
-        def _probability_for_sort(hyp) -> float:
+        def _score_for_sort(hyp) -> float:
+            # Sort/prune by log-delta (hyp_scores); fall back to probability/weight only if missing.
+            score = hyp_scores.get(id(hyp))
+            if score is not None:
+                return float(score)
             p = getattr(hyp, "probability", None)
             if p is not None:
                 try:
@@ -465,7 +486,7 @@ class TOMHTTracker:
                 return 0.0
 
         def sort_key(hyp) -> tuple[float, int]:
-            p = _probability_for_sort(hyp)
+            p = _score_for_sort(hyp)
             if not hyp:
                 return (p, -1)  # deterministic position for misses among ties
             return (p, -ctx.det_index_by_obj.get(id(hyp.measurement), 10**9))

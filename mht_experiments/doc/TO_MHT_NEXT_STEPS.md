@@ -4,7 +4,7 @@ This document is for planning upcoming work in more detail than the high-level r
 
 ## 1. Scoring v2: toward a simple MHT log-likelihood
 
-**Update (implemented in code):** Added a pluggable `ScoringModel` with a default **beta-ratio** mode that converts PDA β values into per-association log deltas and replaces the fixed unused-detection penalty with a clutter-density term. A legacy mode preserves the previous scoring. See `tomht_tracker.py` for the new `scoring_mode` parameter. (Details mirrored into `TO_MHT_CURRENT_STATE.md` for longer-term reference.)
+**Update (implemented in code):** Added a pluggable `ScoringModel` with a default **beta-ratio** mode that converts PDA β values into per-association log deltas and replaces the fixed unused-detection penalty with a clutter-density term. Misses now use the same common term `log(1 - P_D * P_G)` as the hit baseline (previously 0). A legacy mode preserves the previous scoring. See `tomht_tracker.py` for the new `scoring_mode` parameter. (Details mirrored into `TO_MHT_CURRENT_STATE.md` for longer-term reference.)
 
 ### 1.1. Desired model (conceptual)
 
