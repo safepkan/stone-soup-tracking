@@ -1,136 +1,138 @@
-# TO-MHT Next Steps
+# TO-MHT next steps (current phase): Association history + N-scan-lite
 
-This document is for planning upcoming work in more detail than the high-level roadmap. It will evolve as we implement each step.
+This document lists the upcoming implementation tasks for the current phase.
+Older completed “next steps” snapshots are archived separately (date-stamped).
 
-## 1. Scoring v2: toward a simple MHT log-likelihood
+## Context: where this fits in the roadmap
 
-**Update (implemented in code):** Added a pluggable `ScoringModel` with a single active **beta-ratio v1.5** implementation. Legacy scoring has been removed; `scoring_mode` now raises if set to anything other than `beta_ratio`, and runners no longer expose a scoring toggle. Misses use the same common term `log(1 - P_D * P_G)` as the hit baseline, and clutter uses `len(unused) * log(clutter_density)` (falling back to the old unused-det penalty if density ≤ 0). Details mirrored into `TO_MHT_CURRENT_STATE.md`.
+We currently have:
+- Stable per-scan detection ordering and stable detection keys.
+- A scoring abstraction (`ScoringModel`) and a working Beta-ratio v1.5 scoring model.
+- Beam pruning and global deduplication (currently based on a short per-track signature).
 
-### 1.1. Desired model (conceptual)
+Next, we want to move closer to TO-MHT behavior without a major refactor:
+- Introduce short association history per track.
+- Use that history for global deduplication.
+- Implement an “N-scan-lite” commitment effect by keeping only the best global per last-N association signature.
 
-We want a per-scan log-likelihood increment for each global hypothesis that roughly follows the standard MHT model:
+N-scan-lite approximates classic N-scan pruning by collapsing hypotheses that only differ in decisions older than N scans,
+using last-N association signatures rather than explicit common ancestors.
 
-- For each track:
-  - **Hit** (track was detected and correctly associated):
-    - Likelihood term based on measurement vs predicted measurement under the track’s filter.
-    - Includes detection probability `P_D`.
-  - **Miss** (track was not detected):
-    - Likelihood term based on missed detection probability `1 - P_D`.
-- For each unused detection:
-  - Likelihood term based on the clutter process intensity (e.g. Poisson with rate λ over the measurement volume).
-- For each birth:
-  - Prior term for starting a new track (birth intensity).
-- For track continuation:
-  - Optional existence/termination prior (e.g. `P_S` survival probability).
+This improves track identity stability and keeps combinatorics under control, while we remain in the current
+“copy Track objects, no explicit track-tree” architecture.
 
-At this stage, the aim is not a perfect derivation, but a **consistent and explainable scoring scheme** that uses Stone Soup’s existing quantities where possible.
+---
 
-### 1.2. Mapping to existing Stone Soup objects
+## 1. Association history (per track)
 
-#### 1.2.1 PDA β probabilities and a practical "v1.5" bridge
+### 1.1 Design decisions
 
-Stone Soup's `PDAHypothesiser` typically returns *normalised* association probabilities β per track
-(including a missed-detection hypothesis β₀). For global MHT scoring we usually want unnormalised
-likelihood-ratio-style increments. As a practical bridge that stays within Stone Soup's existing outputs:
+Store a fixed-length history of association outcomes per scan in track metadata:
 
-- Let `beta0` be the miss hypothesis probability, and `betai` a hit probability.
-- Define an approximate per-association likelihood ratio term:
+- DET key: `>= 0` (per-scan detection index)
+- MISS: `-2` (track existed this scan, but missed)
+- PAD: `-1` (track did not exist yet within the window)
 
-  `logL_i ≈ log(betai) - log(beta0) + log(1 - P_D * P_G)`
+Keep it as `deque[int](maxlen=N)` for constant memory.
 
-This is not a perfect derivation, but it is consistent and easy to reason about as an initial scoring model.
+Suggested default:
+- `N = 3` scans
 
-**Numerical note:** clamp `betai` and `beta0` by an `epsilon` before taking logs to avoid `-inf` / NaNs.
+### 1.2 Implementation tasks
 
-Questions to resolve:
+1) Add tracker parameter(s):
+   - `assoc_history_len` (default 3)
 
-- What does the current `Hypothesis` probability/weight represent?
-  - Is it directly a (normalised) association probability?
-  - Can we extract or approximate a measurement likelihood `p(z | track)`?
-- How to incorporate detection probability `P_D`:
-  - From scenario config? From Stone Soup measurement models?
-- How to approximate clutter likelihood:
-  - Use existing clutter density or area from the scenarios.
-  - Relate `unused_det_log_penalty` to `log(lambda)` instead of a hand-tuned constant.
+2) Ensure each track has a stable `track_id` that survives copying:
+   - If already present: standardize on one metadata key (e.g. `track.metadata["track_id"]`)
+   - If missing: assign on creation (birth/init) from a counter.
 
-### 1.3. Concrete changes planned in code
+3) Update child-track creation to append to history:
+   - On miss: append `MISS`
+   - On hit: append `det_key` (stable per-scan detection index)
 
-- Introduce a dedicated `ScoringModel` or helper methods in `TOMHTTracker` that:
-  - Compute log-deltas for hit and miss hypotheses based on:
-    - Measurement likelihood from the hypothesiser (or directly from innovations).
-    - `P_D` and `1-P_D`.
-  - Compute a log penalty for each unused detection based on a clutter intensity parameter.
-  - Optionally, include simple existence terms for tracks and births.
-- **Done (beta-ratio v1.5):** `ScoringModel` abstraction with `BetaRatioScoringModel` as the only option. Hit: `log(betai) - log(beta0) + log(1 - P_D * P_G)`; miss: same common term; clutter: `len(unused) * log(clutter_density)` with fallback to `unused_det_log_penalty` when density ≤ 0; births: `-birth_log_penalty`.
-- **A/B hooks:** `run_tomht_crossing.py` and `run_tomht_bearing_range.py` keep `--births/--no-births` and `--initial-tracks/--no-initial-tracks` for toggling initiator and scenario initial tracks without code changes.
+4) Birth initialization:
+   - New track history should be padded then appended for the current scan:
+     `assoc_hist = [PAD] * (N-1) + [det_key]`
 
-- Replace the current mixture of:
-  - `birth_log_penalty`
-  - `unused_det_log_penalty`
-  - implicit hypothesis probabilities
-  with a more explicit combination, while trying to remain backward compatible enough to compare behaviours.
+5) Decide what happens when a track survives but is not expanded (should not happen):
+   - In general, every scan should append exactly one history element per surviving track.
 
-### 1.5. Future scoring work (deferred)
+### 1.3 Acceptance criteria
 
-- move from β-ratio to raw likelihood using `measurement_prediction` (optional)
-- refine clutter/unused term units + calibration
-- birth prior evidence terms (if you want)
+- History is deterministic across runs.
+- Every surviving track has `len(assoc_hist) <= N` and advances by 1 per scan.
+- Birth tracks have PADs in their history for the scans before they existed.
 
-**Next actionable step after scoring:** start the association-history / N-scan-lite groundwork (see Roadmap Phase 2 item 2).
+---
 
-#### 1.3.1 Proposed ScoringModel API (implementation guide)
+## 2. Global deduplication using association history
 
-Introduce a `ScoringModel` abstraction so scoring can evolve independently from hypothesis generation,
-pruning, and N-scan-lite logic.
+### 2.1 Rationale
 
-```python
-from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Protocol
+Current deduplication based only on “last association” can merge globals that differ in recent history.
+That collapses ambiguity too early, destabilizes identities, and makes N-scan style commitment impossible.
 
-@dataclass(frozen=True)
-class ScanContext:
-    timestamp: Any
-    detections: list  # already stably ordered
-    det_index_by_obj: dict[int, int]  # id(det) -> index in detections
+### 2.2 Implementation
 
-class ScoringModel(Protocol):
-    def score_track_hypotheses(
-        self,
-        *,
-        track: Any,
-        hypotheses: Iterable,   # iterable of SingleHypothesis objects
-        ctx: ScanContext,
-    ) -> Mapping[object, float]:
-        """Return {hypothesis_object: log_delta} for each hypothesis."""
+Replace the global signature with a history-aware signature:
 
-    def score_unused_detections(
-        self,
-        *,
-        used_det_keys: set[int],
-        ctx: ScanContext,
-    ) -> float:
-        """Return a log_delta for clutter / unused detections for the global hypothesis."""
+- For each track in a global:
+  - Extract `track_id`
+  - Extract `assoc_hist` as a tuple of length up to N
+- Sort per-track entries by `track_id`
+- Global signature is `tuple((track_id, assoc_hist_tuple) ...)`
 
-    def score_birth(
-        self,
-        *,
-        birth_track: Any,
-        used_det_key: int | None,
-        ctx: ScanContext,
-    ) -> float:
-        """Return a log_delta for adding a birth (prior / evidence)."""
-```
+When multiple globals share a signature:
+- Keep only the highest-weight global (drop the rest)
 
-Implementation notes:
-- The interface is *hypothesis-driven* (we pass hypothesis objects), so we can later compute raw likelihoods
-  from `measurement_prediction` without changing the tracker loop.
-- If using the β-ratio bridge, use log-space with an `epsilon` clamp for numerical stability.
+### 2.3 Acceptance criteria
 
-### 1.4. Open design questions
+- In scenarios where history differs, globals no longer collapse into one prematurely.
+- Total number of globals remains controlled by beam pruning + history dedupe.
 
-- How much do we want to rely on the Stone Soup `Hypothesis` probabilities vs rolling our own likelihoods from innovations?
-- Should the `ScoringModel` operate directly on `Hypothesis` objects (for access to `measurement_prediction` / raw likelihood scoring later)?
-- Do we want to start with a **very simple** likelihood (e.g. Mahalanobis distance with a scaled constant) or go straight to a more accurate derivation?
-- Should we integrate initiation evidence (holding track stats) into the global score explicitly, or keep it as a separate heuristic for birth ranking for now?
+---
 
-*(More sections will be added here for N-scan-lite, initiation rework, etc.)*
+## 3. N-scan-lite pruning (commitment effect)
+
+### 3.1 Definition (for this codebase)
+
+We implement an “N-scan-lite” effect by:
+- keeping only the best global hypothesis for each “last N associations” signature.
+
+This is equivalent to committing ambiguity older than N scans, without explicit hypothesis trees.
+
+### 3.2 Implementation
+
+If association history length == N, then section 2 already provides N-scan-lite behavior.
+If you later store longer history for debugging, then:
+- build the signature using only the last N entries per track.
+
+### 3.3 Acceptance criteria
+
+- As the scenario runs, hypothesis diversity does not grow unbounded with time.
+- Track identities are visibly more stable (less swapping / churn).
+- No regression: true tracks remain stable.
+
+---
+
+## 4. Diagnostics and regression checks
+
+Add lightweight counters/logging (or debug prints behind a flag):
+- num globals before/after history dedupe
+- num tracks in MAP global
+- births per scan
+
+Run at least:
+- smoke scenarios (with and without initiator)
+- any “two target” scenario where identity stability matters
+
+---
+
+## 5. Deferred work (do not implement in this phase)
+
+- “Full” track-oriented hypothesis trees / shared nodes for memory efficiency.
+- Efficient assignment (Murty/k-best) / clustering.
+- Scoring beyond beta-ratio v1.5 (raw likelihood, calibrated clutter/birth priors).
+
+These remain on the roadmap.
