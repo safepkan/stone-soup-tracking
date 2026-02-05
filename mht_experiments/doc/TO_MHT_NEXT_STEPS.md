@@ -4,6 +4,8 @@ This document is for planning upcoming work in more detail than the high-level r
 
 ## 1. Scoring v2: toward a simple MHT log-likelihood
 
+**Update (implemented in code):** Added a pluggable `ScoringModel` with a default **beta-ratio** mode that converts PDA β values into per-association log deltas and replaces the fixed unused-detection penalty with a clutter-density term. A legacy mode preserves the previous scoring. See `tomht_tracker.py` for the new `scoring_mode` parameter. (Details mirrored into `TO_MHT_CURRENT_STATE.md` for longer-term reference.)
+
 ### 1.1. Desired model (conceptual)
 
 We want a per-scan log-likelihood increment for each global hypothesis that roughly follows the standard MHT model:
@@ -59,6 +61,8 @@ Questions to resolve:
     - `P_D` and `1-P_D`.
   - Compute a log penalty for each unused detection based on a clutter intensity parameter.
   - Optionally, include simple existence terms for tracks and births.
+- **Done (beta-ratio v1):** `ScoringModel` abstraction added with `BetaRatioScoringModel` (default) and `LegacyScoringModel` switchable via `TOMHTParams.scoring_mode`. Beta mode uses `log(betai) - log(beta0) + log(1 - P_D * P_G)` for hits, zero for misses, and `len(unused) * log(clutter_density)` for clutter; births still use `birth_log_penalty`.
+- **A/B hooks:** `run_tomht_crossing.py` and `run_tomht_bearing_range.py` accept `--scoring-mode` to flip between `beta_ratio` and `legacy`, plus `--births/--no-births` and `--initial-tracks/--no-initial-tracks` to toggle initiator and initial-track usage without editing code.
 
 - Replace the current mixture of:
   - `birth_log_penalty`

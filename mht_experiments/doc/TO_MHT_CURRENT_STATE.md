@@ -66,9 +66,9 @@ The `step()` method roughly does:
    - For each track in `gh.tracks_by_id`:
      - Call `hypothesiser.hypothesise(track, det_list, timestamp)` (Stone Soup).
      - Collect the resulting `Hypothesis` objects (hit and miss).
-     - Score each hypothesis:
-       - Use a log-probability or weight provided by the hypothesiser.
-       - Clamp very small values for numeric safety.
+     - Score each hypothesis via the pluggable `ScoringModel` (default: **beta-ratio**):
+       - Beta mode: for a hit, `log(betai) - log(beta0) + log(1 - P_D * P_G)`; for a miss, `0.0`.
+       - Legacy mode (select via `TOMHTParams.scoring_mode="legacy"`): `log(max(probability, epsilon))` as before.
      - Prune to at most `max_children_per_track`, ensuring that at least one miss is kept if present.
      - Build `ChildCandidate` objects for each kept hypothesis:
        - `child_track`: a copy of the parent track with:
@@ -90,7 +90,9 @@ The `step()` method roughly does:
 
    - Compute the set of used detection indices from its tracks’ `last_det_key`.
    - Count `unused = len(det_list) - len(used)`.
-   - Subtract `unused_det_log_penalty * unused` from `log_weight`.
+   - Apply clutter score:
+     - Beta mode: add `unused * log(clutter_density)` (falls back to `-unused_det_log_penalty * unused` if density ≤ 0).
+     - Legacy mode: subtract `unused_det_log_penalty * unused` (previous behaviour).
 
    This is a heuristic way to reward hypotheses that explain more detections, and discourage always “ignoring” targets.
 
@@ -166,13 +168,19 @@ Some important differences and simplifications:
      - do formal N-scan back-pruning,
      - reason about hypothesis trees as explicit trees.
 
-2. **Scoring model is heuristic**
+2. **Scoring model (beta-ratio by default)**
 
-   - Hit/miss likelihoods depend on Stone Soup hypothesis probabilities/log-probs, plus:
-     - `birth_log_penalty` per new track,
-     - `unused_det_log_penalty` per unused detection.
-   - There’s no explicit clutter density λ in the log-likelihood, nor explicit detection probability terms plugged in as in classical MHT derivations.
-   - The relationship between initiator output and global log-likelihood is not explicitly modelled.
+   - Pluggable via `TOMHTParams.scoring_mode` (`beta_ratio` default, `legacy` available).
+   - Beta-ratio mode:
+     - Uses PDA β values (normalised per-track association probs) to approximate MHT-style log increments.
+     - Hit: `log(betai) - log(beta0) + log(1 - P_D * P_G)` where `beta0` is the miss β.
+     - Miss: `0.0` (reference baseline).
+     - Unused detections: `len(unused) * log(clutter_density)`; if clutter density ≤ 0, falls back to `-unused_det_log_penalty * len(unused)`.
+     - Births: `-birth_log_penalty` per birth (same as legacy).
+   - Legacy mode:
+     - Hit/miss scored as `log(probability)` (with epsilon clamp).
+     - Unused detections penalised by `-unused_det_log_penalty * len(unused)`.
+     - Births: `-birth_log_penalty`.
 
 3. **Initiation is external and opaque**
 
@@ -195,8 +203,14 @@ Some important differences and simplifications:
 
 - Scenario generation is seeded (`crossing_targets.py` uses `np.random.seed(2001)`, `bearing_range.py` uses `np.random.seed(1908)`), so truths and detections are repeatable on the same Python/NumPy stack.
 - Per-scan detection ordering is made explicit and deterministic (`_sorted_detections`), which fixes `last_det_key` and residual selection.
+- Per-scan data is bundled into a `ScanContext` (timestamp, ordered detections, per-scan det index); it is passed to scoring and birth logic to keep inputs consistent across helper functions.
+- Per-scan data is bundled into a `ScanContext` (timestamp, ordered detections, per-scan det index); it is passed to scoring and birth logic to keep inputs consistent across helper functions.
 - Global hypothesis branching/pruning uses deterministic sort keys; the tracker itself does no additional sampling.
 - `make smoke` (both scenarios, headless) produces identical logs across repeated runs except for wall-clock timestamps in the debug output.
+- A/B convenience: `run_tomht_crossing.py` / `run_tomht_bearing_range.py` accept:
+  - `--scoring-mode {beta_ratio,legacy}` to switch scoring,
+  - `--births` / `--no-births` (BooleanOptionalAction) to toggle initiator use,
+  - `--initial-tracks` / `--no-initial-tracks` (BooleanOptionalAction) to toggle scenario-provided initial tracks (defaults match each scenario: crossing = births on, initial tracks off; bearing_range = births on, initial tracks off).
 
 ## 5. Summary
 

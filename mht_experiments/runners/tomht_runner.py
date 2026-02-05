@@ -81,8 +81,15 @@ def _show_animation(ani) -> None:
         plt.show()
 
 
-def run_tomht(setup: SetupName) -> None:
+def run_tomht(
+    setup: SetupName,
+    *,
+    scoring_mode: str | None = None,
+    use_initiator: bool = True,
+    use_initial_tracks: bool = False,
+) -> None:
     styles: tuple[str, ...]
+    scoring_mode = scoring_mode or TOMHTParams().scoring_mode
     if setup == "crossing":
         truths, scans, start_time, transition_model, measurement_model, config = (
             create_crossing_scenario()
@@ -90,10 +97,14 @@ def run_tomht(setup: SetupName) -> None:
         timestamps = [
             start_time + datetime.timedelta(seconds=i) for i in range(len(scans))
         ]
-        tracks = initial_tomht_tracks_for_crossing(start_time)
-        initiator = tomht_initiator_for_crossing_simple(start_time, measurement_model)
-        initiator = None  # Skip births
-        # tracks = []  # No initial tracks
+        tracks = (
+            initial_tomht_tracks_for_crossing(start_time) if use_initial_tracks else []
+        )
+        initiator = (
+            tomht_initiator_for_crossing_simple(start_time, measurement_model)
+            if use_initiator
+            else None
+        )
         tracker = build_tomht_linear(
             transition_model,
             measurement_model,
@@ -106,6 +117,7 @@ def run_tomht(setup: SetupName) -> None:
                 max_missed=5,
                 prob_gate=0.9999,
                 birth_log_penalty=15.0,
+                scoring_mode=scoring_mode,
             ),
         )
         styles = ("r-", "b-")
@@ -113,12 +125,18 @@ def run_tomht(setup: SetupName) -> None:
         truths, scans, timestamps, transition_model, measurement_model, config = (
             create_bearing_range_mht_example()
         )
-        tracks = initial_tomht_tracks_for_bearing_range(timestamps[0])
-        initiator = tomht_initiator_for_bearing_range(
-            timestamps[0], transition_model, measurement_model
+        tracks = (
+            initial_tomht_tracks_for_bearing_range(timestamps[0])
+            if use_initial_tracks
+            else []
         )
-        # initiator = None  # Skip births
-        tracks = []  # No initial tracks
+        initiator = (
+            tomht_initiator_for_bearing_range(
+                timestamps[0], transition_model, measurement_model
+            )
+            if use_initiator
+            else None
+        )
         tracker = build_tomht_ukf(
             transition_model,
             measurement_model,
@@ -134,6 +152,7 @@ def run_tomht(setup: SetupName) -> None:
                 birth_log_penalty=2.0,
                 unused_det_log_penalty=4.0,
                 prob_gate=0.99,
+                scoring_mode=scoring_mode,
             ),
         )
         styles = ("g-",)

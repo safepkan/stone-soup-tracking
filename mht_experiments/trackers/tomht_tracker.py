@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import log
 from ordered_set import OrderedSet
-from typing import Iterable
+from typing import Iterable, Mapping, Protocol
 
 import numpy as np
 
 from stonesoup.hypothesiser.probability import PDAHypothesiser
+from stonesoup.types.detection import MissedDetection
 from stonesoup.models.measurement.base import MeasurementModel
 from stonesoup.models.transition.base import TransitionModel
 from stonesoup.predictor.kalman import KalmanPredictor, UnscentedKalmanPredictor
@@ -27,6 +28,7 @@ class TOMHTParams:
     max_children_per_track: int = 5
     max_missed: int = 5
     log_epsilon: float = 1e-12
+    scoring_mode: str = "beta_ratio"  # "legacy" or "beta_ratio"
 
     prob_gate: float = 0.99
 
@@ -63,6 +65,152 @@ class GlobalHypothesis:
     log_weight: float
 
 
+@dataclass(frozen=True)
+class ScanContext:
+    """Per-scan context passed into scoring models."""
+
+    timestamp: object
+    detections: list[Detection]
+    det_index_by_obj: dict[int, int]
+
+
+class ScoringModel(Protocol):
+    def score_track_hypotheses(
+        self,
+        *,
+        track: Track,
+        hypotheses: Iterable,
+        ctx: ScanContext,
+    ) -> Mapping[int, float]:
+        """Return {id(hypothesis_object): log_delta} for each hypothesis."""
+
+    def score_unused_detections(
+        self,
+        *,
+        used_det_keys: set[int],
+        ctx: ScanContext,
+    ) -> float:
+        """Return a log_delta to add for clutter / unused detections."""
+
+    def score_birth(
+        self,
+        *,
+        birth_track: Track,
+        used_det_key: int | None,
+        ctx: ScanContext,
+    ) -> float:
+        """Return a log_delta to add for a birth (usually negative)."""
+
+
+@dataclass(frozen=True)
+class LegacyScoringModel:
+    """Preserve the previous heuristic scoring."""
+
+    log_epsilon: float
+    unused_det_log_penalty: float
+    birth_log_penalty: float
+
+    def _hyp_probability(self, hyp) -> float:
+        p = getattr(hyp, "probability", None)
+        if p is None:
+            w = getattr(hyp, "weight", 0.0)
+            try:
+                return float(w)
+            except Exception:
+                return 0.0
+        try:
+            return float(p)
+        except Exception:
+            return 0.0
+
+    def _hyp_log_delta(self, hyp) -> float:
+        return log(max(self._hyp_probability(hyp), self.log_epsilon))
+
+    def score_track_hypotheses(
+        self, *, track: Track, hypotheses: Iterable, ctx: ScanContext
+    ) -> Mapping[int, float]:
+        return {id(hyp): self._hyp_log_delta(hyp) for hyp in hypotheses}
+
+    def score_unused_detections(
+        self, *, used_det_keys: set[int], ctx: ScanContext
+    ) -> float:
+        unused = len(ctx.detections) - len(used_det_keys)
+        if unused <= 0:
+            return 0.0
+        return -self.unused_det_log_penalty * float(unused)
+
+    def score_birth(
+        self, *, birth_track: Track, used_det_key: int | None, ctx: ScanContext
+    ) -> float:
+        return -self.birth_log_penalty
+
+
+@dataclass(frozen=True)
+class BetaRatioScoringModel:
+    """Approximate MHT-like scoring using PDA β ratios."""
+
+    prob_detect: float
+    prob_gate: float
+    clutter_density: float
+    log_epsilon: float
+    fallback_unused_det_log_penalty: float
+    birth_log_penalty: float
+
+    def _beta_values(
+        self, hypotheses: Iterable
+    ) -> tuple[float, Mapping[int, tuple[float, bool]]]:
+        beta0 = None
+        scores: dict[int, tuple[float, bool]] = {}
+        for hyp in hypotheses:
+            p = getattr(hyp, "probability", None)
+            try:
+                p_float = float(p) if p is not None else 0.0
+            except Exception:
+                p_float = 0.0
+
+            is_miss = isinstance(
+                getattr(hyp, "measurement", None), MissedDetection
+            ) or (not hyp)
+            if is_miss:
+                beta0 = p_float if beta0 is None else beta0 + p_float
+            scores[id(hyp)] = (p_float, is_miss)
+
+        beta0_val = beta0 if beta0 is not None else self.log_epsilon
+        beta0_val = max(beta0_val, self.log_epsilon)
+        return beta0_val, scores
+
+    def score_track_hypotheses(
+        self, *, track: Track, hypotheses: Iterable, ctx: ScanContext
+    ) -> Mapping[int, float]:
+        beta0, prob_map = self._beta_values(hypotheses)
+        common = log(max(1.0 - self.prob_detect * self.prob_gate, self.log_epsilon))
+
+        out: dict[int, float] = {}
+        for hyp_id, (beta, is_miss) in prob_map.items():
+            beta_clamped = max(beta, self.log_epsilon)
+            if is_miss:
+                out[hyp_id] = 0.0
+            else:
+                out[hyp_id] = log(beta_clamped) - log(beta0) + common
+        return out
+
+    def score_unused_detections(
+        self, *, used_det_keys: set[int], ctx: ScanContext
+    ) -> float:
+        unused = len(ctx.detections) - len(used_det_keys)
+        if unused <= 0:
+            return 0.0
+        lam = max(self.clutter_density, 0.0)
+        if lam <= 0.0:
+            return -self.fallback_unused_det_log_penalty * float(unused)
+        return float(unused) * log(max(lam, self.log_epsilon))
+
+    def score_birth(
+        self, *, birth_track: Track, used_det_key: int | None, ctx: ScanContext
+    ) -> float:
+        return -self.birth_log_penalty
+
+
 class TOMHTTracker:
     """
     Track-Oriented MHT with K-best global hypotheses (beam search).
@@ -80,11 +228,35 @@ class TOMHTTracker:
         *,
         initiator: SimpleMeasurementInitiator | None = None,
         params: TOMHTParams = TOMHTParams(),
+        scoring_model: ScoringModel | None = None,
     ) -> None:
         self.hypothesiser = hypothesiser
         self.updater = updater
         self.params = params
         self.initiator = initiator
+        if scoring_model is None:
+            if params.scoring_mode == "beta_ratio":
+                # Try to read clutter density attribute name used by different hyp types.
+                clutter = getattr(hypothesiser, "clutter_density", None)
+                if clutter is None:
+                    clutter = getattr(hypothesiser, "clutter_spatial_density", 0.0)
+                prob_detect = getattr(hypothesiser, "prob_detect", 0.9)
+                prob_gate = getattr(hypothesiser, "prob_gate", params.prob_gate)
+                scoring_model = BetaRatioScoringModel(
+                    prob_detect=float(prob_detect),
+                    prob_gate=float(prob_gate),
+                    clutter_density=float(clutter) if clutter is not None else 0.0,
+                    log_epsilon=params.log_epsilon,
+                    fallback_unused_det_log_penalty=params.unused_det_log_penalty,
+                    birth_log_penalty=params.birth_log_penalty,
+                )
+            else:
+                scoring_model = LegacyScoringModel(
+                    log_epsilon=params.log_epsilon,
+                    unused_det_log_penalty=params.unused_det_log_penalty,
+                    birth_log_penalty=params.birth_log_penalty,
+                )
+        self.scoring_model = scoring_model
 
         init_tracks_by_id: dict[int, Track] = {}
         max_tid = -1
@@ -184,22 +356,6 @@ class TOMHTTracker:
         vy = float(sv[3, 0])
         return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
 
-    def _hyp_probability(self, hyp) -> float:
-        p = getattr(hyp, "probability", None)
-        if p is None:
-            w = getattr(hyp, "weight", 0.0)
-            try:
-                return float(w)
-            except Exception:
-                return 0.0
-        try:
-            return float(p)
-        except Exception:
-            return 0.0
-
-    def _hyp_log_delta(self, hyp) -> float:
-        return log(max(self._hyp_probability(hyp), self.params.log_epsilon))
-
     @staticmethod
     def _copy_track(track: Track) -> Track:
         # Track is list-like; copying states is enough for our simple bookkeeping
@@ -245,18 +401,16 @@ class TOMHTTracker:
     def _apply_unused_detection_penalty(
         self,
         gh: GlobalHypothesis,
-        detections: list[Detection],
+        ctx: ScanContext,
     ) -> GlobalHypothesis:
-        if not detections:
+        if not ctx.detections:
             return gh
         used = self._used_det_keys_for_tracks(gh.tracks_by_id)
-        unused = len(detections) - len(used)
-        if unused <= 0:
+        delta = self.scoring_model.score_unused_detections(used_det_keys=used, ctx=ctx)
+        if delta == 0.0:
             return gh
         return GlobalHypothesis(
-            tracks_by_id=gh.tracks_by_id,
-            log_weight=gh.log_weight
-            - self.params.unused_det_log_penalty * float(unused),
+            tracks_by_id=gh.tracks_by_id, log_weight=gh.log_weight + delta
         )
 
     def _birth_support_points(self, birth: Track) -> int:
@@ -287,18 +441,34 @@ class TOMHTTracker:
         self,
         track_id: int,
         track: Track,
-        detections: list[Detection],
-        timestamp,
-        det_index_by_obj: dict[int, int],
+        ctx: ScanContext,
     ) -> list[ChildCandidate]:
-        multi = self.hypothesiser.hypothesise(track, detections, timestamp)
+        multi = self.hypothesiser.hypothesise(track, ctx.detections, ctx.timestamp)
         singles = list(multi)
 
+        # Precompute scores with the chosen scoring model.
+        hyp_scores = self.scoring_model.score_track_hypotheses(
+            track=track, hypotheses=singles, ctx=ctx
+        )
+
+        def _probability_for_sort(hyp) -> float:
+            p = getattr(hyp, "probability", None)
+            if p is not None:
+                try:
+                    return float(p)
+                except Exception:
+                    return 0.0
+            w = getattr(hyp, "weight", 0.0)
+            try:
+                return float(w)
+            except Exception:
+                return 0.0
+
         def sort_key(hyp) -> tuple[float, int]:
-            p = self._hyp_probability(hyp)
+            p = _probability_for_sort(hyp)
             if not hyp:
                 return (p, -1)  # deterministic position for misses among ties
-            return (p, -det_index_by_obj.get(id(hyp.measurement), 10**9))
+            return (p, -ctx.det_index_by_obj.get(id(hyp.measurement), 10**9))
 
         # Sort best-first and cap. Always keep a "miss" if present.
         singles_sorted = sorted(singles, key=sort_key, reverse=True)
@@ -322,7 +492,7 @@ class TOMHTTracker:
                 upd = self.updater.update(hyp)
                 child.append(upd)
                 child.metadata["missed_count"] = 0
-                used = det_index_by_obj[id(hyp.measurement)]
+                used = ctx.det_index_by_obj[id(hyp.measurement)]
 
             child.metadata["age"] = int(track.metadata.get("age", len(track))) + 1
             child.metadata["hits"] = int(track.metadata.get("hits", 0)) + (
@@ -336,7 +506,7 @@ class TOMHTTracker:
                     track_id=track_id,
                     child_track=child,
                     used_det_key=used,
-                    log_delta=self._hyp_log_delta(hyp),
+                    log_delta=float(hyp_scores.get(id(hyp), 0.0)),
                 )
             )
 
@@ -346,9 +516,7 @@ class TOMHTTracker:
     def _expand_global_hypothesis(
         self,
         gh: GlobalHypothesis,
-        detections: list[Detection],
-        timestamp,
-        det_index_by_obj: dict[int, int],
+        ctx: ScanContext,
     ) -> list[GlobalHypothesis]:
         track_ids = sorted(gh.tracks_by_id.keys())
 
@@ -358,9 +526,7 @@ class TOMHTTracker:
                 self._candidates_for_track(
                     tid,
                     gh.tracks_by_id[tid],
-                    detections,
-                    timestamp,
-                    det_index_by_obj,
+                    ctx,
                 )
             )
 
@@ -440,15 +606,13 @@ class TOMHTTracker:
 
     def _branch_globals_with_births(
         self,
-        detections: list[Detection],
-        det_index_by_obj: dict[int, int],
-        timestamp,
+        ctx: ScanContext,
     ) -> None:
         if self.initiator is not None and self.global_hypotheses:
-            residual = self._residual_detections(self.global_hypotheses, detections)
+            residual = self._residual_detections(self.global_hypotheses, ctx.detections)
 
             born = (
-                list(self.initiator.initiate(OrderedSet(residual), timestamp))
+                list(self.initiator.initiate(OrderedSet(residual), ctx.timestamp))
                 if residual
                 else []
             )
@@ -457,7 +621,7 @@ class TOMHTTracker:
 
             born_scored: list[tuple[tuple, Track]] = []
             for tr in born:
-                used = self._birth_used_key(tr, det_index_by_obj)
+                used = self._birth_used_key(tr, ctx.det_index_by_obj)
                 support, age, misses = self._birth_support_age_misses(tr)
                 covtr = self._birth_covar_trace(tr)
 
@@ -478,15 +642,15 @@ class TOMHTTracker:
 
             if self.params.debug_display_births:
                 print(
-                    f"\nBirth candidates at {timestamp} (pre-limit): {len(born_scored)}"
+                    f"\nBirth candidates at {ctx.timestamp} (pre-limit): {len(born_scored)}"
                 )
-                self._display_births(born, det_index_by_obj)
+                self._display_births(born, ctx.det_index_by_obj)
 
             born = born[: self.params.max_births_per_scan]
 
             if self.params.debug_display_births:
                 print(f"Births kept (post-limit): {len(born)}")
-                self._display_births(born, det_index_by_obj)
+                self._display_births(born, ctx.det_index_by_obj)
 
             if born:
                 # Allocate stable IDs once for these births (shared across variants)
@@ -494,7 +658,7 @@ class TOMHTTracker:
                 for tr in born:
                     tid = self._next_track_id
                     self._next_track_id += 1
-                    used_key = self._birth_used_key(tr, det_index_by_obj)
+                    used_key = self._birth_used_key(tr, ctx.det_index_by_obj)
                     birth_templates.append((tid, tr, used_key))
 
                 new_globals: list[GlobalHypothesis] = []
@@ -524,11 +688,15 @@ class TOMHTTracker:
                         tr_copy.metadata["last_det_hit"] = used is not None
 
                         tracks_by_id[tid] = tr_copy
+                        birth_delta = self.scoring_model.score_birth(
+                            birth_track=tr_copy,
+                            used_det_key=used,
+                            ctx=ctx,
+                        )
                         new_globals.append(
                             GlobalHypothesis(
                                 tracks_by_id=tracks_by_id,
-                                log_weight=gh.log_weight
-                                - self.params.birth_log_penalty,
+                                log_weight=gh.log_weight + birth_delta,
                             )
                         )
 
@@ -547,6 +715,7 @@ class TOMHTTracker:
                                 u1 is None or u2 is None or u1 != u2
                             ):  # should always hold, but be safe
                                 tracks_by_id = dict(gh.tracks_by_id)
+                                birth_delta_total = 0.0
 
                                 for tid, template, used in [
                                     (tid1, t1, u1),
@@ -563,11 +732,16 @@ class TOMHTTracker:
                                     tr_copy.metadata["last_det_hit"] = used is not None
                                     tracks_by_id[tid] = tr_copy
 
+                                    birth_delta_total += self.scoring_model.score_birth(
+                                        birth_track=tr_copy,
+                                        used_det_key=used,
+                                        ctx=ctx,
+                                    )
+
                                 new_globals.append(
                                     GlobalHypothesis(
                                         tracks_by_id=tracks_by_id,
-                                        log_weight=gh.log_weight
-                                        - 2.0 * self.params.birth_log_penalty,
+                                        log_weight=gh.log_weight + birth_delta_total,
                                     )
                                 )
 
@@ -599,20 +773,17 @@ class TOMHTTracker:
         # objects; hash/equality isn't defined on Detection, but identity is
         # stable within a scan.
         det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}
+        ctx = ScanContext(
+            timestamp=timestamp, detections=det_list, det_index_by_obj=det_index_by_obj
+        )
 
         # Expand globals with current batch of detections
         expanded: list[GlobalHypothesis] = []
         for gh in self.global_hypotheses:
-            expanded.extend(
-                self._expand_global_hypothesis(
-                    gh, det_list, timestamp, det_index_by_obj
-                )
-            )
+            expanded.extend(self._expand_global_hypothesis(gh, ctx))
 
         # Apply unused detection penalty
-        expanded = [
-            self._apply_unused_detection_penalty(gh, det_list) for gh in expanded
-        ]
+        expanded = [self._apply_unused_detection_penalty(gh, ctx) for gh in expanded]
 
         # Dedupe
         expanded = self._dedupe_globals_by_last_keys(expanded)
@@ -622,7 +793,7 @@ class TOMHTTracker:
         self.global_hypotheses = expanded[: self.params.max_global_hypotheses]
 
         # Births: run initiator once on residual detections, then branch globals with/without births.
-        self._branch_globals_with_births(det_list, det_index_by_obj, timestamp)
+        self._branch_globals_with_births(ctx)
 
         if self.params.debug_display_detections:
             print(f"\nDetections at timestamp {timestamp}:")
