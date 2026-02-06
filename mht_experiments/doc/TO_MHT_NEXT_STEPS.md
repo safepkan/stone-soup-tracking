@@ -8,18 +8,15 @@ Older completed “next steps” snapshots are archived separately (date-stamped
 We currently have:
 - Stable per-scan detection ordering and stable detection keys.
 - A scoring abstraction (`ScoringModel`) and a working Beta-ratio v1.5 scoring model.
-- Beam pruning and global deduplication (currently based on a short per-track signature).
+- Beam pruning and global deduplication.
 
 Next, we want to move closer to TO-MHT behavior without a major refactor:
-- Introduce short association history per track.
-- Use that history for global deduplication.
+- Track short association history per track.
+- Use association history for global deduplication (avoid collapsing distinct recent histories).
 - Implement an “N-scan-lite” commitment effect by keeping only the best global per last-N association signature.
 
-N-scan-lite approximates classic N-scan pruning by collapsing hypotheses that only differ in decisions older than N scans,
-using last-N association signatures rather than explicit common ancestors.
-
-This improves track identity stability and keeps combinatorics under control, while we remain in the current
-“copy Track objects, no explicit track-tree” architecture.
+Note: This is an approximation of classic N-scan pruning (which relies on explicit common ancestors in a hypothesis tree).
+We are not introducing explicit trees yet; this phase should remain compatible with a later refactor to proper TO-MHT trees.
 
 ---
 
@@ -27,42 +24,47 @@ This improves track identity stability and keeps combinatorics under control, wh
 
 ### 1.1 Design decisions
 
-Store a fixed-length history of association outcomes per scan in track metadata:
+Store a fixed-length history of association outcomes per scan in track metadata as integers:
 
 - DET key: `>= 0` (per-scan detection index)
 - MISS: `-2` (track existed this scan, but missed)
 - PAD: `-1` (track did not exist yet within the window)
 
-Keep it as `deque[int](maxlen=N)` for constant memory.
+Keep it as `deque[int](maxlen=assoc_history_len)` for constant memory.
 
-Suggested default:
-- `N = 3` scans
+Configuration:
+- `assoc_history_len` (H): how much history we store (debuggable)
+- `ns_scan_window` (N): how much history we *use* in signatures (N ≤ H)
+
+Suggested defaults for now:
+- H = 3, N = 3
 
 ### 1.2 Implementation tasks
 
-1) Add tracker parameter(s):
+1) Add tracker parameters:
    - `assoc_history_len` (default 3)
+   - `ns_scan_window` (default = assoc_history_len)
 
 2) Ensure each track has a stable `track_id` that survives copying:
-   - If already present: standardize on one metadata key (e.g. `track.metadata["track_id"]`)
-   - If missing: assign on creation (birth/init) from a counter.
+   - standardize on metadata key (e.g. `track.metadata["track_id"]`)
+   - assign at creation (birth/init) from a counter.
 
-3) Update child-track creation to append to history:
+3) Update child-track creation to append one history element per scan:
    - On miss: append `MISS`
    - On hit: append `det_key` (stable per-scan detection index)
 
 4) Birth initialization:
-   - New track history should be padded then appended for the current scan:
-     `assoc_hist = [PAD] * (N-1) + [det_key]`
+   - For a new track born on detection `det_key`:
+     `assoc_hist = [PAD] * (H-1) + [det_key]`
 
-5) Decide what happens when a track survives but is not expanded (should not happen):
-   - In general, every scan should append exactly one history element per surviving track.
+5) Consistency rule:
+   - Every scan, every surviving track hypothesis should advance history by exactly one element.
 
 ### 1.3 Acceptance criteria
 
 - History is deterministic across runs.
-- Every surviving track has `len(assoc_hist) <= N` and advances by 1 per scan.
-- Birth tracks have PADs in their history for the scans before they existed.
+- Every surviving track has an `assoc_hist` and it advances by 1 per scan.
+- Birth tracks show PADs for scans before the track existed.
 
 ---
 
@@ -71,25 +73,26 @@ Suggested default:
 ### 2.1 Rationale
 
 Current deduplication based only on “last association” can merge globals that differ in recent history.
-That collapses ambiguity too early, destabilizes identities, and makes N-scan style commitment impossible.
+That collapses ambiguity too early and destabilizes track identities.
 
 ### 2.2 Implementation
 
-Replace the global signature with a history-aware signature:
+Replace global signature with a history-aware signature:
 
 - For each track in a global:
-  - Extract `track_id`
-  - Extract `assoc_hist` as a tuple of length up to N
+  - extract `track_id`
+  - extract last `ns_scan_window` entries of `assoc_hist`
 - Sort per-track entries by `track_id`
-- Global signature is `tuple((track_id, assoc_hist_tuple) ...)`
+- Global signature is:
+  `tuple((track_id, assoc_hist_tail_tuple) ...)`
 
 When multiple globals share a signature:
-- Keep only the highest-weight global (drop the rest)
+- keep only the highest-weight global.
 
 ### 2.3 Acceptance criteria
 
-- In scenarios where history differs, globals no longer collapse into one prematurely.
-- Total number of globals remains controlled by beam pruning + history dedupe.
+- In the crossing-target scenario, globals with different recent histories are not prematurely merged.
+- Hypothesis counts remain controlled by beam pruning + history dedupe.
 
 ---
 
@@ -97,42 +100,42 @@ When multiple globals share a signature:
 
 ### 3.1 Definition (for this codebase)
 
-We implement an “N-scan-lite” effect by:
-- keeping only the best global hypothesis for each “last N associations” signature.
+We approximate classic N-scan pruning by collapsing hypotheses that differ only in decisions older than N scans:
+- signatures only include the last N association outcomes per track
+- thus ambiguity older than N does not continue to branch.
 
-This is equivalent to committing ambiguity older than N scans, without explicit hypothesis trees.
+Classic N-scan pruning relies on explicit common ancestors in a hypothesis tree; we are deferring explicit trees.
 
 ### 3.2 Implementation
 
-If association history length == N, then section 2 already provides N-scan-lite behavior.
-If you later store longer history for debugging, then:
-- build the signature using only the last N entries per track.
+If H == N, then section 2 already provides N-scan-lite behavior.
+If H > N (kept for debugging), signatures should use only the last N entries.
 
 ### 3.3 Acceptance criteria
 
-- As the scenario runs, hypothesis diversity does not grow unbounded with time.
-- Track identities are visibly more stable (less swapping / churn).
-- No regression: true tracks remain stable.
+- Hypothesis diversity does not grow unbounded with time in long runs.
+- Track identities are visibly more stable in the crossing scenario.
 
 ---
 
-## 4. Diagnostics and regression checks
+## 4. Minimal instrumentation (small, but required)
 
-Add lightweight counters/logging (or debug prints behind a flag):
+Add lightweight counters/logging behind a debug flag:
+- num detections per scan
 - num globals before/after history dedupe
+- num globals before/after beam prune
 - num tracks in MAP global
 - births per scan
 
-Run at least:
-- smoke scenarios (with and without initiator)
-- any “two target” scenario where identity stability matters
+This is not a full evaluation framework, but is required to spot regressions and scaling issues early.
 
 ---
 
-## 5. Deferred work (do not implement in this phase)
+## 5. Deferred work (explicitly not in this phase)
 
-- “Full” track-oriented hypothesis trees / shared nodes for memory efficiency.
+- Full track-oriented hypothesis trees / shared nodes.
 - Efficient assignment (Murty/k-best) / clustering.
 - Scoring beyond beta-ratio v1.5 (raw likelihood, calibrated clutter/birth priors).
+- Formal evaluation metrics beyond basic counters/plots.
 
 These remain on the roadmap.
