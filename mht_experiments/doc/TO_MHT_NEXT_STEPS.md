@@ -41,19 +41,19 @@ Suggested defaults for now:
 
 ### 1.2 Implementation tasks
 
-1) Add tracker parameters:
+1) Add tracker parameters **(implemented 2026-02-06)**:
    - `assoc_history_len` (default 3)
    - `ns_scan_window` (default = assoc_history_len)
 
-2) Ensure each track has a stable `track_id` that survives copying:
+2) Ensure each track has a stable `track_id` that survives copying **(implemented 2026-02-06)**:
    - standardize on metadata key (e.g. `track.metadata["track_id"]`)
    - assign at creation (birth/init) from a counter.
 
-3) Update child-track creation to append one history element per scan:
+3) Update child-track creation to append one history element per scan **(implemented 2026-02-06)**:
    - On miss: append `MISS`
    - On hit: append `det_key` (stable per-scan detection index)
 
-4) Birth initialization:
+4) Birth initialization **(implemented 2026-02-06)**:
    - For a new track born on detection `det_key`:
      `assoc_hist = [PAD] * (H-1) + [det_key]`
 
@@ -75,7 +75,7 @@ Suggested defaults for now:
 Current deduplication based only on “last association” can merge globals that differ in recent history.
 That collapses ambiguity too early and destabilizes track identities.
 
-### 2.2 Implementation
+### 2.2 Implementation **(implemented 2026-02-06)**
 
 Replace global signature with a history-aware signature:
 

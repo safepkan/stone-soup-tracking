@@ -25,6 +25,7 @@ Supporting concepts:
     - `age: int` (number of scans since track was created in this tree)
     - `hits: int` (number of detection updates)
     - `missed_count: int` (consecutive misses)
+    - `assoc_history: deque[int]` (fixed length `assoc_history_len`; PAD=`-1`, MISS=`-2`, DET=`det_index`)
     - `last_det_key: int | None` (per-scan detection index)
     - `last_det_hit: bool` (hit vs miss at last step)
 
@@ -36,6 +37,8 @@ Supporting concepts:
   - `unused_det_log_penalty: float`
   - `max_births_per_scan: int`
   - `births_k: int` (number of top globals used to define “residual” for births)
+  - `assoc_history_len: int` (stored history length, default 3)
+  - `ns_scan_window: int` (history tail length used for global dedupe; defaults to `assoc_history_len`)
   - Debug flags: `debug`, `debug_births`, etc.
 
 The tracker is tightly coupled to Stone Soup predictor/updater/hypothesiser objects, which are created externally by scenario-specific builder functions.
@@ -96,15 +99,15 @@ The `step()` method roughly does:
 
    This is a heuristic way to reward hypotheses that explain more detections, and discourage always “ignoring” targets.
 
-4. **Deduplicate globals by present association**
+4. **Deduplicate globals by recent association history**
 
-   - Define a signature per global:
+   - Define a signature per global using the last `ns_scan_window` entries of each track’s `assoc_history` (tail padded with PADs as needed):
      ```python
-     sig = tuple(sorted((tid, last_det_key_of_track_tid) for tid in tracks_by_id))
+     sig = tuple(sorted((tid, assoc_hist_tail_tuple) for tid, track in tracks_by_id.items()))
      ```
-   - Keep only the best log_weight per signature.
+   - Keep only the best `log_weight` per signature.
 
-   This collapses globals that differ only in past history but are currently identical in which tracks they have and which detections they used this scan.
+   This prevents globals with distinct recent histories from collapsing while still merging hypotheses that only differ beyond the N-scan window.
 
 5. **Beam pruning**
 

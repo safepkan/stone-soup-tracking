@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from math import log
 from ordered_set import OrderedSet
@@ -21,6 +22,9 @@ from stonesoup.updater.base import Updater
 
 from mht_experiments.helpers.hypothesiser import RobustPDAHypothesiser
 
+ASSOC_PAD = -1
+ASSOC_MISS = -2
+
 
 @dataclass(frozen=True)
 class TOMHTParams:
@@ -29,6 +33,9 @@ class TOMHTParams:
     max_missed: int = 5
     log_epsilon: float = 1e-12
     scoring_mode: str = "beta_ratio"  # Only beta_ratio is supported.
+
+    assoc_history_len: int = 3
+    ns_scan_window: int = 0  # default set in __post_init__
 
     prob_gate: float = 0.99
 
@@ -47,6 +54,11 @@ class TOMHTParams:
     debug_display_births: bool = True
     debug_births_max: int = 5
     debug_globals_max: int = 5
+
+    def __post_init__(self) -> None:
+        # Default the N-scan window to the stored history length.
+        if self.ns_scan_window <= 0:
+            object.__setattr__(self, "ns_scan_window", self.assoc_history_len)
 
 
 @dataclass(frozen=True)
@@ -179,6 +191,37 @@ class TOMHTTracker:
       (one child per track_id, no shared detections).
     """
 
+    def _new_assoc_history(self, last_entry: int | None) -> deque[int]:
+        hist = deque(
+            [ASSOC_PAD] * max(self.params.assoc_history_len - 1, 0),
+            maxlen=self.params.assoc_history_len,
+        )
+        hist.append(ASSOC_PAD if last_entry is None else int(last_entry))
+        return hist
+
+    def _append_assoc_history(self, track: Track, value: int) -> None:
+        hist = track.metadata.get("assoc_history")
+        if isinstance(hist, deque):
+            hist = deque(hist, maxlen=self.params.assoc_history_len)
+        else:
+            hist = deque([], maxlen=self.params.assoc_history_len)
+        track.metadata["assoc_history"] = hist
+        hist.append(int(value))
+
+    def _history_tail(self, track: Track) -> tuple[int, ...]:
+        hist = track.metadata.get("assoc_history")
+        hist = deque(
+            hist if isinstance(hist, deque) else [],
+            maxlen=self.params.assoc_history_len,
+        )
+        tail_len = min(
+            int(self.params.ns_scan_window), int(self.params.assoc_history_len)
+        )
+        if len(hist) < tail_len:
+            pad_needed = tail_len - len(hist)
+            return tuple([ASSOC_PAD] * pad_needed + list(hist))
+        return tuple(list(hist)[-tail_len:])
+
     def __init__(
         self,
         hypothesiser: PDAHypothesiser,
@@ -234,10 +277,13 @@ class TOMHTTracker:
         init_tracks_by_id: dict[int, Track] = {}
         max_tid = -1
         for i, tr in enumerate(list(initial_tracks)):
-            tr.metadata.setdefault("track_id", i)
+            tid = int(tr.metadata.get("track_id", i))
+            tr.metadata["track_id"] = tid
             tr.metadata.setdefault("missed_count", 0)
-            init_tracks_by_id[int(tr.metadata["track_id"])] = tr
-            max_tid = max(max_tid, int(tr.metadata["track_id"]))
+            last_det = tr.metadata.get("last_det_key", None)
+            tr.metadata["assoc_history"] = self._new_assoc_history(last_det)
+            init_tracks_by_id[tid] = tr
+            max_tid = max(max_tid, tid)
 
         self._next_track_id = max_tid + 1
 
@@ -331,8 +377,14 @@ class TOMHTTracker:
 
     @staticmethod
     def _copy_track(track: Track) -> Track:
-        # Track is list-like; copying states is enough for our simple bookkeeping
-        return Track(list(track.states))
+        """Copy track states and metadata; deep-copy assoc_history deque if present."""
+        child = Track(list(track.states))
+        child.metadata.update(track.metadata)
+
+        hist = track.metadata.get("assoc_history")
+        if isinstance(hist, deque):
+            child.metadata["assoc_history"] = deque(hist, maxlen=hist.maxlen)
+        return child
 
     def _used_det_key_for_track(self, tr: Track) -> int | None:
         # Deterministic per-scan key assigned in _candidates_for_track
@@ -457,7 +509,7 @@ class TOMHTTracker:
         candidates: list[ChildCandidate] = []
         for hyp in kept:
             child = self._copy_track(track)
-            child.metadata.update(track.metadata)
+            child.metadata.setdefault("track_id", track_id)
 
             if not hyp:
                 child.append(hyp.prediction)
@@ -465,11 +517,13 @@ class TOMHTTracker:
                     int(track.metadata.get("missed_count", 0)) + 1
                 )
                 used = None
+                self._append_assoc_history(child, ASSOC_MISS)
             else:
                 upd = self.updater.update(hyp)
                 child.append(upd)
                 child.metadata["missed_count"] = 0
                 used = ctx.det_index_by_obj[id(hyp.measurement)]
+                self._append_assoc_history(child, used)
 
             child.metadata["age"] = int(track.metadata.get("age", len(track))) + 1
             child.metadata["hits"] = int(track.metadata.get("hits", 0)) + (
@@ -663,6 +717,9 @@ class TOMHTTracker:
                         tr_copy.metadata["missed_count"] = 0
                         tr_copy.metadata["last_det_key"] = used
                         tr_copy.metadata["last_det_hit"] = used is not None
+                        tr_copy.metadata["assoc_history"] = self._new_assoc_history(
+                            used
+                        )
 
                         tracks_by_id[tid] = tr_copy
                         birth_delta = self.scoring_model.score_birth(
@@ -707,6 +764,9 @@ class TOMHTTracker:
                                     tr_copy.metadata["missed_count"] = 0
                                     tr_copy.metadata["last_det_key"] = used
                                     tr_copy.metadata["last_det_hit"] = used is not None
+                                    tr_copy.metadata["assoc_history"] = (
+                                        self._new_assoc_history(used)
+                                    )
                                     tracks_by_id[tid] = tr_copy
 
                                     birth_delta_total += self.scoring_model.score_birth(
@@ -727,16 +787,15 @@ class TOMHTTracker:
                     : self.params.max_global_hypotheses
                 ]
 
-    def _dedupe_globals_by_last_keys(
+    def _dedupe_globals_by_history(
         self, globals: list[GlobalHypothesis]
     ) -> list[GlobalHypothesis]:
-        """Keep best log_weight per (track_id -> last_det_key) signature."""
-        best: dict[tuple[tuple[int, int | None], ...], GlobalHypothesis] = {}
+        """Keep best log_weight per (track_id, history_tail) signature."""
+        best: dict[tuple[tuple[int, tuple[int, ...]], ...], GlobalHypothesis] = {}
         for gh in globals:
             sig = tuple(
                 sorted(
-                    (tid, gh.tracks_by_id[tid].metadata.get("last_det_key", None))
-                    for tid in gh.tracks_by_id
+                    (tid, self._history_tail(tr)) for tid, tr in gh.tracks_by_id.items()
                 )
             )
             prev = best.get(sig)
@@ -763,7 +822,7 @@ class TOMHTTracker:
         expanded = [self._apply_unused_detection_penalty(gh, ctx) for gh in expanded]
 
         # Dedupe
-        expanded = self._dedupe_globals_by_last_keys(expanded)
+        expanded = self._dedupe_globals_by_history(expanded)
 
         # Keep top-K globals (beam)
         expanded.sort(key=lambda g: g.log_weight, reverse=True)
