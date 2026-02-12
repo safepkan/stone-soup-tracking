@@ -19,8 +19,8 @@
 
 - Target Python >=3.12.
 - Use type hints throughout; prefer builtin generics (`list[int]`, `dict[str, Any]`) over `List`/`Dict`.
-- Formatting/lint/type checks: `black`, `flake8`, `mypy`; run `python pre_commit.py` before pushing.
-- If tools are not on your shell `PATH`, activate the repo venv first: `source venv/bin/activate && python pre_commit.py`.
+- Formatting/lint/type checks: `black`, `flake8`, `mypy`; always run `venv/bin/python pre_commit.py` after modifying code (not just before pushing).
+- Use the repo venv interpreter for project commands; avoid plain `python`.
 - Work inside the repo `venv`; manage dependencies via `requirements.txt` only.
 
 ## Scenarios / Smoke Tests

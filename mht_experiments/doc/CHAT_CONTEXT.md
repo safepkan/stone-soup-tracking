@@ -22,6 +22,7 @@ Codex/VS Code for implementation. Keep design docs in sync with code.
 ## Ways of working
 - High-level planning happens in ChatGPT (web UI); coding + running happens in VS Code/Codex.
 - When code changes are made, update the relevant Markdown in `mht_experiments/doc` so docs track the code.
+- After modifying code, run `venv/bin/python pre_commit.py` (use venv python for project commands; avoid plain `python`).
 - Workflow details (how to run scenarios/tests, coding standards) live in `AGENTS.md`.
 
 ## Quick sanity checks
