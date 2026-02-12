@@ -26,8 +26,11 @@
 ## Scenarios / Smoke Tests
 
 - Two baseline scenarios: `run_tomht("crossing")` and `run_tomht("bearing_range")`; convenience scripts `mht_experiments/run_tomht_crossing.py` and `mht_experiments/run_tomht_bearing_range.py`.
-- Runner auto-creates `/tmp/.cache` and `/tmp/mplconfig` (if not set) and sets `XDG_CACHE_HOME`/`MPLCONFIGDIR` to avoid font-cache warnings. You can still run explicitly headless: `MPLBACKEND=Agg venv/bin/python mht_experiments/run_tomht_crossing.py` (same for `bearing_range`). The runner detects non-interactive backends and skips `plt.show()`.
+- Runner auto-creates `/tmp/.cache` and `/tmp/mplconfig` (if not set) and sets `XDG_CACHE_HOME`/`MPLCONFIGDIR` to avoid font-cache warnings. Canonical single-scenario headless incantations:
+  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_crossing.py`
+  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_bearing_range.py`
+  The runner detects non-interactive backends and skips `plt.show()`.
 - Control animation display: set `TOMHT_SHOW=1` to force showing even with non-interactive backends; set `TOMHT_NO_SHOW=1` to suppress entirely.
 - Expected behavior: scripts complete without exceptions; logs print global hypotheses over time. Use output to spot regressions; at minimum ensure they don’t crash after code changes.
-- Quick smoke check: `make smoke` runs both scenarios headless (`TOMHT_NO_SHOW=1`) and fails on any crash.
+- Quick smoke check: `make smoke` runs both scenarios headless (`MPLBACKEND=Agg TOMHT_NO_SHOW=1`) and fails on any crash.
 - The TO-MHT convenience scripts (`run_tomht_crossing.py`, `run_tomht_bearing_range.py`) accept CLI flags to flip scoring mode and to toggle initiator/births or scenario initial tracks; use them for A/B testing without editing runner code.

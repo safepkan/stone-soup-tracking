@@ -25,7 +25,8 @@ Codex/VS Code for implementation. Keep design docs in sync with code.
 - Workflow details (how to run scenarios/tests, coding standards) live in `AGENTS.md`.
 
 ## Quick sanity checks
-- Smoke test: `make smoke`
-- Headless smoke test: `TOMHT_NO_SHOW=1 make smoke`
+- Smoke test (canonical headless): `make smoke` (uses `MPLBACKEND=Agg TOMHT_NO_SHOW=1`)
+- Crossing only (headless): `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_crossing.py`
+- Bearing-range only (headless): `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_bearing_range.py`
 
 (See `AGENTS.md` for scenario commands and repo workflow details.)
