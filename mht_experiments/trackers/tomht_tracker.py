@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from math import log
+from statistics import median
 from ordered_set import OrderedSet
 from typing import Iterable, Mapping, Protocol
 
@@ -53,8 +54,10 @@ class TOMHTParams:
     debug_display_scan_stats: bool = True
     debug_display_hypotheses: bool = True
     debug_display_births: bool = True
+    debug_display_map_miss_hist: bool = False
     debug_births_max: int = 5
     debug_globals_max: int = 5
+    collect_stats: bool = True
 
     def __post_init__(self) -> None:
         # Default the N-scan window to the stored history length.
@@ -91,6 +94,7 @@ class ScanContext:
 class BirthStats:
     residual_detections_considered: int = 0
     birth_tracks_created: int = 0
+    birth_tracks_kept: int = 0
     birth_track_instances_in_beam: int = 0
     globals_with_birth: int = 0
     globals_before_births: int = 0
@@ -109,6 +113,7 @@ class ScanStats:
     globals_after_births: int
     birth_candidates: int
     birth_tracks_created: int
+    birth_tracks_kept: int
     birth_track_instances_in_beam: int
     globals_with_birth: int
     map_tracks: int
@@ -325,6 +330,96 @@ class TOMHTTracker:
             GlobalHypothesis(tracks_by_id=init_tracks_by_id, log_weight=0.0)
         ]
         self.last_scan_stats: ScanStats | None = None
+        self._stats: list[ScanStats] = []
+        self.reset_stats()
+
+    def reset_stats(self) -> None:
+        self._stats = []
+        self.last_scan_stats = None
+
+    def print_summary_stats(self) -> None:
+        stats = self._stats
+        if not stats:
+            print("SUMMARY scans=0 (no collected ScanStats)")
+            return
+
+        num_scans = len(stats)
+        expanded = [s.globals_expanded for s in stats]
+        deduped = [s.globals_after_dedupe for s in stats]
+        beamed = [s.globals_after_beam for s in stats]
+        after_births = [s.globals_after_births for s in stats]
+        birth_created = [s.birth_tracks_created for s in stats]
+        birth_kept = [s.birth_tracks_kept for s in stats]
+        map_tracks = [s.map_tracks for s in stats]
+        map_unused = [s.map_unused for s in stats]
+        map_used = [s.map_used for s in stats]
+        map_hit_rate = [s.map_mean_hit_rate for s in stats]
+
+        def _mean(values: list[int] | list[float]) -> float:
+            if not values:
+                return 0.0
+            return float(sum(values)) / float(len(values))
+
+        max_globals = self.params.max_global_hypotheses
+        beam_full_pre_births = sum(
+            1 for s in stats if s.globals_after_beam == max_globals
+        )
+        beam_full_post_births = sum(
+            1 for s in stats if s.globals_after_births == max_globals
+        )
+        scans_with_births = sum(1 for s in stats if s.birth_tracks_created > 0)
+        scans_with_birth_globals = sum(1 for s in stats if s.globals_with_birth > 0)
+        scans_birth_push_to_full = sum(
+            1
+            for s in stats
+            if s.globals_after_beam < max_globals
+            and s.globals_after_births == max_globals
+            and s.globals_with_birth > 0
+        )
+
+        print(
+            "SUMMARY "
+            f"scans={num_scans} "
+            f"det_total={sum(s.num_detections for s in stats)} "
+            f"det_mean={_mean([s.num_detections for s in stats]):.2f}"
+        )
+        print(
+            "SUMMARY globals "
+            f"expanded med={median(expanded):.1f} max={max(expanded)} "
+            f"dedup med={median(deduped):.1f} max={max(deduped)} "
+            f"beam med={median(beamed):.1f} max={max(beamed)}"
+        )
+        print(
+            "SUMMARY beam "
+            f"after_births med={median(after_births):.1f} max={max(after_births)} "
+            f"full_pre_births={beam_full_pre_births}/{num_scans} ({beam_full_pre_births / num_scans:.1%}) "
+            f"full_post_births={beam_full_post_births}/{num_scans} ({beam_full_post_births / num_scans:.1%})"
+        )
+        print(
+            "SUMMARY births "
+            f"active={scans_with_births}/{num_scans} ({scans_with_births / num_scans:.1%}) "
+            f"tracks_created med={median(birth_created):.1f} mean={_mean(birth_created):.2f} max={max(birth_created)} "
+            f"tracks_kept med={median(birth_kept):.1f} mean={_mean(birth_kept):.2f} max={max(birth_kept)} "
+            f"globals_with_birth={scans_with_birth_globals}/{num_scans} ({scans_with_birth_globals / num_scans:.1%}) "
+            f"birth_pushes_to_full={scans_birth_push_to_full}/{num_scans} ({scans_birth_push_to_full / num_scans:.1%})"
+        )
+        miss_hist_all: dict[int, int] = {}
+        for scan in stats:
+            for misses, count in scan.map_miss_hist.items():
+                miss_hist_all[misses] = miss_hist_all.get(misses, 0) + count
+        miss_hist_str = (
+            "{"
+            + ", ".join(f"{k}: {miss_hist_all[k]}" for k in sorted(miss_hist_all))
+            + "}"
+        )
+        print(
+            "SUMMARY map "
+            f"tracks med={median(map_tracks):.1f} mean={_mean(map_tracks):.2f} "
+            f"used med={median(map_used):.1f} mean={_mean(map_used):.2f} "
+            f"unused med={median(map_unused):.1f} mean={_mean(map_unused):.2f} "
+            f"hit_rate mean={_mean(map_hit_rate):.3f} "
+            f"miss_hist={miss_hist_str}"
+        )
 
     @staticmethod
     def _det_sort_key(det: Detection) -> tuple:
@@ -716,6 +811,7 @@ class TOMHTTracker:
                 self._display_births(born, ctx.det_index_by_obj)
 
             born = born[: self.params.max_births_per_scan]
+            birth_tracks_kept = len(born)
 
             if self.params.debug_display_births:
                 print(f"Births kept (post-limit): {len(born)}")
@@ -848,6 +944,7 @@ class TOMHTTracker:
             return BirthStats(
                 residual_detections_considered=residual_detections_considered,
                 birth_tracks_created=birth_tracks_created,
+                birth_tracks_kept=birth_tracks_kept,
                 birth_track_instances_in_beam=birth_track_instances_in_beam,
                 globals_with_birth=globals_with_birth,
                 globals_before_births=globals_before_births,
@@ -949,6 +1046,7 @@ class TOMHTTracker:
             globals_after_births=birth_stats.globals_after_births,
             birth_candidates=birth_stats.residual_detections_considered,
             birth_tracks_created=birth_stats.birth_tracks_created,
+            birth_tracks_kept=birth_stats.birth_tracks_kept,
             birth_track_instances_in_beam=birth_stats.birth_track_instances_in_beam,
             globals_with_birth=birth_stats.globals_with_birth,
             map_tracks=map_tracks,
@@ -958,6 +1056,8 @@ class TOMHTTracker:
             map_mean_hit_rate=map_mean_hit_rate,
         )
         self.last_scan_stats = scan_stats
+        if self.params.collect_stats:
+            self._stats.append(scan_stats)
 
         if self.params.debug_display_scan_stats:
             print(
@@ -965,12 +1065,17 @@ class TOMHTTracker:
                 f"globals in={scan_stats.globals_in} exp={scan_stats.globals_expanded} "
                 f"after_unused={scan_stats.globals_after_unused} dedup={scan_stats.globals_after_dedupe} "
                 f"beam={scan_stats.globals_after_beam} births cand={scan_stats.birth_candidates} "
-                f"tracks={scan_stats.birth_tracks_created} beam_inst={scan_stats.birth_track_instances_in_beam} "
+                f"tracks_created={scan_stats.birth_tracks_created} tracks_kept={scan_stats.birth_tracks_kept} "
+                f"beam_inst={scan_stats.birth_track_instances_in_beam} "
                 f"globals_with_birth={scan_stats.globals_with_birth} "
                 f"after={scan_stats.globals_after_births} MAP tracks={scan_stats.map_tracks} "
                 f"used={scan_stats.map_used} unused={scan_stats.map_unused} "
-                f"miss_hist={scan_stats.map_miss_hist} hit_rate={scan_stats.map_mean_hit_rate:.2f}"
+                f"hit_rate={scan_stats.map_mean_hit_rate:.2f}"
             )
+            if self.params.debug_display_map_miss_hist:
+                print(
+                    f"SCAN_MAP_MISS_HIST t={timestamp} miss_hist={scan_stats.map_miss_hist}"
+                )
 
         # Output MAP global hypothesis
         if not self.global_hypotheses:

@@ -202,6 +202,9 @@ def run_tomht(
 
         frames.append(artists)
 
+    if tracker.params.collect_stats:
+        tracker.print_summary_stats()
+
     ani = animation.ArtistAnimation(
         plotter.fig, frames, interval=400, blit=True, repeat_delay=1000
     )
