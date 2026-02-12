@@ -4,6 +4,7 @@ This document describes the current architecture and logic of the TO-MHT prototy
 
 - Known warning (bearing_range only): Stone Soup emits a single `LinAlgError('Matrix is not positive definite')` during `make smoke`. It arises when the UKF in the `NoHistoryMultiMeasurementInitiator` predicts a holding track whose covariance has a tiny negative eigenvalue; Stone Soup catches it and regularises with `cholesky_eps`, so runtime behaviour is unaffected. This is a scenario/initiator tuning issue (covariance nearly singular), not a TO-MHT logic bug.
 - Runner compatibility note (2026-02-12): `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now use `argparse.parse_known_args()` so they can run via VS Code/Jupyter Interactive Window, which injects kernel args such as `--f=...`.
+- Scoring consistency note (2026-02-12): beta-ratio clutter scoring now uses a shared `_per_unused_log_delta()` helper for both `score_unused_detections()` and the startup debug/sanity check, preventing drift between applied score and asserted/logged value.
 
 ## 1. High-level structure
 
@@ -188,11 +189,14 @@ Some important differences and simplifications:
    - Its “confirmed births” are taken as new tracks, with only heuristic use of its internal history (support/age/misses).
    - In a “clean” TO-MHT, track existence and birth are part of the same global hypothesis machinery.
 
-4. **N-scan-like pruning is approximated**
+4. **N-scan-like pruning is approximated (history-tail dedupe)**
 
-   - Only the current scan’s association signature is used for deduplication.
-   - There is no notion of “commit all associations older than N scans” or merging trees based on agreed history.
-   - As a result, some redundant hypothesis structure persists, and identity stability relies heavily on beam pruning and the unused-detection penalty.
+   - We do not maintain explicit hypothesis trees or “common ancestor” pointers.
+   - Instead, each track stores a short `assoc_history`, and global hypotheses are deduplicated
+     using the last `ns_scan_window` entries per track.
+   - This acts as an **N-scan-lite** commitment mechanism: hypotheses that differ only in decisions
+     older than N scans collapse to the best-scoring representative.
+   - A “proper” N-scan pruning implementation based on explicit shared trees/ancestors is deferred.
 
 5. **Track termination logic is very simple**
 

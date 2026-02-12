@@ -125,6 +125,13 @@ class BetaRatioScoringModel:
     fallback_unused_det_log_penalty: float
     birth_log_penalty: float
 
+    def _per_unused_log_delta(self) -> float:
+        """Return the per-unused log increment used by clutter scoring."""
+        lam = max(self.clutter_density, 0.0)
+        if lam <= 0.0:
+            return -self.fallback_unused_det_log_penalty
+        return log(max(lam, self.log_epsilon))
+
     def _beta_values(
         self, hypotheses: Iterable
     ) -> tuple[float, Mapping[int, tuple[float, bool]]]:
@@ -171,10 +178,7 @@ class BetaRatioScoringModel:
         unused = len(ctx.detections) - len(used_det_keys)
         if unused <= 0:
             return 0.0
-        lam = max(self.clutter_density, 0.0)
-        if lam <= 0.0:
-            return -self.fallback_unused_det_log_penalty * float(unused)
-        return float(unused) * log(max(lam, self.log_epsilon))
+        return float(unused) * self._per_unused_log_delta()
 
     def score_birth(
         self, *, birth_track: Track, used_det_key: int | None, ctx: ScanContext
@@ -261,11 +265,7 @@ class TOMHTTracker:
         # Optional sanity log for clutter term.
         if isinstance(self.scoring_model, BetaRatioScoringModel):
             clutter = self.scoring_model.clutter_density
-            per_unused = (
-                float("-inf")
-                if clutter <= 0.0
-                else log(max(clutter, self.params.log_epsilon))
-            )
+            per_unused = self.scoring_model._per_unused_log_delta()
             assert (
                 per_unused <= 0.0
             ), "Clutter density > 1.0 would reward unused detections; check units/config."
