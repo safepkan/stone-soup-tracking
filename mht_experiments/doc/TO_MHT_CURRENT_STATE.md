@@ -3,6 +3,7 @@
 This document describes the current architecture and logic of the TO-MHT prototype, as implemented in `tomht_tracker.py` and the associated runners/scenarios. It is meant as a reference for future work and for anyone trying to understand the code without digging through all of it.
 
 - Known warning (bearing_range only): Stone Soup emits a single `LinAlgError('Matrix is not positive definite')` during `make smoke`. It arises when the UKF in the `NoHistoryMultiMeasurementInitiator` predicts a holding track whose covariance has a tiny negative eigenvalue; Stone Soup catches it and regularises with `cholesky_eps`, so runtime behaviour is unaffected. This is a scenario/initiator tuning issue (covariance nearly singular), not a TO-MHT logic bug.
+- Runner compatibility note (2026-02-12): `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now use `argparse.parse_known_args()` so they can run via VS Code/Jupyter Interactive Window, which injects kernel args such as `--f=...`.
 
 ## 1. High-level structure
 

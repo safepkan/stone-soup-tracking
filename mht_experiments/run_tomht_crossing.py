@@ -20,7 +20,9 @@ if __name__ == "__main__":
         default=False,
         help="Enable/disable scenario initial tracks (default: off for crossing).",
     )
-    args = parser.parse_args()
+    # VS Code/Jupyter Interactive injects kernel args (for example --f=...).
+    # Ignore unknown args so this script works both as CLI and in notebooks.
+    args, _unknown = parser.parse_known_args()
     run_tomht(
         "crossing",
         use_initiator=args.births,
