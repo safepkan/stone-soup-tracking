@@ -120,14 +120,16 @@ If H > N (kept for debugging), signatures should use only the last N entries.
 
 ## 4. Minimal instrumentation (small, but required)
 
-Add lightweight counters/logging behind a debug flag:
-- num detections per scan
-- num globals before/after history dedupe
-- num globals before/after beam prune
-- num tracks in MAP global
-- births per scan
+Implemented (2026-02-12): `tomht_tracker.step()` now emits a structured `ScanStats` per scan (`self.last_scan_stats`) and one compact `SCAN ...` line when `debug_display_scan_stats=True`.
 
-This is not a full evaluation framework, but is required to spot regressions and scaling issues early.
+Included counters:
+- detections per scan
+- globals at step boundaries (in, expanded, after-unused, after-dedupe, after-beam, after-births)
+- MAP summary (`map_tracks`, `map_used`, `map_unused`)
+- birth flow counters from structured `BirthStats` (`birth_candidates`, `birth_tracks_created`, `birth_track_instances_in_beam`, `globals_with_birth`)
+- optional compact MAP quality summary (`map_miss_hist`, `map_mean_hit_rate`)
+
+This remains lightweight (not a full evaluation framework) but is enough to spot expansion blow-up, weak dedupe, excessive births, and rising MAP unused detections.
 
 ---
 

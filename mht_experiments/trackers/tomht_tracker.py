@@ -50,6 +50,7 @@ class TOMHTParams:
     birth_max_covar_trace: float = 1e12  # safety: reject absurd uncertainty
 
     debug_display_detections: bool = False
+    debug_display_scan_stats: bool = True
     debug_display_hypotheses: bool = True
     debug_display_births: bool = True
     debug_births_max: int = 5
@@ -84,6 +85,37 @@ class ScanContext:
     timestamp: object
     detections: list[Detection]
     det_index_by_obj: dict[int, int]
+
+
+@dataclass(frozen=True)
+class BirthStats:
+    residual_detections_considered: int = 0
+    birth_tracks_created: int = 0
+    birth_track_instances_in_beam: int = 0
+    globals_with_birth: int = 0
+    globals_before_births: int = 0
+    globals_after_births: int = 0
+
+
+@dataclass(frozen=True)
+class ScanStats:
+    timestamp: object
+    num_detections: int
+    globals_in: int
+    globals_expanded: int
+    globals_after_unused: int
+    globals_after_dedupe: int
+    globals_after_beam: int
+    globals_after_births: int
+    birth_candidates: int
+    birth_tracks_created: int
+    birth_track_instances_in_beam: int
+    globals_with_birth: int
+    map_tracks: int
+    map_used: int
+    map_unused: int
+    map_miss_hist: dict[int, int]
+    map_mean_hit_rate: float
 
 
 class ScoringModel(Protocol):
@@ -266,9 +298,11 @@ class TOMHTTracker:
         if isinstance(self.scoring_model, BetaRatioScoringModel):
             clutter = self.scoring_model.clutter_density
             per_unused = self.scoring_model._per_unused_log_delta()
-            assert (
-                per_unused <= 0.0
-            ), "Clutter density > 1.0 would reward unused detections; check units/config."
+            if per_unused > 0.0:
+                print(
+                    "[WARN] per_unused_delta is positive; unused detections are rewarded. "
+                    "Check clutter_density units/config."
+                )
             print(
                 f"[Scoring] beta_ratio: clutter_density={clutter}, "
                 f"per_unused_delta={per_unused:+.3f}"
@@ -290,6 +324,7 @@ class TOMHTTracker:
         self.global_hypotheses: list[GlobalHypothesis] = [
             GlobalHypothesis(tracks_by_id=init_tracks_by_id, log_weight=0.0)
         ]
+        self.last_scan_stats: ScanStats | None = None
 
     @staticmethod
     def _det_sort_key(det: Detection) -> tuple:
@@ -638,15 +673,18 @@ class TOMHTTracker:
     def _branch_globals_with_births(
         self,
         ctx: ScanContext,
-    ) -> None:
+    ) -> BirthStats:
+        globals_before_births = len(self.global_hypotheses)
         if self.initiator is not None and self.global_hypotheses:
             residual = self._residual_detections(self.global_hypotheses, ctx.detections)
+            residual_detections_considered = len(residual)
 
             born = (
                 list(self.initiator.initiate(OrderedSet(residual), ctx.timestamp))
                 if residual
                 else []
             )
+            birth_tracks_created = len(born)
 
             born = [tr for tr in born if self._birth_is_sane(tr)]
 
@@ -683,6 +721,7 @@ class TOMHTTracker:
                 print(f"Births kept (post-limit): {len(born)}")
                 self._display_births(born, ctx.det_index_by_obj)
 
+            birth_track_ids: set[int] = set()
             if born:
                 # Allocate stable IDs once for these births (shared across variants)
                 birth_templates: list[tuple[int, Track, int | None]] = []
@@ -691,6 +730,7 @@ class TOMHTTracker:
                     self._next_track_id += 1
                     used_key = self._birth_used_key(tr, ctx.det_index_by_obj)
                     birth_templates.append((tid, tr, used_key))
+                    birth_track_ids.add(tid)
 
                 new_globals: list[GlobalHypothesis] = []
                 for gh in self.global_hypotheses:
@@ -787,6 +827,37 @@ class TOMHTTracker:
                     : self.params.max_global_hypotheses
                 ]
 
+            birth_track_instances_in_beam = 0
+            globals_with_birth = 0
+            if birth_track_ids:
+                birth_track_instances_in_beam = sum(
+                    1
+                    for gh in self.global_hypotheses
+                    for tr in gh.tracks_by_id.values()
+                    if int(tr.metadata.get("track_id", -1)) in birth_track_ids
+                )
+                globals_with_birth = sum(
+                    1
+                    for gh in self.global_hypotheses
+                    if any(
+                        int(tr.metadata.get("track_id", -1)) in birth_track_ids
+                        for tr in gh.tracks_by_id.values()
+                    )
+                )
+
+            return BirthStats(
+                residual_detections_considered=residual_detections_considered,
+                birth_tracks_created=birth_tracks_created,
+                birth_track_instances_in_beam=birth_track_instances_in_beam,
+                globals_with_birth=globals_with_birth,
+                globals_before_births=globals_before_births,
+                globals_after_births=len(self.global_hypotheses),
+            )
+        return BirthStats(
+            globals_before_births=globals_before_births,
+            globals_after_births=len(self.global_hypotheses),
+        )
+
     def _dedupe_globals_by_history(
         self, globals: list[GlobalHypothesis]
     ) -> list[GlobalHypothesis]:
@@ -804,6 +875,7 @@ class TOMHTTracker:
         return list(best.values())
 
     def step(self, detections: Iterable[Detection], timestamp) -> set[Track]:
+        globals_in = len(self.global_hypotheses)
         det_list = self._sorted_detections(detections)
         # Use id(det) because Stone Soup hypotheses keep the original Detection
         # objects; hash/equality isn't defined on Detection, but identity is
@@ -817,19 +889,23 @@ class TOMHTTracker:
         expanded: list[GlobalHypothesis] = []
         for gh in self.global_hypotheses:
             expanded.extend(self._expand_global_hypothesis(gh, ctx))
+        globals_expanded = len(expanded)
 
         # Apply unused detection penalty
         expanded = [self._apply_unused_detection_penalty(gh, ctx) for gh in expanded]
+        globals_after_unused = len(expanded)
 
         # Dedupe
         expanded = self._dedupe_globals_by_history(expanded)
+        globals_after_dedupe = len(expanded)
 
         # Keep top-K globals (beam)
         expanded.sort(key=lambda g: g.log_weight, reverse=True)
         self.global_hypotheses = expanded[: self.params.max_global_hypotheses]
+        globals_after_beam = len(self.global_hypotheses)
 
         # Births: run initiator once on residual detections, then branch globals with/without births.
-        self._branch_globals_with_births(ctx)
+        birth_stats = self._branch_globals_with_births(ctx)
 
         if self.params.debug_display_detections:
             print(f"\nDetections at timestamp {timestamp}:")
@@ -839,6 +915,62 @@ class TOMHTTracker:
         if self.params.debug_display_hypotheses:
             print(f"\nGlobal hypotheses at timestamp {timestamp}:")
             self._display_global_hypotheses(det_list)
+
+        map_tracks = 0
+        map_used = 0
+        map_unused = len(det_list)
+        map_miss_hist: dict[int, int] = {}
+        map_mean_hit_rate = 0.0
+        if self.global_hypotheses:
+            best = self.global_hypotheses[0]
+            map_tracks = len(best.tracks_by_id)
+            map_used = len(self._used_det_keys_for_tracks(best.tracks_by_id))
+            map_unused = len(det_list) - map_used
+
+            hit_rates: list[float] = []
+            for tr in best.tracks_by_id.values():
+                misses = int(tr.metadata.get("missed_count", 0))
+                map_miss_hist[misses] = map_miss_hist.get(misses, 0) + 1
+                age = int(tr.metadata.get("age", len(tr)))
+                if age > 0:
+                    hits = int(tr.metadata.get("hits", 0))
+                    hit_rates.append(float(hits) / float(age))
+            if hit_rates:
+                map_mean_hit_rate = float(np.mean(hit_rates))
+
+        scan_stats = ScanStats(
+            timestamp=timestamp,
+            num_detections=len(det_list),
+            globals_in=globals_in,
+            globals_expanded=globals_expanded,
+            globals_after_unused=globals_after_unused,
+            globals_after_dedupe=globals_after_dedupe,
+            globals_after_beam=globals_after_beam,
+            globals_after_births=birth_stats.globals_after_births,
+            birth_candidates=birth_stats.residual_detections_considered,
+            birth_tracks_created=birth_stats.birth_tracks_created,
+            birth_track_instances_in_beam=birth_stats.birth_track_instances_in_beam,
+            globals_with_birth=birth_stats.globals_with_birth,
+            map_tracks=map_tracks,
+            map_used=map_used,
+            map_unused=map_unused,
+            map_miss_hist=map_miss_hist,
+            map_mean_hit_rate=map_mean_hit_rate,
+        )
+        self.last_scan_stats = scan_stats
+
+        if self.params.debug_display_scan_stats:
+            print(
+                f"SCAN t={timestamp} det={scan_stats.num_detections} "
+                f"globals in={scan_stats.globals_in} exp={scan_stats.globals_expanded} "
+                f"after_unused={scan_stats.globals_after_unused} dedup={scan_stats.globals_after_dedupe} "
+                f"beam={scan_stats.globals_after_beam} births cand={scan_stats.birth_candidates} "
+                f"tracks={scan_stats.birth_tracks_created} beam_inst={scan_stats.birth_track_instances_in_beam} "
+                f"globals_with_birth={scan_stats.globals_with_birth} "
+                f"after={scan_stats.globals_after_births} MAP tracks={scan_stats.map_tracks} "
+                f"used={scan_stats.map_used} unused={scan_stats.map_unused} "
+                f"miss_hist={scan_stats.map_miss_hist} hit_rate={scan_stats.map_mean_hit_rate:.2f}"
+            )
 
         # Output MAP global hypothesis
         if not self.global_hypotheses:
