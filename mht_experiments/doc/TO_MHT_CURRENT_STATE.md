@@ -5,6 +5,7 @@ This document describes the current architecture and logic of the TO-MHT prototy
 - Known warning (bearing_range only): Stone Soup emits a single `LinAlgError('Matrix is not positive definite')` during `make smoke`. It arises when the UKF in the `NoHistoryMultiMeasurementInitiator` predicts a holding track whose covariance has a tiny negative eigenvalue; Stone Soup catches it and regularises with `cholesky_eps`, so runtime behaviour is unaffected. This is a scenario/initiator tuning issue (covariance nearly singular), not a TO-MHT logic bug.
 - Scan instrumentation note (2026-02-12): `step()` now creates a structured `ScanStats` object (`self.last_scan_stats`) each scan and prints exactly one compact `SCAN ...` line when `debug_display_scan_stats=True`. Birth branching now returns `BirthStats` with explicit beam semantics (`birth_track_instances_in_beam`, `globals_with_birth`) plus residual/initiator counters and globals before/after births. The scan line label `after_unused=` refers to the global-hypothesis stage after unused-detection penalty (not MAP unused detections).
 - Runner compatibility note (2026-02-12): `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now use `argparse.parse_known_args()` so they can run via VS Code/Jupyter Interactive Window, which injects kernel args such as `--f=...`.
+- Runner debug-CLI note (2026-02-12): `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now expose `--debug-detections`, `--debug-scan-stats`, `--debug-hypotheses`, and `--debug-births` (plus `--no-...` forms) and pass them through to `run_tomht(...)`; defaults remain tracker defaults unless explicitly overridden.
 - Scoring consistency note (2026-02-12): beta-ratio clutter scoring now uses a shared `_per_unused_log_delta()` helper for both `score_unused_detections()` and the startup debug/sanity check, preventing drift between applied score and asserted/logged value.
 
 ## 1. High-level structure
@@ -214,6 +215,7 @@ Some important differences and simplifications:
 - A/B convenience: `run_tomht_crossing.py` / `run_tomht_bearing_range.py` accept:
   - `--births` / `--no-births` (BooleanOptionalAction) to toggle initiator use,
   - `--initial-tracks` / `--no-initial-tracks` (BooleanOptionalAction) to toggle scenario-provided initial tracks (defaults match each scenario: crossing = births on, initial tracks off; bearing_range = births on, initial tracks off).
+  - `--debug-detections`, `--debug-scan-stats`, `--debug-hypotheses`, `--debug-births` (and `--no-...` forms) to override per-run debug log output toggles exposed by `TOMHTParams` while preserving the existing defaults when omitted.
 
 ## 5. Summary
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import List, Literal
 
@@ -86,7 +87,22 @@ def run_tomht(
     *,
     use_initiator: bool = True,
     use_initial_tracks: bool = False,
+    debug_display_detections: bool | None = None,
+    debug_display_scan_stats: bool | None = None,
+    debug_display_hypotheses: bool | None = None,
+    debug_display_births: bool | None = None,
 ) -> None:
+    def _apply_debug_overrides(params: TOMHTParams) -> TOMHTParams:
+        if debug_display_detections is not None:
+            params = replace(params, debug_display_detections=debug_display_detections)
+        if debug_display_scan_stats is not None:
+            params = replace(params, debug_display_scan_stats=debug_display_scan_stats)
+        if debug_display_hypotheses is not None:
+            params = replace(params, debug_display_hypotheses=debug_display_hypotheses)
+        if debug_display_births is not None:
+            params = replace(params, debug_display_births=debug_display_births)
+        return params
+
     styles: tuple[str, ...]
     if setup == "crossing":
         truths, scans, start_time, transition_model, measurement_model, config = (
@@ -110,11 +126,13 @@ def run_tomht(
             clutter_density=config.clutter_density,
             tracks=tracks,
             initiator=initiator,
-            params=TOMHTParams(
-                max_children_per_track=5,
-                max_missed=5,
-                prob_gate=0.9999,
-                birth_log_penalty=15.0,
+            params=_apply_debug_overrides(
+                TOMHTParams(
+                    max_children_per_track=5,
+                    max_missed=5,
+                    prob_gate=0.9999,
+                    birth_log_penalty=15.0,
+                )
             ),
         )
         styles = ("r-", "b-")
@@ -141,14 +159,16 @@ def run_tomht(
             clutter_density=config.clutter_density,
             tracks=tracks,
             initiator=initiator,
-            params=TOMHTParams(
-                max_global_hypotheses=10,
-                max_children_per_track=3,
-                max_missed=5,
-                max_births_per_scan=2,
-                birth_log_penalty=2.0,
-                unused_det_log_penalty=4.0,
-                prob_gate=0.99,
+            params=_apply_debug_overrides(
+                TOMHTParams(
+                    max_global_hypotheses=10,
+                    max_children_per_track=3,
+                    max_missed=5,
+                    max_births_per_scan=2,
+                    birth_log_penalty=2.0,
+                    unused_det_log_penalty=4.0,
+                    prob_gate=0.99,
+                )
             ),
         )
         styles = ("g-",)
