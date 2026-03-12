@@ -329,6 +329,7 @@ class TOMHTTracker:
         self.global_hypotheses: list[GlobalHypothesis] = [
             GlobalHypothesis(tracks_by_id=init_tracks_by_id, log_weight=0.0)
         ]
+        self._last_step_timestamp: object | None = None
         self.last_scan_stats: ScanStats | None = None
         self._stats: list[ScanStats] = []
         self.reset_stats()
@@ -515,6 +516,59 @@ class TOMHTTracker:
         if isinstance(hist, deque):
             child.metadata["assoc_history"] = deque(hist, maxlen=hist.maxlen)
         return child
+
+    def _initialise_inserted_track_metadata(
+        self,
+        track: Track,
+        *,
+        track_id: int,
+        age: int,
+        hits: int,
+        last_det_key: int | None,
+        last_det_hit: bool | None = None,
+    ) -> None:
+        age = max(int(age), 1)
+        hits = min(max(int(hits), 0), age)
+
+        track.metadata["track_id"] = track_id
+        track.metadata["age"] = age
+        track.metadata["hits"] = hits
+        track.metadata["missed_count"] = 0
+        track.metadata["last_det_key"] = last_det_key
+        track.metadata["last_det_hit"] = (
+            last_det_key is not None if last_det_hit is None else bool(last_det_hit)
+        )
+        track.metadata["assoc_history"] = self._new_assoc_history(last_det_key)
+
+    def _make_external_start_template(self, start: Track, timestamp: object) -> Track:
+        if len(start) == 0:
+            raise ValueError(
+                "External starts must contain at least one state at the current timestamp."
+            )
+
+        start_timestamp = getattr(start.states[-1], "timestamp", None)
+        if start_timestamp != timestamp:
+            raise ValueError(
+                "External starts must already be initialised at the supplied "
+                f"timestamp. Expected {timestamp!r}, got {start_timestamp!r}."
+            )
+
+        track_id = self._next_track_id
+        self._next_track_id += 1
+
+        template = self._copy_track(start)
+        age = max(int(template.metadata.get("age", len(template))), 1)
+        hits = int(template.metadata.get("hits", age))
+        hits = min(max(hits, 1), age)
+        self._initialise_inserted_track_metadata(
+            template,
+            track_id=track_id,
+            age=age,
+            hits=hits,
+            last_det_key=None,
+            last_det_hit=False,
+        )
+        return template
 
     def _used_det_key_for_track(self, tr: Track) -> int | None:
         # Deterministic per-scan key assigned in _candidates_for_track
@@ -847,14 +901,12 @@ class TOMHTTracker:
                         tracks_by_id = dict(gh.tracks_by_id)
 
                         tr_copy = self._copy_track(template)
-                        tr_copy.metadata["track_id"] = tid
-                        tr_copy.metadata["age"] = 1
-                        tr_copy.metadata["hits"] = 1 if used is not None else 0
-                        tr_copy.metadata["missed_count"] = 0
-                        tr_copy.metadata["last_det_key"] = used
-                        tr_copy.metadata["last_det_hit"] = used is not None
-                        tr_copy.metadata["assoc_history"] = self._new_assoc_history(
-                            used
+                        self._initialise_inserted_track_metadata(
+                            tr_copy,
+                            track_id=tid,
+                            age=1,
+                            hits=1 if used is not None else 0,
+                            last_det_key=used,
                         )
 
                         tracks_by_id[tid] = tr_copy
@@ -892,16 +944,12 @@ class TOMHTTracker:
                                     (tid2, t2, u2),
                                 ]:
                                     tr_copy = self._copy_track(template)
-                                    tr_copy.metadata["track_id"] = tid
-                                    tr_copy.metadata["age"] = 1
-                                    tr_copy.metadata["hits"] = (
-                                        1 if used is not None else 0
-                                    )
-                                    tr_copy.metadata["missed_count"] = 0
-                                    tr_copy.metadata["last_det_key"] = used
-                                    tr_copy.metadata["last_det_hit"] = used is not None
-                                    tr_copy.metadata["assoc_history"] = (
-                                        self._new_assoc_history(used)
+                                    self._initialise_inserted_track_metadata(
+                                        tr_copy,
+                                        track_id=tid,
+                                        age=1,
+                                        hits=1 if used is not None else 0,
+                                        last_det_key=used,
                                     )
                                     tracks_by_id[tid] = tr_copy
 
@@ -970,6 +1018,49 @@ class TOMHTTracker:
             if prev is None or gh.log_weight > prev.log_weight:
                 best[sig] = gh
         return list(best.values())
+
+    def _validate_external_starts_timestamp(self, timestamp: object) -> None:
+        if self._last_step_timestamp is None:
+            raise RuntimeError(
+                "add_external_starts() requires a completed step() first."
+            )
+        if timestamp != self._last_step_timestamp:
+            raise ValueError(
+                "add_external_starts() timestamp must match the most recent "
+                f"completed step() timestamp. Expected {self._last_step_timestamp!r}, "
+                f"got {timestamp!r}."
+            )
+
+    def add_external_starts(self, starts: Iterable[Track], timestamp: object) -> None:
+        """
+        Insert confirmed external starts into each current global hypothesis.
+
+        Duplicate-like inputs are not deduplicated here: each supplied start is
+        treated as a distinct confirmed track and receives a fresh tracker-owned
+        track_id.
+        """
+        self._validate_external_starts_timestamp(timestamp)
+        start_list = list(starts)
+        if not start_list or not self.global_hypotheses:
+            return
+
+        templates = [
+            self._make_external_start_template(start, timestamp) for start in start_list
+        ]
+
+        new_globals: list[GlobalHypothesis] = []
+        for gh in self.global_hypotheses:
+            tracks_by_id = dict(gh.tracks_by_id)
+            for template in templates:
+                tid = int(template.metadata["track_id"])
+                tracks_by_id[tid] = self._copy_track(template)
+            new_globals.append(
+                GlobalHypothesis(
+                    tracks_by_id=tracks_by_id,
+                    log_weight=gh.log_weight,
+                )
+            )
+        self.global_hypotheses = new_globals
 
     def step(self, detections: Iterable[Detection], timestamp) -> set[Track]:
         globals_in = len(self.global_hypotheses)
@@ -1076,6 +1167,8 @@ class TOMHTTracker:
                 print(
                     f"SCAN_MAP_MISS_HIST t={timestamp} miss_hist={scan_stats.map_miss_hist}"
                 )
+
+        self._last_step_timestamp = timestamp
 
         # Output MAP global hypothesis
         if not self.global_hypotheses:

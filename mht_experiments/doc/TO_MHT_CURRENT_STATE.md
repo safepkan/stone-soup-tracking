@@ -8,6 +8,7 @@ This document describes the current architecture and logic of the TO-MHT prototy
 - Runner compatibility note (2026-02-12): `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now use `argparse.parse_known_args()` so they can run via VS Code/Jupyter Interactive Window, which injects kernel args such as `--f=...`.
 - Runner debug-CLI note (2026-02-12): `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now expose `--debug-detections`, `--debug-scan-stats`, `--debug-hypotheses`, and `--debug-births` (plus `--no-...` forms) and pass them through to `run_tomht(...)`; defaults remain tracker defaults unless explicitly overridden.
 - Scoring consistency note (2026-02-12): beta-ratio clutter scoring now uses a shared `_per_unused_log_delta()` helper for both `score_unused_detections()` and the startup debug/sanity check, preventing drift between applied score and asserted/logged value.
+- External-start API note (2026-03-12): `TOMHTTracker.add_external_starts(starts,timestamp)` now enforces the completed-`step()` timestamp invariant and inserts confirmed external starts into every current global hypothesis. Inserted tracks receive tracker-owned IDs and baseline maintenance metadata; they are not routed through residual/internal birth discovery and do not receive `birth_log_penalty`. Duplicate-like inputs are intentionally not deduplicated in this phase: each supplied start is treated as a distinct confirmed track.
 
 ## 1. High-level structure
 
@@ -190,7 +191,7 @@ Some important differences and simplifications:
 
    - Internal births currently come from a Stone Soup multi-measurement initiator with its own internal association and filtering logic (a mini tracker).
    - Its “confirmed births” are taken as new tracks, with only heuristic use of its internal history (support/age/misses).
-   - The next planned integration step is to also support **confirmed externally supplied starts** after `step()`, so TO-MHT can replace an existing system tracker while upstream code continues to handle start logic.
+   - **Confirmed externally supplied starts** can now be inserted after `step()` as structural additions to the current globals, without routing them through the internal initiator/birth path.
    - In a “clean” TO-MHT, track existence and birth would be part of the same global hypothesis machinery.
 
 4. **N-scan-like pruning is approximated (history-tail dedupe)**
@@ -229,9 +230,9 @@ The current implementation is best thought of as a **TO-MHT-flavoured multi-hypo
 
 It is already useful as a playground / experimental platform, but it **intentionally shortcuts** many of the details of a “proper” TO-MHT.
 
-The next integration-facing step is to add support for **confirmed external starts** supplied after `step()`,
-so that TO-MHT can replace an existing system tracker while upstream code continues to handle track-start logic.
-A more general external-candidate path and any shared internal/external birth abstraction are deferred.
+The next integration-facing step is to add scenario/runner support for delayed external-start injection,
+so that the existing `crossing` and `bearing_range` scenarios can act as the main sanity-check harness for this workflow.
+A more general external-candidate path and any broader internal/external birth abstraction are still deferred.
 
 Then the next major steps are the N-scan-lite groundwork (association history) and further scoring refinements (beyond the current beta-ratio v1.5 bridge).
 - A more principled N-scan-lite commitment / merging mechanism.
