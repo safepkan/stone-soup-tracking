@@ -57,30 +57,49 @@ The current code is useful, but still mixes:
 
 This phase should make those pieces more explicit.
 
+### 2.4 Keep this phase narrow and integration-facing
+
+This phase should add the minimum surface needed for clean external initiation and modest internal-birth cleanup.
+It should **not** expand into a broader redesign of scoring, tree structure, or existence modelling.
+
 ## 3. Proposed immediate implementation direction
 
 ### 3.1 Add an explicit external-start interface
 
-Add a separate tracker call for injecting externally created starts after a scan update, for example along the lines of:
+Add a separate tracker call for injecting externally created starts after a scan update, for example:
 
 - `step(detections, timestamp)`
-- `add_external_starts(starts, timestamp, mode="confirmed")`
+- `add_external_starts(starts, timestamp)`
 
 Initial scope:
 - support **confirmed** external starts only,
-- require the timestamp to match the most recent `step()`.
+- require the timestamp to match the most recent `step()`,
+- and fail fast if the call is made before any `step()` or for a mismatched timestamp.
 
-### 3.2 Treat external starts as already-initialised system tracks
+For this phase, avoid exposing a broader public mode like `mode="confirmed"` unless a real second mode exists.
+The public API should match the actual supported semantics.
+
+### 3.2 Make the timestamp invariant explicit in tracker state
+
+Add explicit tracker state for the most recent scan timestamp so the external-start insertion path can enforce:
+- “external starts must correspond to the most recent completed scan”,
+- no stale or future-timestamp insertion,
+- and no ambiguous ordering of `step()` versus external-start injection.
+
+This should be treated as a hard interface invariant, not just a documentation note.
+
+### 3.3 Treat external starts as already-initialised system tracks
 
 For the first version, externally supplied starts should be assumed to:
 - already be in the system-track state space,
 - already be initialised at the given timestamp,
-- already reflect any upstream ambiguity resolution or correlation logic.
+- already reflect any upstream ambiguity resolution or correlation logic,
+- and already be intended as confirmed new system tracks.
 
 TO-MHT should therefore insert them as new tracks into the current global hypotheses,
 rather than trying to re-derive them from current detections.
 
-### 3.3 Keep the internal birth path separate for now
+### 3.4 Keep the internal birth path separate for now
 
 Do **not** immediately force internal births and external starts through a shared public abstraction.
 
@@ -89,7 +108,21 @@ Instead:
 - keep internal births as the existing standalone initiator-driven path,
 - and revisit a shared internal/external birth abstraction later if it still looks useful.
 
-### 3.4 Make external-initiation-only mode easy
+### 3.5 Use one shared helper for inserted-track metadata initialisation
+
+Newly inserted tracks currently need internal metadata such as track ID, age/hit counters, missed count,
+and association-history fields.
+
+This phase should define one shared helper for initialising newly inserted tracks so that:
+- constructor-time initial tracks,
+- internal births,
+- and external starts
+
+all use a consistent metadata initialisation path where appropriate.
+
+This is mainly a maintainability and consistency improvement, but it should be done now to avoid three slightly different insertion conventions.
+
+### 3.6 Make external-initiation-only mode easy
 
 Add a clear configuration path so the tracker can run in:
 - external-initiation-only mode,
@@ -97,6 +130,10 @@ Add a clear configuration path so the tracker can run in:
 - or both.
 
 For the first ISAC integration step, external-initiation-only mode is likely the default.
+
+Important nuance:
+- the conceptual mode already exists at the design level,
+- but it is only operationally complete once runtime external-start injection exists.
 
 #### Assumptions for the first ISAC integration
 
@@ -120,7 +157,18 @@ Make the following stages explicit in code/comments/docs:
 - compatibility against existing global hypotheses,
 - branching policy.
 
-### 4.2 Keep birth control simple for now
+### 4.2 Keep external starts out of the internal birth-discovery path
+
+Confirmed external starts should be inserted as structural additions to the current global hypotheses.
+They should **not** be routed through:
+- residual detection logic,
+- internal initiator ranking,
+- or support-detection rediscovery.
+
+For this phase, they should also avoid any extra semantics beyond the existing “insert a confirmed new track” interpretation.
+Any later attempt to score external starts more explicitly can be deferred until the scoring/existence-model phase.
+
+### 4.3 Keep birth control simple for now
 
 If birth pressure still looks problematic after the refactor, add only lightweight control measures, such as:
 - limiting births to top-ranked parent globals,
@@ -133,8 +181,10 @@ Do **not** turn this phase into a large tuning exercise.
 ### External-initiation path
 
 - The tracker can accept externally created starts after `step()`.
+- The external-start API clearly represents **confirmed starts only**.
+- The tracker explicitly rejects calls made before any `step()` or with a mismatched timestamp.
 - Confirmed external starts can be used with internal births disabled.
-- Externally supplied starts are inserted with the correct timestamp and internal metadata initialised.
+- Externally supplied starts are inserted with the correct timestamp and internal metadata initialised via the shared insertion path.
 - Existing standalone scenarios still run unchanged when the external-start path is unused.
 
 ### Internal-birth path
@@ -142,20 +192,117 @@ Do **not** turn this phase into a large tuning exercise.
 - Existing standalone scenarios still run.
 - Internal birth behaviour is at least as understandable as before.
 - Birth instrumentation still reports meaningful scan/run summaries.
+- The code structure makes the internal birth stages easier to identify and review.
 
 ### Documentation
 
 - Roadmap and chat-context docs reflect the new current phase.
 - The current-state doc explains the external-initiation capability once implemented.
+- The tracker API documentation/comments make the timestamp invariant and confirmed-start semantics explicit.
 
 ## 6. Deferred for later phases
 
 Not part of this phase:
 - soft external birth candidates,
+- public multi-mode external-start APIs that imply unsupported semantics,
 - per-start support-detection handling,
 - common internal/external birth-candidate abstraction,
 - explicit shared hypothesis trees,
 - true ancestor-based N-scan pruning,
 - replacing beta-ratio v1.5 scoring,
+- principled existence-probability modelling,
 - large-scale performance optimisation,
 - full evaluation / benchmarking framework.
+
+## 7. Suggested Codex task sequence for this phase
+
+The goal here is to give Codex tasks that are small enough to implement and validate cleanly,
+while still leaving each step meaningful.
+
+### Task 1 — Add external-start API skeleton and timestamp invariant
+
+Scope:
+- add tracker state for the most recent `step()` timestamp,
+- add `add_external_starts(starts, timestamp)`,
+- validate call ordering and timestamp matching,
+- add focused unit tests for accepted/rejected call sequences.
+
+Deliberately out of scope:
+- actual insertion into globals,
+- metadata-helper refactor,
+- internal birth cleanup.
+
+Review focus:
+- API shape,
+- invariant enforcement,
+- error clarity,
+- no behavioural change when unused.
+
+### Task 2 — Implement external-start insertion into globals
+
+Scope:
+- insert externally supplied confirmed starts into each current global hypothesis,
+- allocate stable track IDs,
+- keep semantics simple and deterministic,
+- add tests for insertion behaviour in external-only mode and mixed existing-track cases.
+
+Deliberately out of scope:
+- internal-birth refactor,
+- shared helper extraction unless needed immediately for correctness.
+
+Review focus:
+- per-global insertion semantics,
+- compatibility with beam/global bookkeeping,
+- deterministic behaviour,
+- whether the semantics match “confirmed upstream starts”.
+
+### Task 3 — Extract shared inserted-track metadata helper
+
+Scope:
+- factor constructor-time initial-track setup, internal-birth insertion, and external-start insertion
+  through a shared helper where appropriate,
+- preserve current behaviour,
+- add/update tests that verify consistent metadata initialisation.
+
+Review focus:
+- consistency of `track_id`, counters, `last_det_key`, `last_det_hit`, and `assoc_history`,
+- minimal behavioural churn,
+- readability.
+
+### Task 4 — Make operating modes explicit and testable
+
+Scope:
+- make external-only / internal-only / both configuration paths explicit,
+- ensure runner/config surface is clear,
+- add tests or smoke-style coverage for each mode.
+
+Review focus:
+- configuration clarity,
+- no hidden coupling,
+- accurate docs/comments.
+
+### Task 5 — Refactor internal birth pipeline into explicit stages
+
+Scope:
+- split the current internal birth path into clearer helper stages,
+- preserve behaviour as closely as practical,
+- keep instrumentation intact,
+- add/update tests around ranking/filtering/branching behaviour where feasible.
+
+Review focus:
+- readability,
+- stable semantics,
+- easier future modification,
+- no accidental redesign disguised as refactor.
+
+### Task 6 — Documentation sync after implementation lands
+
+Scope:
+- update current-state doc to describe the implemented external-start capability,
+- tighten any roadmap / context wording if needed,
+- ensure examples and assumptions match the actual public API.
+
+Review focus:
+- docs match code,
+- no overclaiming,
+- no stale API wording.
