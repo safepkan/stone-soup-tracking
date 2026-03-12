@@ -20,6 +20,24 @@ if __name__ == "__main__":
         default=False,
         help="Enable/disable scenario initial tracks (default: off for bearing_range).",
     )
+    external_start_group = parser.add_mutually_exclusive_group()
+    external_start_group.add_argument(
+        "--external-start-delay-scans",
+        dest="external_start_delay_scans",
+        type=int,
+        default=None,
+        help=(
+            "Inject confirmed external starts after this many completed scans "
+            "(0-based delay from scan 0)."
+        ),
+    )
+    external_start_group.add_argument(
+        "--external-start-scan",
+        dest="external_start_scan",
+        type=int,
+        default=None,
+        help=("Inject confirmed external starts after processing this 0-based scan."),
+    )
     parser.add_argument(
         "--debug-detections",
         dest="debug_detections",
@@ -55,6 +73,8 @@ if __name__ == "__main__":
         "bearing_range",
         use_initiator=args.births,
         use_initial_tracks=args.initial_tracks,
+        external_start_scan=args.external_start_scan,
+        external_start_delay_scans=args.external_start_delay_scans,
         debug_display_detections=args.debug_detections,
         debug_display_scan_stats=args.debug_scan_stats,
         debug_display_hypotheses=args.debug_hypotheses,

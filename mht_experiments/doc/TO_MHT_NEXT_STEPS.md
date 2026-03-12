@@ -302,7 +302,14 @@ Review focus:
 - deterministic behaviour,
 - whether the semantics match “confirmed upstream starts”.
 
-### Task 3 — Add delayed external-start mode to the scenario runners
+### Task 3 — Implemented: delayed external-start mode in the scenario runners
+
+Status (2026-03-12):
+- `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now accept `--external-start-delay-scans N` or `--external-start-scan N` and pass the configuration through `run_tomht(...)`.
+- The runner injects confirmed external starts after `step()` at the configured scan via `add_external_starts(...)` and prints explicit `EXTERNAL_STARTS_CONFIG ...` / `EXTERNAL_STARTS ...` log lines.
+- `crossing` derives two confirmed starts from the truth paths at the injection scan; `bearing_range` derives three confirmed starts from the simulator truth paths at the injection scan.
+- The delayed-start mode is intended for runs without scenario initial tracks; internal births remain independently configurable so external-only checks can use `--no-births`.
+- Focused runner/scenario tests cover delayed-start scan resolution and truth-derived external-start construction for both scenarios.
 
 Scope:
 - extend the `crossing` and `bearing_range` runner workflow so scenarios can run with delayed external confirmed starts,

@@ -55,6 +55,10 @@ _CONFIG = ScenarioConfig(
 )
 
 
+def _tomht_crossing_covar() -> CovarianceMatrix:
+    return CovarianceMatrix(np.diag([1.5, 0.5, 1.5, 0.5]))
+
+
 def create_crossing_scenario() -> Tuple[
     OrderedSet[GroundTruthPath],
     List[OrderedSet[Detection]],
@@ -194,7 +198,7 @@ def initial_mfa_tracks_for_crossing(start_time: datetime.datetime) -> OrderedSet
 
 def initial_tomht_tracks_for_crossing(start_time) -> list[Track]:
     """Initial tracks for TO-MHT (single Gaussian, not a mixture)."""
-    cov = CovarianceMatrix(np.diag([1.5, 0.5, 1.5, 0.5]))
+    cov = _tomht_crossing_covar()
     s1 = GaussianState(
         StateVector([[0.0], [1.0], [0.0], [1.0]]), covar=cov, timestamp=start_time
     )
@@ -202,6 +206,38 @@ def initial_tomht_tracks_for_crossing(start_time) -> list[Track]:
         StateVector([[0.0], [1.0], [20.0], [-1.0]]), covar=cov, timestamp=start_time
     )
     return [Track([s1]), Track([s2])]
+
+
+def external_tomht_tracks_for_crossing(
+    truths: OrderedSet[GroundTruthPath],
+    scan_index: int,
+    timestamp: datetime.datetime,
+) -> list[Track]:
+    """Build confirmed external starts from scenario truth at a given scan."""
+    starts: list[Track] = []
+    cov = _tomht_crossing_covar()
+    for truth_index, truth in enumerate(truths):
+        truth_state = truth[scan_index]
+        if truth_state.timestamp != timestamp:
+            raise ValueError(
+                "Crossing external-start timestamp must match the truth state "
+                f"timestamp at scan {scan_index}. Expected "
+                f"{truth_state.timestamp!r}, got {timestamp!r}."
+            )
+        start = Track(
+            [
+                GaussianState(
+                    StateVector(truth_state.state_vector.copy()),
+                    covar=cov.copy(),
+                    timestamp=timestamp,
+                )
+            ]
+        )
+        start.metadata["source"] = "scenario_truth_confirmed"
+        start.metadata["scenario"] = "crossing"
+        start.metadata["scenario_truth_index"] = truth_index
+        starts.append(start)
+    return starts
 
 
 def tomht_initiator_for_crossing_simple(

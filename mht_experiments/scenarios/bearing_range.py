@@ -47,6 +47,10 @@ def _det_sort_key(det: Detection) -> tuple[float, float]:
     return (float(z[0, 0]), float(z[1, 0]))
 
 
+def _tomht_bearing_range_covar() -> CovarianceMatrix:
+    return CovarianceMatrix(np.diag([10.0, 1.0, 10.0, 1.0]))
+
+
 def create_bearing_range_mht_example() -> Tuple[
     OrderedSet[GroundTruthPath],
     List[OrderedSet[Detection]],
@@ -164,13 +168,45 @@ def initial_mfa_tracks_for_bearing_range(
 
 def initial_tomht_tracks_for_bearing_range(start_time) -> list[Track]:
     """Initial tracks for TO-MHT (single Gaussian, not a mixture)."""
-    cov = CovarianceMatrix(np.diag([10.0, 1.0, 10.0, 1.0]))
+    cov = _tomht_bearing_range_covar()
     priors = [
         StateVector([[10.0], [1.0], [10.0], [1.0]]),
         StateVector([[-10.0], [-1.0], [-10.0], [-1.0]]),
         StateVector([[-10.0], [-1.0], [10.0], [1.0]]),
     ]
     return [Track([GaussianState(p, covar=cov, timestamp=start_time)]) for p in priors]
+
+
+def external_tomht_tracks_for_bearing_range(
+    truths: OrderedSet[GroundTruthPath],
+    scan_index: int,
+    timestamp: datetime.datetime,
+) -> list[Track]:
+    """Build confirmed external starts from scenario truth at a given scan."""
+    starts: list[Track] = []
+    cov = _tomht_bearing_range_covar()
+    for truth_index, truth in enumerate(truths):
+        truth_state = truth[scan_index]
+        if truth_state.timestamp != timestamp:
+            raise ValueError(
+                "Bearing-range external-start timestamp must match the truth "
+                f"state timestamp at scan {scan_index}. Expected "
+                f"{truth_state.timestamp!r}, got {timestamp!r}."
+            )
+        start = Track(
+            [
+                GaussianState(
+                    StateVector(truth_state.state_vector.copy()),
+                    covar=cov.copy(),
+                    timestamp=timestamp,
+                )
+            ]
+        )
+        start.metadata["source"] = "scenario_truth_confirmed"
+        start.metadata["scenario"] = "bearing_range"
+        start.metadata["scenario_truth_index"] = truth_index
+        starts.append(start)
+    return starts
 
 
 def tomht_initiator_for_bearing_range_simple(

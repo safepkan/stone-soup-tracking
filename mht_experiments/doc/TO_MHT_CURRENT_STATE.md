@@ -9,6 +9,7 @@ This document describes the current architecture and logic of the TO-MHT prototy
 - Runner debug-CLI note (2026-02-12): `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now expose `--debug-detections`, `--debug-scan-stats`, `--debug-hypotheses`, and `--debug-births` (plus `--no-...` forms) and pass them through to `run_tomht(...)`; defaults remain tracker defaults unless explicitly overridden.
 - Scoring consistency note (2026-02-12): beta-ratio clutter scoring now uses a shared `_per_unused_log_delta()` helper for both `score_unused_detections()` and the startup debug/sanity check, preventing drift between applied score and asserted/logged value.
 - External-start API note (2026-03-12): `TOMHTTracker.add_external_starts(starts,timestamp)` now enforces the completed-`step()` timestamp invariant and inserts confirmed external starts into every current global hypothesis. Inserted tracks receive tracker-owned IDs and baseline maintenance metadata; they are not routed through residual/internal birth discovery and do not receive `birth_log_penalty`. Duplicate-like inputs are intentionally not deduplicated in this phase: each supplied start is treated as a distinct confirmed track.
+- Delayed external-start runner note (2026-03-12): `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now accept `--external-start-delay-scans N` or `--external-start-scan N` to inject confirmed external starts after `step()` at a chosen scan. Starts are derived from scenario truth state at the injection scan, inserted via `add_external_starts(...)`, logged as `EXTERNAL_STARTS ...`, and intended for runs without scenario initial tracks. Internal births remain independently toggleable via `--births` / `--no-births`.
 
 ## 1. High-level structure
 
@@ -218,7 +219,15 @@ Some important differences and simplifications:
 - A/B convenience: `run_tomht_crossing.py` / `run_tomht_bearing_range.py` accept:
   - `--births` / `--no-births` (BooleanOptionalAction) to toggle initiator use,
   - `--initial-tracks` / `--no-initial-tracks` (BooleanOptionalAction) to toggle scenario-provided initial tracks (defaults match each scenario: crossing = births on, initial tracks off; bearing_range = births on, initial tracks off).
+  - `--external-start-delay-scans N` or `--external-start-scan N` (mutually exclusive) to inject confirmed external starts after the specified 0-based scan; the delay form is equivalent to `start_scan=N` for the current scenarios because all truth tracks are pre-existing from scan 0.
   - `--debug-detections`, `--debug-scan-stats`, `--debug-hypotheses`, `--debug-births` (and `--no-...` forms) to override per-run debug log output toggles exposed by `TOMHTParams` while preserving the existing defaults when omitted.
+- External-start derivation in delayed mode:
+  - `crossing`: inject two confirmed starts, one per truth path, using the scenario truth state vector at the configured scan and the same covariance used by the scenario’s TO-MHT initial tracks.
+  - `bearing_range`: inject three confirmed starts, one per pre-existing truth path from the Stone Soup simulator, using the truth state vector at the configured scan and the same covariance used by the scenario’s TO-MHT initial tracks.
+- Headless delayed-start examples:
+  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_crossing.py --no-births --external-start-delay-scans 3 --no-debug-hypotheses --no-debug-births`
+  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_bearing_range.py --no-births --external-start-scan 4 --no-debug-hypotheses --no-debug-births`
+- Current limitation: delayed external-start mode assumes the scenario truths are already active from scan 0 and injects all confirmed starts together at one configured scan. Per-track staggered external-start schedules and broader operating-mode cleanup remain future work.
 
 ## 5. Summary
 
@@ -230,9 +239,9 @@ The current implementation is best thought of as a **TO-MHT-flavoured multi-hypo
 
 It is already useful as a playground / experimental platform, but it **intentionally shortcuts** many of the details of a “proper” TO-MHT.
 
-The next integration-facing step is to add scenario/runner support for delayed external-start injection,
-so that the existing `crossing` and `bearing_range` scenarios can act as the main sanity-check harness for this workflow.
-A more general external-candidate path and any broader internal/external birth abstraction are still deferred.
+The tracker now has a practical delayed external-start harness in the existing scenario runners,
+so `crossing` and `bearing_range` can exercise the confirmed external-start path with headless-friendly commands.
+The remaining near-term cleanup is to make inserted-track metadata handling and operating modes more explicit,
+without broadening external-start semantics beyond confirmed upstream starts.
 
-Then the next major steps are the N-scan-lite groundwork (association history) and further scoring refinements (beyond the current beta-ratio v1.5 bridge).
-- A more principled N-scan-lite commitment / merging mechanism.
+The next major steps are the shared inserted-track metadata helper, clearer operating-mode surfacing, and later N-scan-lite / scoring refinements.

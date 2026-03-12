@@ -4,7 +4,7 @@ import datetime
 import os
 from dataclasses import replace
 from pathlib import Path
-from typing import List, Literal
+from typing import Literal
 
 
 def _setup_headless_cache_dirs() -> None:
@@ -29,11 +29,13 @@ from stonesoup.plotter import Plotter  # noqa: E402
 from mht_experiments.plotting import plot_tracks_stable_xy  # noqa: E402
 from mht_experiments.scenarios.bearing_range import (  # noqa: E402
     create_bearing_range_mht_example,
+    external_tomht_tracks_for_bearing_range,
     initial_tomht_tracks_for_bearing_range,
     tomht_initiator_for_bearing_range,
 )
 from mht_experiments.scenarios.crossing_targets import (  # noqa: E402
     create_crossing_scenario,
+    external_tomht_tracks_for_crossing,
     initial_tomht_tracks_for_crossing,
     tomht_initiator_for_crossing_simple,
 )
@@ -45,6 +47,38 @@ from mht_experiments.trackers.tomht_tracker import (  # noqa: E402
 
 
 SetupName = Literal["crossing", "bearing_range"]
+
+
+def _resolve_external_start_scan(
+    *,
+    num_scans: int,
+    external_start_scan: int | None,
+    external_start_delay_scans: int | None,
+) -> int | None:
+    if external_start_scan is not None and external_start_delay_scans is not None:
+        raise ValueError(
+            "Specify at most one of external_start_scan and "
+            "external_start_delay_scans."
+        )
+
+    if external_start_scan is None and external_start_delay_scans is None:
+        return None
+
+    start_scan = (
+        external_start_scan
+        if external_start_scan is not None
+        else external_start_delay_scans
+    )
+    assert start_scan is not None
+
+    if start_scan < 0:
+        raise ValueError("Delayed external-start scan must be non-negative.")
+    if start_scan >= num_scans:
+        raise ValueError(
+            "Delayed external-start scan must fall within the scenario run. "
+            f"Received {start_scan}, but scenario has {num_scans} scans."
+        )
+    return start_scan
 
 
 def _running_in_ipython_kernel() -> bool:
@@ -87,6 +121,8 @@ def run_tomht(
     *,
     use_initiator: bool = True,
     use_initial_tracks: bool = False,
+    external_start_scan: int | None = None,
+    external_start_delay_scans: int | None = None,
     debug_display_detections: bool | None = None,
     debug_display_scan_stats: bool | None = None,
     debug_display_hypotheses: bool | None = None,
@@ -114,6 +150,10 @@ def run_tomht(
         tracks = (
             initial_tomht_tracks_for_crossing(start_time) if use_initial_tracks else []
         )
+
+        def build_external_starts(scan_index: int, timestamp: datetime.datetime):
+            return external_tomht_tracks_for_crossing(truths, scan_index, timestamp)
+
         initiator = (
             tomht_initiator_for_crossing_simple(start_time, measurement_model)
             if use_initiator
@@ -145,6 +185,12 @@ def run_tomht(
             if use_initial_tracks
             else []
         )
+
+        def build_external_starts(scan_index: int, timestamp: datetime.datetime):
+            return external_tomht_tracks_for_bearing_range(
+                truths, scan_index, timestamp
+            )
+
         initiator = (
             tomht_initiator_for_bearing_range(
                 timestamps[0], transition_model, measurement_model
@@ -173,16 +219,49 @@ def run_tomht(
         )
         styles = ("g-",)
 
+    delayed_external_start_scan = _resolve_external_start_scan(
+        num_scans=len(scans),
+        external_start_scan=external_start_scan,
+        external_start_delay_scans=external_start_delay_scans,
+    )
+    if delayed_external_start_scan is not None and use_initial_tracks:
+        raise ValueError(
+            "Delayed external-start mode expects runs without initial tracks. "
+            "Disable initial tracks when configuring external starts."
+        )
+    if delayed_external_start_scan is not None:
+        print(
+            "EXTERNAL_STARTS_CONFIG "
+            f"setup={setup} start_scan={delayed_external_start_scan} "
+            "source=scenario_truth_confirmed"
+        )
+
     plotter = Plotter()
     # The base Plotter sets aspect='equal', which collides with manual x/y limits
     # and emits Matplotlib warnings in headless smoke runs. Relax to automatic aspect.
     plotter.ax.set_aspect("auto")
-    frames: List[list] = []
+    frames: list[list] = []
 
     for n, (timestamp, detections) in enumerate(zip(timestamps, scans)):
-        artists: List = []
+        artists: list = []
 
         tracks_out = tracker.step(detections, timestamp)
+        if delayed_external_start_scan == n:
+            external_starts = build_external_starts(n, timestamp)
+            tracker.add_external_starts(external_starts, timestamp)
+            truth_indices = ",".join(
+                str(int(track.metadata["scenario_truth_index"]))
+                for track in external_starts
+            )
+            print(
+                "EXTERNAL_STARTS "
+                f"setup={setup} scan={n} t={timestamp} count={len(external_starts)} "
+                f"truth_indices=[{truth_indices}]"
+            )
+            if tracker.global_hypotheses:
+                tracks_out = set(tracker.global_hypotheses[0].tracks_by_id.values())
+            else:
+                tracks_out = set()
 
         ax = plotter.ax
         ax.set_xlabel("$x$")
