@@ -1,109 +1,148 @@
 # TO-MHT Roadmap
 
-This document gives the big-picture view of where the project is going, without getting too deep into implementation details. It’s meant to be readable by someone who knows Stone Soup and tracking, but not necessarily this codebase.
+This document gives the big-picture view of where the project is now and where it is going next.
+It is intentionally forward-looking: the goal is to make the current baseline and the next major design choices easy to understand.
 
-## 1. Context and goals
+## 1. Goal and design principles
 
-- **Context:** Experiment with Track-Oriented Multi-Hypothesis Tracking (TO-MHT) using Stone Soup as the “plumbing” for motion/measurement models, prediction, and updating.
-- **Primary goals:**
-  - Understand TO-MHT end-to-end, from data association to pruning.
-  - Build a simple, readable, flexible implementation suitable for experimentation.
-  - Use Stone Soup components wherever possible (predictors, updaters, hypothesizers, initiators) so we can focus on MHT-specific logic.
-- **Non-goals (for now):**
-  - Production-grade performance or memory use.
-  - Exhaustive algorithmic optimisations.
-  - Supporting all Stone Soup models and scenarios.
+### Goal
 
-## 2. Phases and milestones
+Build a **clear, general Track-Oriented Multi-Hypothesis Tracker (TO-MHT)** on top of Stone Soup.
 
-### Phase 0 — Scaffolding and MFA baseline ✅
+The end goal is a tracker that:
+- behaves like a proper TO-MHT,
+- is readable enough to support research and experimentation,
+- can be plugged into different Stone Soup-compatible motion / measurement / prediction / update setups,
+- and can be used to compare TO-MHT against existing trackers in application-specific pipelines.
 
-- [x] Identify relevant TO-MHT literature and notation.
-- [x] Refactor Stone Soup MFA examples (crossing targets, bearing-range) into:
-  - Shared scenario builders.
-  - Reusable plotting/runner code.
-- [x] Confirm refactored MFA produces identical behaviour to original examples.
+### Design principles
 
-### Phase 1 — TO-MHT v0.5: “Working but hacky” ✅
+- **Clarity over performance.** Readable, inspectable code matters more than raw runtime for now.
+- **Stone Soup for model-specific plumbing.** Reuse Stone Soup predictors, updaters, hypothesiser objects, and related components wherever possible.
+- **Generic tracker core.** Keep TO-MHT logic independent of any specific motion model, measurement model, or sensing modality.
+- **Incremental path to “proper TO-MHT”.** It is acceptable to implement lightweight approximations first, as long as they do not paint us into a corner.
 
-- [x] Implement a first global-hypothesis structure:
-  - `GlobalHypothesis = {tracks_by_id, log_weight}`.
-- [x] Implement per-scan expansion:
-  - Per-track child hypotheses from a Stone Soup `Hypothesiser`.
-  - Backtracking to ensure per-scan detection exclusivity.
-  - Beam pruning: keep top-K global hypotheses.
-- [x] Integrate births via a Stone Soup multi-measurement initiator:
-  - Use unassigned detections (from top hypotheses) as birth candidates.
-  - Rank births heuristically and limit to max per scan.
-  - Penalise births in the global log-weight.
-- [x] Add basic heuristics and instrumentation:
-  - Unused-detection penalty.
-  - Max-missed per track.
-  - Debug flags, sanity checks for numeric blow-ups, and basic determinism controls (full stable detection ordering is a Phase 2 task).
-  - Simple deduplication of “presently identical” global hypotheses.
+## 2. Application context that affects priorities
 
-Result: a working multi-hypothesis tracker that produces sensible tracks on the test scenarios, but with a lot of shortcuts and ad-hoc scoring.
+A key target use case is a research setup for **Integrated Sensing and Communication (ISAC)** in 6G mobile networks.
 
-### Phase 2 — Scoring v2 + N-scan-lite (in progress) ⚙️
+At a high level:
+- each TX-RX link between two 6G base stations acts like a sensor in a multi-sensor bistatic radar setting,
+- angle measurements are ambiguous due to antenna-array spacing,
+- the current system does simple per-sensor tracking in ambiguous sensor coordinates,
+- then correlates across sensors to resolve ambiguities and start system tracks in global coordinates,
+- and finally updates those system tracks using sensor detections.
 
-**Goal:** Move from heuristic scores toward a simple, explicit MHT log-likelihood model,
-then introduce N-scan-like commitment to stabilise track identities.
+### What this means for TO-MHT priorities
 
-Progress and ordering:
+The first realistic integration target is **not** a full end-to-end replacement of the whole pipeline.
+Instead, the first target is likely:
+- keep the existing sensor trackers,
+- keep the current cross-sensor correlation / ambiguity-resolution logic for track starts,
+- replace the current **system tracker** with TO-MHT.
 
-0) **Determinism prerequisite — done**
-   - Per-scan detection ordering is now stable before assigning detection indices.
+This means the tracker should support two operating modes:
 
-1) **Scoring v2 — done (beta-ratio v1.5)**
-   - `ScoringModel` abstraction in place with BetaRatioScoringModel as the sole implementation.
-   - Legacy scoring removed; clutter handled via `log(clutter_density)` fallback to unused-det penalty when needed.
+1. **External-initiation / system-tracker mode**
+   - new system tracks are supplied by upstream code,
+   - TO-MHT focuses on multi-hypothesis maintenance, ambiguity handling, clutter robustness, and track continuity.
 
-2) **Association history — next**
-   - Store a short per-track association history (e.g. last N detection keys).
-   - Update deduplication/merging to consider short history (not only current-scan keys).
+2. **Standalone / internal-birth mode**
+   - TO-MHT uses its own birth logic / initiator for self-contained experiments.
 
-3) **N-scan-lite**
-   - Commit association decisions older than N scans when surviving globals agree.
-   - Optionally merge track trees when committed histories are identical.
+The external-initiation path is the more immediate priority.
 
-Optional (deferred): move beyond β-ratio to raw likelihood scoring; calibrate clutter/birth terms.
+## 3. Current baseline
 
-### Phase 3 — Track initiation and existence modelling 🎯
+The current codebase already includes a usable experimental baseline:
 
-**Goal:** Treat initiation and existence more cleanly inside the TO-MHT framework.
+- stable per-scan detection ordering and scan-local detection keys,
+- `ScoringModel` abstraction with **beta-ratio v1.5** scoring,
+- per-track association history plus **history-tail deduplication**,
+- an **N-scan-lite** approximation based on recent association history rather than explicit tree ancestors,
+- structured scan and run instrumentation (`ScanStats`, `BirthStats`, summary metrics),
+- internal birth handling via a Stone Soup initiator plus heuristic filtering / ranking / branching.
 
-Possible directions:
+This is **not yet a proper TO-MHT** in the full structural sense, but it is a good experimental platform:
+- deterministic,
+- inspectable,
+- easy to run on multiple Stone Soup-compatible scenarios,
+- and good enough to reveal where the next design effort should go.
 
-- Option A: keep using the Stone Soup multi-measurement initiator, but:
-  - Define a clear probabilistic interpretation of its output.
-  - Integrate its “evidence” into the global log-likelihood more explicitly.
-- Option B: replace external initiator with internal tentative tracks:
-  - Maintain “tentative tracks” inside TO-MHT with their own hit/miss thresholds.
-  - Promote to “confirmed” when sufficient evidence accumulates.
+## 4. What is still missing for a “proper TO-MHT”
 
-Also consider:
+The main remaining conceptual gaps are:
 
-- Simple birth intensity model (e.g. uniform over volume with rate λ).
-- More principled death/termination logic than just `max_missed`.
+1. **Explicit shared hypothesis-tree structure**
+   - current globals contain copied `Track` objects rather than explicit shared tree nodes.
 
-### Phase 4 — Refinement, experiments, and documentation 📈
+2. **True ancestor-based N-scan pruning**
+   - current N-scan-lite works by deduplicating on recent association history,
+   - not by tracking common ancestors and committing branches older than N scans.
 
-- Evaluate behaviour on more challenging scenarios (crossing, coasting, low SNR, high clutter).
-- Compare TO-MHT vs MFA baselines in scenarios where they differ.
-- Improve visualisation:
-  - Show multiple global hypotheses and their relative weights.
-  - Show committed vs tentative parts of each track.
-- Polish documentation:
-  - Architecture doc stays up to date.
-  - Reference doc links to papers and notes.
+3. **Cleaner initiation / existence modelling**
+   - current internal birth handling is useful, but still heuristic and somewhat opaque,
+   - especially when compared to a clean TO-MHT existence / birth model.
 
-## 3. Current status (high level)
+4. **More explicit scoring model**
+   - beta-ratio v1.5 is a practical bridge,
+   - not yet a final, fully explicit TO-MHT likelihood model.
 
-- MFA scaffolding: **done**.
-- TO-MHT v0.5 prototype: **implemented and running**.
-- Known limitations:
-  - Scoring is an approximate bridge (beta-ratio v1.5) and still heuristic.
-- N-scan/commitment only approximated via present-state deduplication.
-- Initiation relies on an external Stone Soup initiator with heuristic integration.
+## 5. Near-term and medium-term phases
 
-Next up: **Phase 2, item 2 — association history (N-scan-lite groundwork).**
+### Phase A — Integration-facing initiation and birth handling (next)
+
+**Goal:** make the tracker easy to integrate into an external pipeline where track starts come from upstream code.
+
+Key tasks:
+- define a clean interface for **external birth / external initiation candidates**,
+- support running the tracker with **internal births disabled**,
+- make the relationship between internal births and external births explicit in the code and docs,
+- keep compatibility with standalone experimental mode,
+- tighten birth branching enough that birth behaviour is understandable and controllable.
+
+Why this phase comes next:
+- it directly supports the first realistic ISAC integration step,
+- it addresses the least principled part of the current tracker,
+- and it can be done without yet committing to a large tree-structure refactor.
+
+### Phase B — Proper track-oriented structure and true N-scan pruning
+
+**Goal:** move from the current “copied tracks in flat globals” representation toward a proper TO-MHT representation with explicit ancestry.
+
+Key tasks:
+- introduce explicit shared track-hypothesis nodes / trees (or DAG-like sharing where appropriate),
+- implement ancestor-based N-scan pruning,
+- make commitment / branch-merging semantics explicit rather than implicit via history-tail dedupe.
+
+This is the main structural step toward a proper TO-MHT.
+
+### Phase C — Scoring and existence-model refinement
+
+**Goal:** improve the probabilistic interpretation once the tracker structure and integration path are clearer.
+
+Possible work:
+- move beyond beta-ratio v1.5 toward a more explicit likelihood model,
+- refine clutter, birth, and existence terms,
+- make external-initiation evidence easier to score in a principled way.
+
+This is important, but it does not have to block the next integration-facing work.
+
+### Phase D — Scaling and experiments
+
+**Goal:** make the tracker more useful on harder scenarios and larger problem sizes.
+
+Possible work:
+- clustering / partitioning before global expansion,
+- k-best assignment style approximations instead of exhaustive backtracking,
+- richer scenarios and evaluation metrics,
+- systematic comparisons against existing baselines.
+
+## 6. Current recommendation
+
+Treat the tracker today as a **good experimental TO-MHT platform**, not yet the final TO-MHT.
+
+The next step should be:
+- **clean external initiation support and birth handling**,
+- then move toward **explicit trees and proper N-scan pruning**,
+- while keeping the code readable and generic enough for cross-application use.
