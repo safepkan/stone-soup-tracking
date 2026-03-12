@@ -90,21 +90,19 @@ The main remaining conceptual gaps are:
 
 ## 5. Near-term and medium-term phases
 
-### Phase A — Integration-facing initiation and birth handling (next)
+### Phase A — External system-track initiation (next)
 
-**Goal:** make the tracker easy to integrate into an external pipeline where track starts come from upstream code.
+**Goal:** make the tracker easy to integrate into an external pipeline where new system tracks are created upstream.
 
 Key tasks:
-- define a clean interface for **external birth / external initiation candidates**,
+- add a clean interface for **confirmed external starts**,
 - support running the tracker with **internal births disabled**,
-- make the relationship between internal births and external births explicit in the code and docs,
-- keep compatibility with standalone experimental mode,
-- tighten birth branching enough that birth behaviour is understandable and controllable.
+- document the assumptions for externally supplied starts (already initialised, current timestamp, system-track state space),
+- keep compatibility with standalone internal-birth experiments.
 
-Why this phase comes next:
-- it directly supports the first realistic ISAC integration step,
-- it addresses the least principled part of the current tracker,
-- and it can be done without yet committing to a large tree-structure refactor.
+Notes:
+- For the first ISAC integration step, external starts are treated as confirmed upstream decisions, not as soft birth candidates.
+- A more general external-candidate interface and any common internal/external birth abstraction are deferred until the integration semantics are clearer.
 
 ### Phase B — Proper track-oriented structure and true N-scan pruning
 

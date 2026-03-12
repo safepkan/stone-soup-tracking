@@ -186,11 +186,12 @@ Some important differences and simplifications:
      - Unused detections: `len(unused) * log(clutter_density)`; if clutter density ≤ 0, falls back to `-unused_det_log_penalty * len(unused)`.
      - Births: `-birth_log_penalty` per birth.
 
-3. **Initiation is external and opaque**
+3. **Initiation is still not part of one clean existence model**
 
-   - The multi-measurement initiator has its own internal association and filtering logic (a mini tracker).
+   - Internal births currently come from a Stone Soup multi-measurement initiator with its own internal association and filtering logic (a mini tracker).
    - Its “confirmed births” are taken as new tracks, with only heuristic use of its internal history (support/age/misses).
-   - In a “clean” TO-MHT, track existence and birth are part of the same global hypothesis machinery.
+   - The next planned integration step is to also support **confirmed externally supplied starts** after `step()`, so TO-MHT can replace an existing system tracker while upstream code continues to handle start logic.
+   - In a “clean” TO-MHT, track existence and birth would be part of the same global hypothesis machinery.
 
 4. **N-scan-like pruning is approximated (history-tail dedupe)**
 
@@ -224,8 +225,13 @@ The current implementation is best thought of as a **TO-MHT-flavoured multi-hypo
 
 - It maintains multiple global hypotheses and explores per-track association alternatives.
 - It uses Stone Soup’s hypothesis machinery for local association and updating.
-- It glues this together with beam search, simple penalties, and a Stone Soup initiator.
+- It glues this together with beam search, beta-ratio v1.5 scoring, N-scan-lite history-tail dedupe, instrumentation, and a Stone Soup initiator for internal births.
 
-It is already useful as a playground/experimental platform, but it **intentionally shortcuts** many of the details of a “proper” TO-MHT. The next major steps are the N-scan-lite groundwork (association history) and further scoring refinements (beyond the current beta-ratio v1.5 bridge).
+It is already useful as a playground / experimental platform, but it **intentionally shortcuts** many of the details of a “proper” TO-MHT.
+
+The next integration-facing step is to add support for **confirmed external starts** supplied after `step()`,
+so that TO-MHT can replace an existing system tracker while upstream code continues to handle track-start logic.
+A more general external-candidate path and any shared internal/external birth abstraction are deferred.
+
+Then the next major steps are the N-scan-lite groundwork (association history) and further scoring refinements (beyond the current beta-ratio v1.5 bridge).
 - A more principled N-scan-lite commitment / merging mechanism.
-- Cleaner integration (or replacement) of the external initiator.

@@ -11,14 +11,15 @@ The current tracker already has:
 - association history with N-scan-lite deduplication,
 - and useful instrumentation.
 
-The main immediate gap is **initiation / birth handling**:
+The main immediate gap is **integration-facing initiation / birth handling**:
 - the current internal-birth path is still heuristic,
-- and the first realistic integration target needs **external track initiation**.
+- the first realistic integration target needs **external track initiation**,
+- and the first integration step is likely to replace only an existing **system tracker**, not the whole upstream start pipeline.
 
 For the near term, we want the tracker to work cleanly in two modes:
 
 1. **External-initiation mode (priority)**
-   - upstream code provides new track starts,
+   - upstream code provides **confirmed new system tracks** after each scan,
    - TO-MHT takes over from there.
 
 2. **Standalone internal-birth mode**
@@ -35,10 +36,16 @@ This matters for the ISAC system-tracker replacement path, where:
 - ambiguity resolution for starts may also stay upstream initially,
 - and TO-MHT begins from already-initiated global-coordinate tracks.
 
-### 2.2 Internal and external births should share a common conceptual interface
+### 2.2 Start with confirmed external starts, not generic external birth candidates
 
-Even if they come from different sources, both should look like “birth candidates” to the global-hypothesis logic.
-That keeps the tracker generic and avoids application-specific branching in the core algorithm.
+For the first integration step, external starts should be treated as **confirmed upstream starts** rather than as soft birth candidates.
+
+Rationale:
+- this matches the current ISAC flow,
+- it allows TO-MHT to replace the system tracker without changing the upstream start semantics,
+- and it avoids immediate ambiguity about whether TO-MHT is allowed to reject an upstream-created start.
+
+A softer “external candidate” mode may still be useful later, but it is deferred.
 
 ### 2.3 Birth logic should become easier to reason about
 
@@ -52,46 +59,37 @@ This phase should make those pieces more explicit.
 
 ## 3. Proposed immediate implementation direction
 
-### 3.1 Add an explicit external-birth candidate interface
+### 3.1 Add an explicit external-start interface
 
-Introduce a small wrapper object, e.g. `ExternalBirthCandidate`, with fields along the lines of:
+Add a separate tracker call for injecting externally created starts after a scan update, for example along the lines of:
 
-- `track: Track`
-- `support_detections: Iterable[Detection] | None = None`
-- `log_delta: float | None = None`
-- optional metadata / source label if useful for debugging
+- `step(detections, timestamp)`
+- `add_external_starts(starts, timestamp, mode="confirmed")`
 
-Rationale:
-- if upstream code knows which current-scan detections support the birth, the tracker can map them to scan-local detection keys and enforce compatibility,
-- if no support detections are available, the tracker can still accept the birth as an exogenous start.
+Initial scope:
+- support **confirmed** external starts only,
+- require the timestamp to match the most recent `step()`.
 
-### 3.2 Extend the tracker interface to accept external births per scan
+### 3.2 Treat external starts as already-initialised system tracks
 
-Add an explicit way to pass external birth candidates into the tracker during `step()`.
+For the first version, externally supplied starts should be assumed to:
+- already be in the system-track state space,
+- already be initialised at the given timestamp,
+- already reflect any upstream ambiguity resolution or correlation logic.
 
-Suggested direction:
-- extend `step(...)` with an optional `external_births` argument,
-- keep this optional so existing callers still work,
-- document clearly when the external births are considered relative to normal scan processing.
+TO-MHT should therefore insert them as new tracks into the current global hypotheses,
+rather than trying to re-derive them from current detections.
 
-Initial behaviour is allowed to be simple:
-- external births enter at the birth-branching stage of the current scan,
-- they are treated similarly to internal births,
-- and they are scored either via an explicit `log_delta` override or the existing birth score fallback.
+### 3.3 Keep the internal birth path separate for now
 
-### 3.3 Refactor birth handling around a common birth-candidate path
+Do **not** immediately force internal births and external starts through a shared public abstraction.
 
-Refactor the current internal-birth code so that:
-- internal initiator output becomes one source of birth candidates,
-- external births become another source,
-- and the downstream branching code works on a shared candidate representation.
+Instead:
+- add a clean external-start path first,
+- keep internal births as the existing standalone initiator-driven path,
+- and revisit a shared internal/external birth abstraction later if it still looks useful.
 
-This should make it easy to:
-- run internal-only,
-- external-only,
-- or mixed experiments if needed.
-
-### 3.4 Make internal births easy to disable
+### 3.4 Make external-initiation-only mode easy
 
 Add a clear configuration path so the tracker can run in:
 - external-initiation-only mode,
@@ -100,10 +98,18 @@ Add a clear configuration path so the tracker can run in:
 
 For the first ISAC integration step, external-initiation-only mode is likely the default.
 
+#### Assumptions for the first ISAC integration
+
+For the first integration step, externally supplied starts are assumed to:
+- already be initialised in global/system coordinates,
+- already have any start-time ambiguity resolution applied upstream,
+- already correspond to the current system-tracker timestamp,
+- and be intended as confirmed new system tracks.
+
 ## 4. Birth handling cleanup in this phase
 
 This phase does **not** need a fully principled birth/existence model.
-But it should make the current behaviour more controlled and understandable.
+But it should make the external-start path explicit and the remaining internal-birth behaviour more controlled and understandable.
 
 ### 4.1 Separate the birth pipeline conceptually
 
@@ -126,10 +132,10 @@ Do **not** turn this phase into a large tuning exercise.
 
 ### External-initiation path
 
-- The tracker can accept externally created tracks during `step()`.
-- External births can be run with internal births disabled.
-- If support detections are provided, they are used for compatibility / exclusivity checks.
-- If support detections are not provided, the tracker still behaves sensibly.
+- The tracker can accept externally created starts after `step()`.
+- Confirmed external starts can be used with internal births disabled.
+- Externally supplied starts are inserted with the correct timestamp and internal metadata initialised.
+- Existing standalone scenarios still run unchanged when the external-start path is unused.
 
 ### Internal-birth path
 
@@ -145,6 +151,9 @@ Do **not** turn this phase into a large tuning exercise.
 ## 6. Deferred for later phases
 
 Not part of this phase:
+- soft external birth candidates,
+- per-start support-detection handling,
+- common internal/external birth-candidate abstraction,
 - explicit shared hypothesis trees,
 - true ancestor-based N-scan pruning,
 - replacing beta-ratio v1.5 scoring,
