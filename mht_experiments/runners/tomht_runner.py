@@ -63,7 +63,13 @@ class TOMHTOperatingMode(str, Enum):
 @dataclass(frozen=True)
 class ModeConfiguration:
     use_initiator: bool
-    delayed_external_start_scan: int | None
+    external_starts_enabled: bool
+
+
+@dataclass(frozen=True)
+class ExternalStartTimingConfiguration:
+    start_scan: int | None
+    source: str
 
 
 def _normalize_operating_mode(mode: str | None) -> TOMHTOperatingMode:
@@ -84,44 +90,55 @@ def _normalize_operating_mode(mode: str | None) -> TOMHTOperatingMode:
     )
 
 
-def _resolve_external_start_scan(
+def _resolve_external_start_enablement(
+    *,
+    mode: TOMHTOperatingMode,
+    use_external_starts: bool,
+) -> bool:
+    if mode == TOMHTOperatingMode.INTERNAL:
+        return False
+    if mode in {TOMHTOperatingMode.EXTERNAL, TOMHTOperatingMode.BOTH}:
+        return True
+    return use_external_starts
+
+
+def _resolve_external_start_timing(
     *,
     mode: TOMHTOperatingMode,
     num_scans: int,
     external_start_scan: int | None,
     external_start_delay_scans: int | None,
-) -> int | None:
-    if mode == TOMHTOperatingMode.INTERNAL:
-        return None
-
+) -> ExternalStartTimingConfiguration:
     if external_start_scan is not None and external_start_delay_scans is not None:
         raise ValueError(
             "Specify at most one of external_start_scan and "
             "external_start_delay_scans."
         )
 
-    if external_start_scan is None and external_start_delay_scans is None:
-        return None
-
-    start_scan = (
-        external_start_scan
-        if external_start_scan is not None
-        else external_start_delay_scans
-    )
-    assert start_scan is not None
+    if external_start_scan is not None:
+        start_scan = external_start_scan
+        source = "explicit_scan"
+    elif external_start_delay_scans is not None:
+        start_scan = external_start_delay_scans
+        source = "explicit_delay"
+    elif mode in {TOMHTOperatingMode.EXTERNAL, TOMHTOperatingMode.BOTH}:
+        start_scan = 0
+        source = "mode_default_scan0"
+    else:
+        raise ValueError(
+            "External starts are enabled in CUSTOM mode, but no external-start "
+            "timing is configured. Specify external_start_scan or "
+            "external_start_delay_scans."
+        )
 
     if start_scan < 0:
-        raise ValueError("Delayed external-start scan must be non-negative.")
+        raise ValueError("External-start scan must be non-negative.")
     if start_scan >= num_scans:
         raise ValueError(
-            "Delayed external-start scan must fall within the scenario run. "
+            "External-start scan must fall within the scenario run. "
             f"Received {start_scan}, but scenario has {num_scans} scans."
         )
-    return start_scan
-
-
-def _none_to_default(value: int | None, *, default: int = 0) -> int:
-    return default if value is None else value
+    return ExternalStartTimingConfiguration(start_scan=start_scan, source=source)
 
 
 def _resolve_mode_configuration(
@@ -134,20 +151,16 @@ def _resolve_mode_configuration(
     if requested_mode == TOMHTOperatingMode.EXTERNAL:
         return ModeConfiguration(
             use_initiator=False,
-            delayed_external_start_scan=_none_to_default(
-                configuration.delayed_external_start_scan
-            ),
+            external_starts_enabled=True,
         )
     if requested_mode == TOMHTOperatingMode.INTERNAL:
         return ModeConfiguration(
             use_initiator=True,
-            delayed_external_start_scan=None,
+            external_starts_enabled=False,
         )
     return ModeConfiguration(
         use_initiator=True,
-        delayed_external_start_scan=_none_to_default(
-            configuration.delayed_external_start_scan
-        ),
+        external_starts_enabled=True,
     )
 
 
@@ -190,6 +203,7 @@ def run_tomht(
     setup: SetupName,
     *,
     use_initiator: bool = True,
+    use_external_starts: bool = False,
     operating_mode: OperatingModeName | str | None = "CUSTOM",
     external_start_scan: int | None = None,
     external_start_delay_scans: int | None = None,
@@ -241,21 +255,32 @@ def run_tomht(
 
         styles = ("g-",)
 
-    delayed_external_start_scan = _resolve_external_start_scan(
+    external_starts_enabled = _resolve_external_start_enablement(
         mode=mode,
-        num_scans=len(scans),
-        external_start_scan=external_start_scan,
-        external_start_delay_scans=external_start_delay_scans,
+        use_external_starts=use_external_starts,
     )
     mode_config = _resolve_mode_configuration(
         requested_mode=mode,
         configuration=ModeConfiguration(
             use_initiator=use_initiator,
-            delayed_external_start_scan=delayed_external_start_scan,
+            external_starts_enabled=external_starts_enabled,
         ),
     )
+    if mode_config.external_starts_enabled:
+        external_start_timing = _resolve_external_start_timing(
+            mode=mode,
+            num_scans=len(scans),
+            external_start_scan=external_start_scan,
+            external_start_delay_scans=external_start_delay_scans,
+        )
+    else:
+        # External starts are disabled; ignore timing args.
+        external_start_timing = ExternalStartTimingConfiguration(
+            start_scan=None, source="disabled"
+        )
+        
     use_initiator = mode_config.use_initiator
-    delayed_external_start_scan = mode_config.delayed_external_start_scan
+    delayed_external_start_scan = external_start_timing.start_scan
     if setup == "crossing":
         initiator = (
             tomht_initiator_for_crossing_simple(start_time, measurement_model)
@@ -308,14 +333,18 @@ def run_tomht(
         f"setup={setup} resolved={mode.value} "
         f"requested={requested_mode_raw} "
         f"births={'on' if use_initiator else 'off'} "
-        f"external_starts="
-        f"{f'scan:{delayed_external_start_scan}' if delayed_external_start_scan is not None else 'off'}"
+        f"external_starts={'on' if mode_config.external_starts_enabled else 'off'} "
+        "external_start_timing="
+        f"{f'scan:{delayed_external_start_scan}' if delayed_external_start_scan is not None else 'off'} "
+        f"external_start_timing_source={external_start_timing.source}"
     )
-    if delayed_external_start_scan is not None:
+    if mode_config.external_starts_enabled:
+        assert delayed_external_start_scan is not None
         print(
             "EXTERNAL_STARTS_CONFIG "
             f"setup={setup} mode={mode.value} "
             f"start_scan={delayed_external_start_scan} "
+            f"timing_source={external_start_timing.source} "
             "source=scenario_truth_confirmed"
         )
 

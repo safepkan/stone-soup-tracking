@@ -5,10 +5,12 @@ import unittest
 import numpy as np
 
 from mht_experiments.runners.tomht_runner import (
+    ExternalStartTimingConfiguration,
     ModeConfiguration,
     TOMHTOperatingMode,
     _normalize_operating_mode,
-    _resolve_external_start_scan,
+    _resolve_external_start_enablement,
+    _resolve_external_start_timing,
     _resolve_mode_configuration,
 )
 from mht_experiments.scenarios.bearing_range import (
@@ -21,21 +23,43 @@ from mht_experiments.scenarios.crossing_targets import (
 )
 
 
-class DelayedExternalStartConfigTest(unittest.TestCase):
-    def test_resolve_external_start_scan_returns_none_when_disabled(self) -> None:
-        self.assertIsNone(
-            _resolve_external_start_scan(
+class ExternalStartResolutionTest(unittest.TestCase):
+    def test_enablement_custom_defaults_off(self) -> None:
+        self.assertFalse(
+            _resolve_external_start_enablement(
                 mode=TOMHTOperatingMode.CUSTOM,
-                num_scans=10,
-                external_start_scan=None,
-                external_start_delay_scans=None,
+                use_external_starts=False,
             )
         )
 
-    def test_resolve_external_start_scan_uses_delay_value(self) -> None:
+    def test_enablement_custom_follows_explicit_flag(self) -> None:
+        self.assertTrue(
+            _resolve_external_start_enablement(
+                mode=TOMHTOperatingMode.CUSTOM,
+                use_external_starts=True,
+            )
+        )
+
+    def test_enablement_external_mode_forces_on(self) -> None:
+        self.assertTrue(
+            _resolve_external_start_enablement(
+                mode=TOMHTOperatingMode.EXTERNAL,
+                use_external_starts=False,
+            )
+        )
+
+    def test_enablement_internal_mode_forces_off(self) -> None:
+        self.assertFalse(
+            _resolve_external_start_enablement(
+                mode=TOMHTOperatingMode.INTERNAL,
+                use_external_starts=True,
+            )
+        )
+
+    def test_timing_uses_explicit_delay_value(self) -> None:
         self.assertEqual(
-            3,
-            _resolve_external_start_scan(
+            ExternalStartTimingConfiguration(start_scan=3, source="explicit_delay"),
+            _resolve_external_start_timing(
                 mode=TOMHTOperatingMode.CUSTOM,
                 num_scans=10,
                 external_start_scan=None,
@@ -43,24 +67,45 @@ class DelayedExternalStartConfigTest(unittest.TestCase):
             ),
         )
 
-    def test_resolve_external_start_scan_rejects_conflicting_options(self) -> None:
+    def test_timing_defaults_to_scan_zero_when_mode_enables_external_starts(
+        self,
+    ) -> None:
+        self.assertEqual(
+            ExternalStartTimingConfiguration(start_scan=0, source="mode_default_scan0"),
+            _resolve_external_start_timing(
+                mode=TOMHTOperatingMode.EXTERNAL,
+                num_scans=10,
+                external_start_scan=None,
+                external_start_delay_scans=None,
+            ),
+        )
+
+    def test_timing_rejects_custom_enabled_without_timing(self) -> None:
+        with self.assertRaisesRegex(ValueError, "CUSTOM mode"):
+            _resolve_external_start_timing(
+                mode=TOMHTOperatingMode.CUSTOM,
+                num_scans=10,
+                external_start_scan=None,
+                external_start_delay_scans=None,
+            )
+
+    def test_timing_rejects_conflicting_options(self) -> None:
         with self.assertRaisesRegex(ValueError, "at most one"):
-            _resolve_external_start_scan(
+            _resolve_external_start_timing(
                 mode=TOMHTOperatingMode.CUSTOM,
                 num_scans=10,
                 external_start_scan=2,
                 external_start_delay_scans=3,
             )
 
-    def test_resolve_external_start_scan_ignores_inputs_for_internal_mode(self) -> None:
-        self.assertIsNone(
-            _resolve_external_start_scan(
-                mode=TOMHTOperatingMode.INTERNAL,
+    def test_timing_rejects_out_of_range_scan(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must fall within"):
+            _resolve_external_start_timing(
+                mode=TOMHTOperatingMode.EXTERNAL,
                 num_scans=10,
-                external_start_scan=2,
-                external_start_delay_scans=3,
+                external_start_scan=10,
+                external_start_delay_scans=None,
             )
-        )
 
 
 class OperatingModeResolutionTest(unittest.TestCase):
@@ -86,43 +131,28 @@ class OperatingModeResolutionTest(unittest.TestCase):
         self.assertEqual(
             ModeConfiguration(
                 use_initiator=False,
-                delayed_external_start_scan=4,
+                external_starts_enabled=True,
             ),
             _resolve_mode_configuration(
                 requested_mode=TOMHTOperatingMode.CUSTOM,
                 configuration=ModeConfiguration(
                     use_initiator=False,
-                    delayed_external_start_scan=4,
+                    external_starts_enabled=True,
                 ),
             ),
         )
 
-    def test_external_mode_forces_external_only_with_default_start_scan(self) -> None:
+    def test_external_mode_forces_external_only(self) -> None:
         self.assertEqual(
             ModeConfiguration(
                 use_initiator=False,
-                delayed_external_start_scan=0,
+                external_starts_enabled=True,
             ),
             _resolve_mode_configuration(
                 requested_mode=TOMHTOperatingMode.EXTERNAL,
                 configuration=ModeConfiguration(
                     use_initiator=True,
-                    delayed_external_start_scan=None,
-                ),
-            ),
-        )
-
-    def test_external_mode_keeps_explicit_start_scan(self) -> None:
-        self.assertEqual(
-            ModeConfiguration(
-                use_initiator=False,
-                delayed_external_start_scan=3,
-            ),
-            _resolve_mode_configuration(
-                requested_mode=TOMHTOperatingMode.EXTERNAL,
-                configuration=ModeConfiguration(
-                    use_initiator=True,
-                    delayed_external_start_scan=3,
+                    external_starts_enabled=False,
                 ),
             ),
         )
@@ -131,13 +161,13 @@ class OperatingModeResolutionTest(unittest.TestCase):
         self.assertEqual(
             ModeConfiguration(
                 use_initiator=True,
-                delayed_external_start_scan=None,
+                external_starts_enabled=False,
             ),
             _resolve_mode_configuration(
                 requested_mode=TOMHTOperatingMode.INTERNAL,
                 configuration=ModeConfiguration(
                     use_initiator=False,
-                    delayed_external_start_scan=1,
+                    external_starts_enabled=True,
                 ),
             ),
         )
@@ -146,13 +176,13 @@ class OperatingModeResolutionTest(unittest.TestCase):
         self.assertEqual(
             ModeConfiguration(
                 use_initiator=True,
-                delayed_external_start_scan=0,
+                external_starts_enabled=True,
             ),
             _resolve_mode_configuration(
                 requested_mode=TOMHTOperatingMode.BOTH,
                 configuration=ModeConfiguration(
                     use_initiator=False,
-                    delayed_external_start_scan=None,
+                    external_starts_enabled=False,
                 ),
             ),
         )

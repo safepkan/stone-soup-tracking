@@ -31,7 +31,7 @@ For the near term, we want the runner/config surface to support explicit primary
    - delayed confirmed external-start injection enabled in the same run.
 
 4. **CUSTOM**
-   - explicit low-level flags (`--births`, delayed external-start config) are used directly.
+   - explicit low-level flags (`--births`, `--external-starts` / `--no-external-starts`, delayed external-start timing config) are used directly.
 
 ## 2. Design goals for this phase
 
@@ -360,8 +360,9 @@ Status (2026-03-16):
 - Added explicit runner-layer operating modes `CUSTOM`, `EXTERNAL`, `INTERNAL`, and `BOTH`, logged per run via `OPERATING_MODE ...`.
 - Added `--operating-mode {CUSTOM,EXTERNAL,INTERNAL,BOTH}` to `run_tomht_crossing.py` and `run_tomht_bearing_range.py`.
 - `EXTERNAL` / `INTERNAL` / `BOTH` now fully determine births/external-start enablement.
-- `CUSTOM` mode uses low-level toggles directly (`--births` plus external-start scan options) and intentionally permits arbitrary combinations.
-- `EXTERNAL` and `BOTH` default to `external-start-scan=0` when no external-start scan is specified; `INTERNAL` ignores external-start flags.
+- `CUSTOM` mode keeps low-level control (`--births` plus `--external-starts` / `--no-external-starts` and external-start timing flags), with external-start enablement resolved separately from timing.
+- External-start timing is now resolved as an explicit second step (`external_start_timing` + source), including explicit defaulting to `start_scan=0` for `EXTERNAL`/`BOTH` when timing is omitted.
+- When external starts are disabled, timing flags are now ignored to make enable/disable toggling easier.
 - Focused tests now cover mode normalization and mode-to-configuration mapping.
 - Headless runnable examples now exist for each primary mode in `TO_MHT_CURRENT_STATE.md`.
 

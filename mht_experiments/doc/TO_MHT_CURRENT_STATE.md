@@ -11,7 +11,8 @@ This document describes the current architecture and logic of the TO-MHT prototy
 - External-start API note (2026-03-12): `TOMHTTracker.add_external_starts(starts,timestamp)` now enforces the completed-`step()` timestamp invariant and inserts confirmed external starts into every current global hypothesis. Inserted tracks receive tracker-owned IDs and baseline maintenance metadata; they are not routed through residual/internal birth discovery and do not receive `birth_log_penalty`. Duplicate-like inputs are intentionally not deduplicated in this phase: each supplied start is treated as a distinct confirmed track.
 - Delayed external-start runner note (2026-03-12): `run_tomht_crossing.py` and `run_tomht_bearing_range.py` accept `--external-start-delay-scans N` or `--external-start-scan N` to inject confirmed external starts after `step()` at a chosen scan. Starts are derived from scenario truth state at the injection scan, inserted via `add_external_starts(...)`, and logged as `EXTERNAL_STARTS ...`.
 - Startup-interface simplification note (2026-03-16): legacy constructor-time `initial_tracks` support has been removed from `TOMHTTracker`, builder helpers, runner mode/config plumbing, and CLI. The tracker now always starts with one empty global hypothesis (`tracks_by_id={}`, `log_weight=0.0`) and `_next_track_id=0`. Confirmed upstream starts must arrive through `add_external_starts(...)` after a completed `step()`.
-- Operating-mode simplification note (2026-03-16): the runner layer uses explicit modes `CUSTOM`, `EXTERNAL`, `INTERNAL`, and `BOTH`, logged via `OPERATING_MODE ...` each run. `EXTERNAL`/`INTERNAL`/`BOTH` fully determine births/external-start enablement; `CUSTOM` keeps low-level flag control (`--births` plus external-start scan options).
+- Operating-mode simplification note (2026-03-16): the runner layer uses explicit modes `CUSTOM`, `EXTERNAL`, `INTERNAL`, and `BOTH`, logged via `OPERATING_MODE ...` each run. `EXTERNAL`/`INTERNAL`/`BOTH` fully determine births/external-start enablement; `CUSTOM` keeps low-level flag control (`--births`, `--external-starts` / `--no-external-starts`, plus external-start timing options).
+- External-start enablement/timing split note (2026-03-16): runner resolution now happens in two explicit stages: enablement (`external_starts` on/off) and timing (`external_start_timing` scan/off + `external_start_timing_source`). `CUSTOM` now uses an explicit `--external-starts` / `--no-external-starts` toggle (default off), so timing flags are timing-only. `EXTERNAL`/`BOTH` keep a simple default timing of scan 0 when no explicit timing is provided, but this is now resolved and logged as timing (`mode_default_scan0`) rather than hidden mode behavior. When external starts are disabled, timing flags are ignored.
 - Internal-birth pipeline refactor note (2026-03-16): `_branch_globals_with_births(...)` is now a staged orchestration over explicit helper boundaries (residual/candidate generation, sanity filtering, ranking/limit, template prep, compatibility/branching, and birth-stat accounting). This was a structural readability refactor only; ranking key, branching semantics, beam truncation, `BirthStats`, and external-start separation are unchanged.
 
 ## 1. High-level structure
@@ -221,14 +222,16 @@ Some important differences and simplifications:
 - `make smoke` (both scenarios, headless) produces identical logs across repeated runs except for wall-clock timestamps in the debug output.
 - A/B convenience: `run_tomht_crossing.py` / `run_tomht_bearing_range.py` accept:
   - `--operating-mode {CUSTOM,EXTERNAL,INTERNAL,BOTH}`:
-    - `CUSTOM`: uses `--births` and optional delayed external-start config directly.
-    - `EXTERNAL`: births off, external-start injection on.
-    - `INTERNAL`: births on, external-start injection off.
-    - `BOTH`: births on, external-start injection on.
-  - `--births` / `--no-births` are used in `CUSTOM` mode (default: births on),
-  - `--external-start-delay-scans N` or `--external-start-scan N` (mutually exclusive) to inject confirmed external starts after the specified 0-based scan; the delay form is equivalent to `start_scan=N` for the current scenarios because all truth tracks are pre-existing from scan 0.
-    - In `EXTERNAL` and `BOTH`, if no external-start scan is specified, the runner uses `start_scan=0`.
-    - In `INTERNAL`, external-start scan flags are ignored.
+    - `CUSTOM`: uses `--births` and `--external-starts` / `--no-external-starts`.
+    - `EXTERNAL`: births off, external-start enablement on.
+    - `INTERNAL`: births on, external-start enablement off.
+    - `BOTH`: births on, external-start enablement on.
+  - `--births` / `--no-births` and `--external-starts` / `--no-external-starts` are used in `CUSTOM` mode (defaults: births on, external starts off),
+  - `--external-start-delay-scans N` or `--external-start-scan N` (mutually exclusive) set external-start timing (injection scan) only; the delay form is equivalent to `start_scan=N` for the current scenarios because all truth tracks are pre-existing from scan 0.
+    - In `CUSTOM`, timing flags are required when external starts are enabled.
+    - In `EXTERNAL` and `BOTH`, if no explicit timing is provided, timing resolves to `start_scan=0` with source `mode_default_scan0`.
+    - When external starts are disabled (for example `INTERNAL`, or `CUSTOM --no-external-starts`), timing flags are ignored.
+  - `OPERATING_MODE ...` logs both resolution stages explicitly (`external_starts=on/off`, `external_start_timing=scan:<n>/off`, `external_start_timing_source=<...>`), and `EXTERNAL_STARTS_CONFIG ...` includes the resolved timing source.
   - `--debug-detections`, `--debug-scan-stats`, `--debug-hypotheses`, `--debug-births` (and `--no-...` forms) to override per-run debug log output toggles exposed by `TOMHTParams` while preserving the existing defaults when omitted.
 - External-start derivation in delayed mode:
   - `crossing`: inject two confirmed starts, one per truth path, using the scenario truth state vector at the configured scan and the scenario start covariance used by external-start constructors.

@@ -17,7 +17,9 @@ if __name__ == "__main__":
         default="CUSTOM",
         help=(
             "Operating mode: CUSTOM (use detailed flags), EXTERNAL, INTERNAL, "
-            "or BOTH. Non-CUSTOM modes ignore the births toggle."
+            "or BOTH. Mode resolves births/external-start behavior; CUSTOM "
+            "uses --births and --external-starts. Timing is configured "
+            "separately via external-start scan options."
         ),
     )
     parser.add_argument(
@@ -27,6 +29,13 @@ if __name__ == "__main__":
         default=True,
         help=("Enable/disable initiator/births. " "Used in CUSTOM mode (default: on)."),
     )
+    parser.add_argument(
+        "--external-starts",
+        dest="external_starts",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=("Enable/disable external starts. Used in CUSTOM mode " "(default: off)."),
+    )
     external_start_group = parser.add_mutually_exclusive_group()
     external_start_group.add_argument(
         "--external-start-delay-scans",
@@ -35,7 +44,8 @@ if __name__ == "__main__":
         default=None,
         help=(
             "Inject confirmed external starts after this many completed scans "
-            "(0-based delay from scan 0)."
+            "(0-based delay from scan 0). Timing only; enablement is resolved "
+            "before timing (mode-controlled except CUSTOM --external-starts)."
         ),
     )
     external_start_group.add_argument(
@@ -43,7 +53,11 @@ if __name__ == "__main__":
         dest="external_start_scan",
         type=int,
         default=None,
-        help=("Inject confirmed external starts after processing this 0-based scan."),
+        help=(
+            "Inject confirmed external starts after processing this 0-based scan. "
+            "Timing only; enablement is resolved before timing "
+            "(mode-controlled except CUSTOM --external-starts)."
+        ),
     )
     parser.add_argument(
         "--debug-detections",
@@ -80,6 +94,7 @@ if __name__ == "__main__":
     run_tomht(
         "bearing_range",
         use_initiator=args.births,
+        use_external_starts=args.external_starts,
         operating_mode=args.operating_mode,
         external_start_scan=args.external_start_scan,
         external_start_delay_scans=args.external_start_delay_scans,
