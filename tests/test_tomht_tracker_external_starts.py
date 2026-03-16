@@ -6,13 +6,16 @@ from typing import cast
 
 import numpy as np
 from stonesoup.hypothesiser.probability import PDAHypothesiser
+from stonesoup.types.detection import Detection
 from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
+from stonesoup.initiator.simple import SimpleMeasurementInitiator
 from stonesoup.updater.base import Updater
 
 from mht_experiments.trackers.tomht_tracker import (
     ASSOC_PAD,
     GlobalHypothesis,
+    ScanContext,
     TOMHTParams,
     TOMHTTracker,
 )
@@ -34,7 +37,20 @@ class _ZeroScoringModel:
         return 0.0
 
 
-def _build_tracker() -> TOMHTTracker:
+class _SingleBirthInitiator:
+    def __init__(self, birth_track: Track) -> None:
+        self._birth_track = birth_track
+
+    def initiate(self, detections, timestamp):
+        del detections, timestamp
+        return [self._birth_track]
+
+
+def _build_tracker(
+    *,
+    initial_tracks: list[Track] | None = None,
+    initiator: SimpleMeasurementInitiator | None = None,
+) -> TOMHTTracker:
     params = TOMHTParams(
         debug_display_scan_stats=False,
         debug_display_hypotheses=False,
@@ -44,7 +60,8 @@ def _build_tracker() -> TOMHTTracker:
     return TOMHTTracker(
         hypothesiser=cast(PDAHypothesiser, object()),
         updater=cast(Updater, object()),
-        initial_tracks=[],
+        initial_tracks=[] if initial_tracks is None else initial_tracks,
+        initiator=initiator,
         params=params,
         scoring_model=_ZeroScoringModel(),
     )
@@ -60,6 +77,77 @@ def _external_start(timestamp: datetime.datetime) -> Track:
 
 
 class TOMHTTrackerExternalStartsTest(unittest.TestCase):
+    def _assert_track_maintenance_metadata(
+        self,
+        track: Track,
+        *,
+        age: int,
+        hits: int,
+        missed_count: int,
+        last_det_key: int | None,
+        last_det_hit: bool,
+    ) -> None:
+        self.assertIsInstance(track.metadata["track_id"], int)
+        self.assertEqual(age, track.metadata["age"])
+        self.assertEqual(hits, track.metadata["hits"])
+        self.assertEqual(missed_count, track.metadata["missed_count"])
+        self.assertEqual(last_det_key, track.metadata["last_det_key"])
+        self.assertEqual(last_det_hit, track.metadata["last_det_hit"])
+        self.assertEqual(
+            [ASSOC_PAD] * track.metadata["assoc_history"].maxlen,
+            list(track.metadata["assoc_history"]),
+        )
+
+    def test_constructor_initial_track_metadata_uses_shared_conventions(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        initial_track = _external_start(timestamp)
+        initial_track.metadata["source"] = "constructor"
+
+        tracker = _build_tracker(initial_tracks=[initial_track])
+        inserted = tracker.global_hypotheses[0].tracks_by_id[0]
+
+        self._assert_track_maintenance_metadata(
+            inserted,
+            age=1,
+            hits=0,
+            missed_count=0,
+            last_det_key=None,
+            last_det_hit=False,
+        )
+        self.assertEqual("constructor", inserted.metadata["source"])
+
+    def test_internal_birth_inserted_track_metadata_uses_shared_conventions(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        birth_track = _external_start(timestamp)
+        birth_track.metadata["source"] = "initiator"
+        tracker = _build_tracker(
+            initiator=cast(
+                SimpleMeasurementInitiator,
+                _SingleBirthInitiator(birth_track),
+            )
+        )
+        detection = Detection(np.array([[1.0], [2.0]]), timestamp=timestamp)
+        ctx = ScanContext(
+            timestamp=timestamp,
+            detections=[detection],
+            det_index_by_obj={id(detection): 0},
+        )
+
+        tracker._branch_globals_with_births(ctx)
+        inserted = next(iter(tracker.global_hypotheses[0].tracks_by_id.values()))
+
+        self._assert_track_maintenance_metadata(
+            inserted,
+            age=1,
+            hits=0,
+            missed_count=0,
+            last_det_key=None,
+            last_det_hit=False,
+        )
+        self.assertEqual("initiator", inserted.metadata["source"])
+
     def test_add_external_starts_rejects_call_before_step(self) -> None:
         tracker = _build_tracker()
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
@@ -166,14 +254,13 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
 
         inserted = next(iter(tracker.global_hypotheses[0].tracks_by_id.values()))
 
-        self.assertEqual(1, inserted.metadata["age"])
-        self.assertEqual(1, inserted.metadata["hits"])
-        self.assertEqual(0, inserted.metadata["missed_count"])
-        self.assertIsNone(inserted.metadata["last_det_key"])
-        self.assertFalse(inserted.metadata["last_det_hit"])
-        self.assertEqual(
-            [ASSOC_PAD] * tracker.params.assoc_history_len,
-            list(inserted.metadata["assoc_history"]),
+        self._assert_track_maintenance_metadata(
+            inserted,
+            age=1,
+            hits=1,
+            missed_count=0,
+            last_det_key=None,
+            last_det_hit=False,
         )
         self.assertEqual("upstream", inserted.metadata["source"])
 

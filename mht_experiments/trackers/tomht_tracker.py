@@ -317,10 +317,18 @@ class TOMHTTracker:
         max_tid = -1
         for i, tr in enumerate(list(initial_tracks)):
             tid = int(tr.metadata.get("track_id", i))
-            tr.metadata["track_id"] = tid
-            tr.metadata.setdefault("missed_count", 0)
             last_det = tr.metadata.get("last_det_key", None)
-            tr.metadata["assoc_history"] = self._new_assoc_history(last_det)
+            # Keep constructor defaults as before (age from len(track), hits default 0),
+            # but write tracker-owned fields via the shared metadata path.
+            self._write_track_maintenance_metadata(
+                tr,
+                track_id=tid,
+                age=int(tr.metadata.get("age", len(tr))),
+                hits=int(tr.metadata.get("hits", 0)),
+                missed_count=int(tr.metadata.get("missed_count", 0)),
+                last_det_key=last_det,
+                last_det_hit=tr.metadata.get("last_det_hit", None),
+            )
             init_tracks_by_id[tid] = tr
             max_tid = max(max_tid, tid)
 
@@ -517,6 +525,28 @@ class TOMHTTracker:
             child.metadata["assoc_history"] = deque(hist, maxlen=hist.maxlen)
         return child
 
+    def _write_track_maintenance_metadata(
+        self,
+        track: Track,
+        *,
+        track_id: int,
+        age: int,
+        hits: int,
+        missed_count: int,
+        last_det_key: int | None,
+        last_det_hit: bool | None = None,
+    ) -> None:
+        """Write tracker-owned maintenance metadata fields in one place."""
+        track.metadata["track_id"] = int(track_id)
+        track.metadata["age"] = int(age)
+        track.metadata["hits"] = int(hits)
+        track.metadata["missed_count"] = int(missed_count)
+        track.metadata["last_det_key"] = last_det_key
+        track.metadata["last_det_hit"] = (
+            last_det_key is not None if last_det_hit is None else bool(last_det_hit)
+        )
+        track.metadata["assoc_history"] = self._new_assoc_history(last_det_key)
+
     def _initialise_inserted_track_metadata(
         self,
         track: Track,
@@ -529,16 +559,15 @@ class TOMHTTracker:
     ) -> None:
         age = max(int(age), 1)
         hits = min(max(int(hits), 0), age)
-
-        track.metadata["track_id"] = track_id
-        track.metadata["age"] = age
-        track.metadata["hits"] = hits
-        track.metadata["missed_count"] = 0
-        track.metadata["last_det_key"] = last_det_key
-        track.metadata["last_det_hit"] = (
-            last_det_key is not None if last_det_hit is None else bool(last_det_hit)
+        self._write_track_maintenance_metadata(
+            track,
+            track_id=track_id,
+            age=age,
+            hits=hits,
+            missed_count=0,
+            last_det_key=last_det_key,
+            last_det_hit=last_det_hit,
         )
-        track.metadata["assoc_history"] = self._new_assoc_history(last_det_key)
 
     def _make_external_start_template(self, start: Track, timestamp: object) -> Track:
         if len(start) == 0:

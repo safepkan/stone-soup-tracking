@@ -330,7 +330,13 @@ Review focus:
 - clarity of the configuration/CLI surface,
 - usefulness of the resulting logs and summaries.
 
-### Task 4 — Extract shared inserted-track metadata helper
+### Task 4 — Implemented: shared inserted-track metadata initialisation path
+
+Status (2026-03-16):
+- Constructor-time initial tracks now write tracker-owned maintenance metadata through the same shared metadata-write helper used by inserted tracks.
+- Internal birth insertion and external-start insertion continue to use the inserted-track metadata helper, which now delegates field writes to that same shared path.
+- Constructor defaults are intentionally unchanged: `age` still defaults to `len(track)` and `hits` still defaults to `0` when absent, while inserted tracks keep their existing conventions.
+- Focused tracker tests now make the metadata conventions explicit across constructor-time initial tracks, internal births, and external starts.
 
 Scope:
 - factor constructor-time initial-track setup, internal-birth insertion, and external-start insertion
