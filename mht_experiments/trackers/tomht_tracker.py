@@ -102,6 +102,13 @@ class BirthStats:
 
 
 @dataclass(frozen=True)
+class BirthTemplate:
+    track_id: int
+    template_track: Track
+    used_det_key: int | None
+
+
+@dataclass(frozen=True)
 class ScanStats:
     timestamp: object
     num_detections: int
@@ -848,175 +855,236 @@ class TOMHTTracker:
 
         return True
 
+    def _generate_birth_candidates(self, ctx: ScanContext) -> tuple[int, list[Track]]:
+        residual = self._residual_detections(self.global_hypotheses, ctx.detections)
+        assert self.initiator is not None
+        born = (
+            list(self.initiator.initiate(OrderedSet(residual), ctx.timestamp))
+            if residual
+            else []
+        )
+        return len(residual), born
+
+    def _filter_birth_candidates(self, born: list[Track]) -> list[Track]:
+        return [tr for tr in born if self._birth_is_sane(tr)]
+
+    def _birth_ranking_key(
+        self, tr: Track, det_index_by_obj: dict[int, int]
+    ) -> tuple[int, int, int, float, int]:
+        used = self._birth_used_key(tr, det_index_by_obj)
+        support, age, misses = self._birth_support_age_misses(tr)
+        covtr = self._birth_covar_trace(tr)
+
+        # Prefer: more support, fewer misses, shorter holding age (i.e. confirmed quickly),
+        # then tighter covariance, then deterministic tie-break.
+        return (
+            -support,
+            misses,
+            age,
+            covtr,
+            used if used is not None else 10**9,
+        )
+
+    def _score_and_rank_birth_candidates(
+        self, born: list[Track], det_index_by_obj: dict[int, int]
+    ) -> list[tuple[tuple[int, int, int, float, int], Track]]:
+        born_scored = [
+            (self._birth_ranking_key(tr, det_index_by_obj), tr) for tr in born
+        ]
+        born_scored.sort(key=lambda kt: kt[0])
+        return born_scored
+
+    def _select_kept_birth_candidates(
+        self,
+        born_scored: list[tuple[tuple[int, int, int, float, int], Track]],
+        *,
+        det_index_by_obj: dict[int, int],
+        timestamp: object,
+    ) -> list[Track]:
+        born = [tr for _, tr in born_scored]
+        if self.params.debug_display_births:
+            print(f"\nBirth candidates at {timestamp} (pre-limit): {len(born_scored)}")
+            self._display_births(born, det_index_by_obj)
+
+        born = born[: self.params.max_births_per_scan]
+
+        if self.params.debug_display_births:
+            print(f"Births kept (post-limit): {len(born)}")
+            self._display_births(born, det_index_by_obj)
+        return born
+
+    def _prepare_birth_templates(
+        self, born: list[Track], det_index_by_obj: dict[int, int]
+    ) -> tuple[list[BirthTemplate], set[int]]:
+        birth_templates: list[BirthTemplate] = []
+        birth_track_ids: set[int] = set()
+        for tr in born:
+            tid = self._next_track_id
+            self._next_track_id += 1
+            used_key = self._birth_used_key(tr, det_index_by_obj)
+            birth_templates.append(
+                BirthTemplate(
+                    track_id=tid,
+                    template_track=tr,
+                    used_det_key=used_key,
+                )
+            )
+            birth_track_ids.add(tid)
+        return birth_templates, birth_track_ids
+
+    def _insert_birth_templates_into_global(
+        self,
+        gh: GlobalHypothesis,
+        templates: Iterable[BirthTemplate],
+        ctx: ScanContext,
+    ) -> GlobalHypothesis:
+        tracks_by_id = dict(gh.tracks_by_id)
+        birth_delta_total = 0.0
+
+        for template in templates:
+            tr_copy = self._copy_track(template.template_track)
+            self._initialise_inserted_track_metadata(
+                tr_copy,
+                track_id=template.track_id,
+                age=1,
+                hits=1 if template.used_det_key is not None else 0,
+                last_det_key=template.used_det_key,
+            )
+            tracks_by_id[template.track_id] = tr_copy
+
+            birth_delta_total += self.scoring_model.score_birth(
+                birth_track=tr_copy,
+                used_det_key=template.used_det_key,
+                ctx=ctx,
+            )
+
+        return GlobalHypothesis(
+            tracks_by_id=tracks_by_id,
+            log_weight=gh.log_weight + birth_delta_total,
+        )
+
+    def _compatible_birth_templates_for_global(
+        self, gh: GlobalHypothesis, birth_templates: list[BirthTemplate]
+    ) -> list[BirthTemplate]:
+        used_in_gh = self._used_det_keys_in_global(gh)
+        return [
+            template
+            for template in birth_templates
+            if template.used_det_key is None or template.used_det_key not in used_in_gh
+        ]
+
+    def _branch_global_with_birth_templates(
+        self,
+        gh: GlobalHypothesis,
+        compatible: list[BirthTemplate],
+        ctx: ScanContext,
+    ) -> list[GlobalHypothesis]:
+        branched: list[GlobalHypothesis] = []
+
+        # If there are no tracks yet, don't keep the empty hypothesis once we have births to add.
+        if gh.tracks_by_id:
+            branched.append(gh)
+
+        # Always allow one-birth variants for compatible candidates.
+        for template in compatible:
+            branched.append(
+                self._insert_birth_templates_into_global(
+                    gh,
+                    [template],
+                    ctx,
+                )
+            )
+
+        # Optional: also include the "two births at once" variant when exactly 2 are compatible.
+        if len(compatible) >= 2 and self.params.max_births_per_scan >= 2:
+            first = compatible[0]
+            second = compatible[1]
+            if (
+                first.used_det_key is None
+                or second.used_det_key is None
+                or first.used_det_key != second.used_det_key
+            ):  # should always hold, but be safe
+                branched.append(
+                    self._insert_birth_templates_into_global(
+                        gh,
+                        [first, second],
+                        ctx,
+                    )
+                )
+        return branched
+
+    def _branch_globals_with_birth_templates(
+        self,
+        birth_templates: list[BirthTemplate],
+        ctx: ScanContext,
+    ) -> None:
+        new_globals: list[GlobalHypothesis] = []
+        for gh in self.global_hypotheses:
+            compatible = self._compatible_birth_templates_for_global(
+                gh, birth_templates
+            )
+            new_globals.extend(
+                self._branch_global_with_birth_templates(
+                    gh,
+                    compatible,
+                    ctx,
+                )
+            )
+
+        new_globals.sort(key=lambda g: g.log_weight, reverse=True)
+        self.global_hypotheses = new_globals[: self.params.max_global_hypotheses]
+
+    def _birth_beam_stats(self, birth_track_ids: set[int]) -> tuple[int, int]:
+        if not birth_track_ids:
+            return 0, 0
+        birth_track_instances_in_beam = sum(
+            1
+            for gh in self.global_hypotheses
+            for tr in gh.tracks_by_id.values()
+            if int(tr.metadata.get("track_id", -1)) in birth_track_ids
+        )
+        globals_with_birth = sum(
+            1
+            for gh in self.global_hypotheses
+            if any(
+                int(tr.metadata.get("track_id", -1)) in birth_track_ids
+                for tr in gh.tracks_by_id.values()
+            )
+        )
+        return birth_track_instances_in_beam, globals_with_birth
+
     def _branch_globals_with_births(
         self,
         ctx: ScanContext,
     ) -> BirthStats:
         globals_before_births = len(self.global_hypotheses)
         if self.initiator is not None and self.global_hypotheses:
-            residual = self._residual_detections(self.global_hypotheses, ctx.detections)
-            residual_detections_considered = len(residual)
-
-            born = (
-                list(self.initiator.initiate(OrderedSet(residual), ctx.timestamp))
-                if residual
-                else []
-            )
+            residual_detections_considered, born = self._generate_birth_candidates(ctx)
             birth_tracks_created = len(born)
 
-            born = [tr for tr in born if self._birth_is_sane(tr)]
-
-            born_scored: list[tuple[tuple, Track]] = []
-            for tr in born:
-                used = self._birth_used_key(tr, ctx.det_index_by_obj)
-                support, age, misses = self._birth_support_age_misses(tr)
-                covtr = self._birth_covar_trace(tr)
-
-                # Prefer: more support, fewer misses, shorter holding age (i.e. confirmed quickly),
-                # then tighter covariance, then deterministic tie-break.
-                key = (
-                    -support,
-                    misses,
-                    age,
-                    covtr,
-                    used if used is not None else 10**9,
-                )
-
-                born_scored.append((key, tr))
-
-            born_scored.sort(key=lambda kt: kt[0])
-            born = [tr for _, tr in born_scored]
-
-            if self.params.debug_display_births:
-                print(
-                    f"\nBirth candidates at {ctx.timestamp} (pre-limit): {len(born_scored)}"
-                )
-                self._display_births(born, ctx.det_index_by_obj)
-
-            born = born[: self.params.max_births_per_scan]
+            born = self._filter_birth_candidates(born)
+            born_scored = self._score_and_rank_birth_candidates(
+                born, ctx.det_index_by_obj
+            )
+            born = self._select_kept_birth_candidates(
+                born_scored,
+                det_index_by_obj=ctx.det_index_by_obj,
+                timestamp=ctx.timestamp,
+            )
             birth_tracks_kept = len(born)
-
-            if self.params.debug_display_births:
-                print(f"Births kept (post-limit): {len(born)}")
-                self._display_births(born, ctx.det_index_by_obj)
 
             birth_track_ids: set[int] = set()
             if born:
                 # Allocate stable IDs once for these births (shared across variants)
-                birth_templates: list[tuple[int, Track, int | None]] = []
-                for tr in born:
-                    tid = self._next_track_id
-                    self._next_track_id += 1
-                    used_key = self._birth_used_key(tr, ctx.det_index_by_obj)
-                    birth_templates.append((tid, tr, used_key))
-                    birth_track_ids.add(tid)
-
-                new_globals: list[GlobalHypothesis] = []
-                for gh in self.global_hypotheses:
-                    # If there are no tracks yet, don't keep the empty hypothesis once we have births to add.
-                    if gh.tracks_by_id:
-                        new_globals.append(gh)
-
-                    used_in_gh = self._used_det_keys_in_global(gh)
-                    compatible = [
-                        (tid, tr, used)
-                        for (tid, tr, used) in birth_templates
-                        if used is None or used not in used_in_gh
-                    ]
-
-                    # Always allow "no birth" variant (except for empty start heuristic, see above)
-                    # and then branch with births one-by-one.
-                    for tid, template, used in compatible:
-                        tracks_by_id = dict(gh.tracks_by_id)
-
-                        tr_copy = self._copy_track(template)
-                        self._initialise_inserted_track_metadata(
-                            tr_copy,
-                            track_id=tid,
-                            age=1,
-                            hits=1 if used is not None else 0,
-                            last_det_key=used,
-                        )
-
-                        tracks_by_id[tid] = tr_copy
-                        birth_delta = self.scoring_model.score_birth(
-                            birth_track=tr_copy,
-                            used_det_key=used,
-                            ctx=ctx,
-                        )
-                        new_globals.append(
-                            GlobalHypothesis(
-                                tracks_by_id=tracks_by_id,
-                                log_weight=gh.log_weight + birth_delta,
-                            )
-                        )
-
-                    # Optional: also include the "two births at once" variant when exactly 2 are compatible.
-                    use_two_births = True
-                    if use_two_births:
-                        if (
-                            len(compatible) >= 2
-                            and self.params.max_births_per_scan >= 2
-                        ):
-                            (tid1, t1, u1), (tid2, t2, u2) = (
-                                compatible[0],
-                                compatible[1],
-                            )
-                            if (
-                                u1 is None or u2 is None or u1 != u2
-                            ):  # should always hold, but be safe
-                                tracks_by_id = dict(gh.tracks_by_id)
-                                birth_delta_total = 0.0
-
-                                for tid, template, used in [
-                                    (tid1, t1, u1),
-                                    (tid2, t2, u2),
-                                ]:
-                                    tr_copy = self._copy_track(template)
-                                    self._initialise_inserted_track_metadata(
-                                        tr_copy,
-                                        track_id=tid,
-                                        age=1,
-                                        hits=1 if used is not None else 0,
-                                        last_det_key=used,
-                                    )
-                                    tracks_by_id[tid] = tr_copy
-
-                                    birth_delta_total += self.scoring_model.score_birth(
-                                        birth_track=tr_copy,
-                                        used_det_key=used,
-                                        ctx=ctx,
-                                    )
-
-                                new_globals.append(
-                                    GlobalHypothesis(
-                                        tracks_by_id=tracks_by_id,
-                                        log_weight=gh.log_weight + birth_delta_total,
-                                    )
-                                )
-
-                new_globals.sort(key=lambda g: g.log_weight, reverse=True)
-                self.global_hypotheses = new_globals[
-                    : self.params.max_global_hypotheses
-                ]
-
-            birth_track_instances_in_beam = 0
-            globals_with_birth = 0
-            if birth_track_ids:
-                birth_track_instances_in_beam = sum(
-                    1
-                    for gh in self.global_hypotheses
-                    for tr in gh.tracks_by_id.values()
-                    if int(tr.metadata.get("track_id", -1)) in birth_track_ids
+                birth_templates, birth_track_ids = self._prepare_birth_templates(
+                    born,
+                    ctx.det_index_by_obj,
                 )
-                globals_with_birth = sum(
-                    1
-                    for gh in self.global_hypotheses
-                    if any(
-                        int(tr.metadata.get("track_id", -1)) in birth_track_ids
-                        for tr in gh.tracks_by_id.values()
-                    )
-                )
+                self._branch_globals_with_birth_templates(birth_templates, ctx)
+
+            birth_track_instances_in_beam, globals_with_birth = self._birth_beam_stats(
+                birth_track_ids
+            )
 
             return BirthStats(
                 residual_detections_considered=residual_detections_considered,

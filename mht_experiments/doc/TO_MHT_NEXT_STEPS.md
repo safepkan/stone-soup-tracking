@@ -379,19 +379,25 @@ Review focus:
 - no hidden coupling,
 - accurate docs/comments.
 
-### Task 6 — Refactor internal birth pipeline into explicit stages
+### Task 6 — Implemented: internal birth pipeline staged helper refactor
+
+Status (2026-03-16):
+- `_branch_globals_with_births(...)` is now a short orchestration method over explicit helper stages:
+  residual/candidate generation, sanity filtering, ranking/limit, template preparation,
+  compatibility/branching, and birth-stat accounting.
+- Existing birth ranking key, `max_births_per_scan` handling, compatibility rules, no-birth/one-birth/two-birth branching, and beam truncation semantics were preserved.
+- External-start handling remains on its separate path (`add_external_starts(...)`) and is not routed through internal birth discovery.
+- Focused tracker regression tests now pin stage semantics for ranking/limit, compatibility filtering, and branching/`BirthStats` behavior.
 
 Scope:
-- split the current internal birth path into clearer helper stages,
-- preserve behaviour as closely as practical,
-- keep instrumentation intact,
-- add/update checks around ranking/filtering/branching behaviour where feasible.
+- structural readability/maintainability refactor only,
+- preserve internal-birth behaviour as closely as practical,
+- keep scan/run instrumentation semantics intact.
 
 Review focus:
-- readability,
-- stable semantics,
-- easier future modification,
-- no accidental redesign disguised as refactor.
+- clear stage boundaries,
+- no accidental behavioural redesign,
+- easier localized changes in future birth-model work.
 
 ### Task 7 — Documentation sync after implementation lands
 

@@ -12,6 +12,7 @@ This document describes the current architecture and logic of the TO-MHT prototy
 - Delayed external-start runner note (2026-03-12): `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now accept `--external-start-delay-scans N` or `--external-start-scan N` to inject confirmed external starts after `step()` at a chosen scan. Starts are derived from scenario truth state at the injection scan, inserted via `add_external_starts(...)`, logged as `EXTERNAL_STARTS ...`, and intended for runs without scenario initial tracks. Internal births remain independently toggleable via `--births` / `--no-births`.
 - Metadata-initialisation consistency note (2026-03-16): constructor-time initial tracks now write tracker-owned maintenance metadata through the same shared write path used by inserted tracks (internal births and external starts). Constructor defaults remain intentionally unchanged (`age` from `len(track)`, `hits` default `0`), while inserted tracks keep their existing inserted-start conventions. Focused tracker tests now check constructor, birth, and external-start metadata field initialisation (`track_id`, `age`, `hits`, `missed_count`, `last_det_key`, `last_det_hit`, `assoc_history`).
 - Operating-mode simplification note (2026-03-16): the runner layer now uses explicit modes `CUSTOM`, `EXTERNAL`, `INTERNAL`, and `BOTH`, logged via `OPERATING_MODE ...` each run. `EXTERNAL`/`INTERNAL`/`BOTH` fully determine births/initial-track/external-start enablement; `CUSTOM` keeps low-level flag control with no mode-specific combination checks.
+- Internal-birth pipeline refactor note (2026-03-16): `_branch_globals_with_births(...)` is now a staged orchestration over explicit helper boundaries (residual/candidate generation, sanity filtering, ranking/limit, template prep, compatibility/branching, and birth-stat accounting). This was a structural readability refactor only; ranking key, branching semantics, beam truncation, `BirthStats`, and external-start separation are unchanged.
 
 ## 1. High-level structure
 
@@ -250,7 +251,7 @@ It is already useful as a playground / experimental platform, but it **intention
 
 The tracker now has a practical delayed external-start harness in the existing scenario runners,
 so `crossing` and `bearing_range` can exercise the confirmed external-start path with headless-friendly commands.
-The remaining near-term cleanup is to make inserted-track metadata handling and operating modes more explicit,
+Recent cleanup has made inserted-track metadata handling, runner operating modes, and the internal birth pipeline staging explicit,
 without broadening external-start semantics beyond confirmed upstream starts.
 
-The next major steps are the shared inserted-track metadata helper, clearer operating-mode surfacing, and later N-scan-lite / scoring refinements.
+The next major steps are later N-scan-lite / scoring refinements and broader TO-MHT model evolution tasks.
