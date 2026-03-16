@@ -16,14 +16,22 @@ The main immediate gap is **integration-facing initiation / birth handling**:
 - the first realistic integration target needs **external track initiation**,
 - and the first integration step is likely to replace only an existing **system tracker**, not the whole upstream start pipeline.
 
-For the near term, we want the tracker to work cleanly in two modes:
+For the near term, we want the runner/config surface to support explicit primary modes plus a simple custom override mode:
 
-1. **External-initiation mode (priority)**
-   - upstream code provides **confirmed new system tracks** after each scan,
-   - TO-MHT takes over from there.
+1. **EXTERNAL**
+   - no scenario initial tracks,
+   - no internal births,
+   - confirmed external starts injected at runtime.
 
-2. **Standalone internal-birth mode**
+2. **INTERNAL**
    - TO-MHT can still run self-contained experiments using an internal initiator.
+
+3. **BOTH**
+   - internal births enabled,
+   - delayed confirmed external-start injection enabled in the same run.
+
+4. **CUSTOM**
+   - explicit low-level flags (`--births`, `--initial-tracks`, delayed external-start config) are used directly.
 
 ## 2. Design goals for this phase
 
@@ -308,7 +316,7 @@ Status (2026-03-12):
 - `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now accept `--external-start-delay-scans N` or `--external-start-scan N` and pass the configuration through `run_tomht(...)`.
 - The runner injects confirmed external starts after `step()` at the configured scan via `add_external_starts(...)` and prints explicit `EXTERNAL_STARTS_CONFIG ...` / `EXTERNAL_STARTS ...` log lines.
 - `crossing` derives two confirmed starts from the truth paths at the injection scan; `bearing_range` derives three confirmed starts from the simulator truth paths at the injection scan.
-- The delayed-start mode is intended for runs without scenario initial tracks; internal births remain independently configurable so external-only checks can use `--no-births`.
+- The delayed-start mode is intended for runs without scenario initial tracks; internal births remain independently configurable (now surfaced via `CUSTOM`/`EXTERNAL`/`INTERNAL`/`BOTH` mode selection).
 - Focused runner/scenario tests cover delayed-start scan resolution and truth-derived external-start construction for both scenarios.
 
 Scope:
@@ -349,10 +357,19 @@ Review focus:
 - minimal behavioural churn,
 - readability.
 
-### Task 5 — Make operating modes explicit and testable
+### Task 5 — Implemented: explicit and validated runner operating modes
+
+Status (2026-03-16):
+- Added explicit runner-layer operating modes `CUSTOM`, `EXTERNAL`, `INTERNAL`, and `BOTH`, logged per run via `OPERATING_MODE ...`.
+- Added `--operating-mode {CUSTOM,EXTERNAL,INTERNAL,BOTH}` to `run_tomht_crossing.py` and `run_tomht_bearing_range.py`.
+- `EXTERNAL` / `INTERNAL` / `BOTH` now fully determine births/initial-track/external-start enablement and ignore the births/initial-track toggles.
+- `CUSTOM` mode uses low-level toggles directly and intentionally permits arbitrary combinations.
+- `EXTERNAL` and `BOTH` default to `external-start-scan=0` when no external-start scan is specified; `INTERNAL` ignores external-start flags.
+- Focused tests now cover mode normalization and mode-to-configuration mapping.
+- Headless runnable examples now exist for each primary mode in `TO_MHT_CURRENT_STATE.md`.
 
 Scope:
-- make external-only / internal-only / both configuration paths explicit,
+- make `EXTERNAL` / `INTERNAL` / `BOTH` (plus `CUSTOM`) configuration paths explicit,
 - ensure runner/config surface is clear,
 - align the new scenario-runner mode with the intended tracker operating modes,
 - add smoke-style coverage for each mode where practical.

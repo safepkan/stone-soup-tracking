@@ -11,6 +11,7 @@ This document describes the current architecture and logic of the TO-MHT prototy
 - External-start API note (2026-03-12): `TOMHTTracker.add_external_starts(starts,timestamp)` now enforces the completed-`step()` timestamp invariant and inserts confirmed external starts into every current global hypothesis. Inserted tracks receive tracker-owned IDs and baseline maintenance metadata; they are not routed through residual/internal birth discovery and do not receive `birth_log_penalty`. Duplicate-like inputs are intentionally not deduplicated in this phase: each supplied start is treated as a distinct confirmed track.
 - Delayed external-start runner note (2026-03-12): `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now accept `--external-start-delay-scans N` or `--external-start-scan N` to inject confirmed external starts after `step()` at a chosen scan. Starts are derived from scenario truth state at the injection scan, inserted via `add_external_starts(...)`, logged as `EXTERNAL_STARTS ...`, and intended for runs without scenario initial tracks. Internal births remain independently toggleable via `--births` / `--no-births`.
 - Metadata-initialisation consistency note (2026-03-16): constructor-time initial tracks now write tracker-owned maintenance metadata through the same shared write path used by inserted tracks (internal births and external starts). Constructor defaults remain intentionally unchanged (`age` from `len(track)`, `hits` default `0`), while inserted tracks keep their existing inserted-start conventions. Focused tracker tests now check constructor, birth, and external-start metadata field initialisation (`track_id`, `age`, `hits`, `missed_count`, `last_det_key`, `last_det_hit`, `assoc_history`).
+- Operating-mode simplification note (2026-03-16): the runner layer now uses explicit modes `CUSTOM`, `EXTERNAL`, `INTERNAL`, and `BOTH`, logged via `OPERATING_MODE ...` each run. `EXTERNAL`/`INTERNAL`/`BOTH` fully determine births/initial-track/external-start enablement; `CUSTOM` keeps low-level flag control with no mode-specific combination checks.
 
 ## 1. High-level structure
 
@@ -218,16 +219,23 @@ Some important differences and simplifications:
 - Global hypothesis branching/pruning uses deterministic sort keys; the tracker itself does no additional sampling.
 - `make smoke` (both scenarios, headless) produces identical logs across repeated runs except for wall-clock timestamps in the debug output.
 - A/B convenience: `run_tomht_crossing.py` / `run_tomht_bearing_range.py` accept:
-  - `--births` / `--no-births` (BooleanOptionalAction) to toggle initiator use,
-  - `--initial-tracks` / `--no-initial-tracks` (BooleanOptionalAction) to toggle scenario-provided initial tracks (defaults match each scenario: crossing = births on, initial tracks off; bearing_range = births on, initial tracks off).
+  - `--operating-mode {CUSTOM,EXTERNAL,INTERNAL,BOTH}`:
+    - `CUSTOM`: uses `--births` / `--initial-tracks` and optional delayed external-start config directly.
+    - `EXTERNAL`: births off, initial tracks off, external-start injection on.
+    - `INTERNAL`: births on, initial tracks off, external-start injection off.
+    - `BOTH`: births on, initial tracks off, external-start injection on.
+  - `--births` / `--no-births` and `--initial-tracks` / `--no-initial-tracks` are used in `CUSTOM` mode (defaults: births on, initial tracks off),
   - `--external-start-delay-scans N` or `--external-start-scan N` (mutually exclusive) to inject confirmed external starts after the specified 0-based scan; the delay form is equivalent to `start_scan=N` for the current scenarios because all truth tracks are pre-existing from scan 0.
+    - In `EXTERNAL` and `BOTH`, if no external-start scan is specified, the runner uses `start_scan=0`.
+    - In `INTERNAL`, external-start scan flags are ignored.
   - `--debug-detections`, `--debug-scan-stats`, `--debug-hypotheses`, `--debug-births` (and `--no-...` forms) to override per-run debug log output toggles exposed by `TOMHTParams` while preserving the existing defaults when omitted.
 - External-start derivation in delayed mode:
   - `crossing`: inject two confirmed starts, one per truth path, using the scenario truth state vector at the configured scan and the same covariance used by the scenario’s TO-MHT initial tracks.
   - `bearing_range`: inject three confirmed starts, one per pre-existing truth path from the Stone Soup simulator, using the truth state vector at the configured scan and the same covariance used by the scenario’s TO-MHT initial tracks.
-- Headless delayed-start examples:
-  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_crossing.py --no-births --external-start-delay-scans 3 --no-debug-hypotheses --no-debug-births`
-  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_bearing_range.py --no-births --external-start-scan 4 --no-debug-hypotheses --no-debug-births`
+- Headless mode examples (`crossing`):
+  - internal: `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_crossing.py --operating-mode INTERNAL --no-debug-hypotheses --no-debug-births`
+  - external: `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_crossing.py --operating-mode EXTERNAL --external-start-scan 3 --no-debug-hypotheses --no-debug-births`
+  - both: `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_crossing.py --operating-mode BOTH --external-start-scan 3 --no-debug-hypotheses --no-debug-births`
 - Current limitation: delayed external-start mode assumes the scenario truths are already active from scan 0 and injects all confirmed starts together at one configured scan. Per-track staggered external-start schedules and broader operating-mode cleanup remain future work.
 
 ## 5. Summary

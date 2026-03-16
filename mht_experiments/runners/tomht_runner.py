@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import datetime
 import os
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from enum import Enum
 from pathlib import Path
 from typing import Literal
 
@@ -47,14 +48,55 @@ from mht_experiments.trackers.tomht_tracker import (  # noqa: E402
 
 
 SetupName = Literal["crossing", "bearing_range"]
+OperatingModeName = Literal["CUSTOM", "EXTERNAL", "INTERNAL", "BOTH"]
+
+
+class TOMHTOperatingMode(str, Enum):
+    CUSTOM = "CUSTOM"
+    EXTERNAL = "EXTERNAL"
+    INTERNAL = "INTERNAL"
+    BOTH = "BOTH"
+
+    @classmethod
+    def choices(cls) -> tuple[str, ...]:
+        return tuple(mode.value for mode in cls)
+
+
+@dataclass(frozen=True)
+class ModeConfiguration:
+    use_initiator: bool
+    use_initial_tracks: bool
+    delayed_external_start_scan: int | None
+
+
+def _normalize_operating_mode(mode: str | None) -> TOMHTOperatingMode:
+    if mode is None:
+        return TOMHTOperatingMode.CUSTOM
+    normalized = mode.upper().replace("_", "-")
+    if normalized == TOMHTOperatingMode.CUSTOM.value:
+        return TOMHTOperatingMode.CUSTOM
+    if normalized == TOMHTOperatingMode.EXTERNAL.value:
+        return TOMHTOperatingMode.EXTERNAL
+    if normalized == TOMHTOperatingMode.INTERNAL.value:
+        return TOMHTOperatingMode.INTERNAL
+    if normalized == TOMHTOperatingMode.BOTH.value:
+        return TOMHTOperatingMode.BOTH
+    raise ValueError(
+        "Unknown operating mode. Expected one of "
+        f"{', '.join(TOMHTOperatingMode.choices())}, got {mode!r}."
+    )
 
 
 def _resolve_external_start_scan(
     *,
+    mode: TOMHTOperatingMode,
     num_scans: int,
     external_start_scan: int | None,
     external_start_delay_scans: int | None,
 ) -> int | None:
+    if mode == TOMHTOperatingMode.INTERNAL:
+        return None
+
     if external_start_scan is not None and external_start_delay_scans is not None:
         raise ValueError(
             "Specify at most one of external_start_scan and "
@@ -79,6 +121,40 @@ def _resolve_external_start_scan(
             f"Received {start_scan}, but scenario has {num_scans} scans."
         )
     return start_scan
+
+
+def _none_to_default(value: int | None, *, default: int = 0) -> int:
+    return default if value is None else value
+
+
+def _resolve_mode_configuration(
+    *,
+    requested_mode: TOMHTOperatingMode,
+    configuration: ModeConfiguration,
+) -> ModeConfiguration:
+    if requested_mode == TOMHTOperatingMode.CUSTOM:
+        return configuration
+    if requested_mode == TOMHTOperatingMode.EXTERNAL:
+        return ModeConfiguration(
+            use_initiator=False,
+            use_initial_tracks=False,
+            delayed_external_start_scan=_none_to_default(
+                configuration.delayed_external_start_scan
+            ),
+        )
+    if requested_mode == TOMHTOperatingMode.INTERNAL:
+        return ModeConfiguration(
+            use_initiator=True,
+            use_initial_tracks=False,
+            delayed_external_start_scan=None,
+        )
+    return ModeConfiguration(
+        use_initiator=True,
+        use_initial_tracks=False,
+        delayed_external_start_scan=_none_to_default(
+            configuration.delayed_external_start_scan
+        ),
+    )
 
 
 def _running_in_ipython_kernel() -> bool:
@@ -121,6 +197,7 @@ def run_tomht(
     *,
     use_initiator: bool = True,
     use_initial_tracks: bool = False,
+    operating_mode: OperatingModeName | str | None = "CUSTOM",
     external_start_scan: int | None = None,
     external_start_delay_scans: int | None = None,
     debug_display_detections: bool | None = None,
@@ -128,6 +205,13 @@ def run_tomht(
     debug_display_hypotheses: bool | None = None,
     debug_display_births: bool | None = None,
 ) -> None:
+    requested_mode_raw = (
+        operating_mode.value
+        if isinstance(operating_mode, TOMHTOperatingMode)
+        else ("CUSTOM" if operating_mode is None else str(operating_mode))
+    )
+    mode = _normalize_operating_mode(operating_mode)
+
     def _apply_debug_overrides(params: TOMHTParams) -> TOMHTParams:
         if debug_display_detections is not None:
             params = replace(params, debug_display_detections=debug_display_detections)
@@ -147,13 +231,44 @@ def run_tomht(
         timestamps = [
             start_time + datetime.timedelta(seconds=i) for i in range(len(scans))
         ]
-        tracks = (
-            initial_tomht_tracks_for_crossing(start_time) if use_initial_tracks else []
-        )
 
         def build_external_starts(scan_index: int, timestamp: datetime.datetime):
             return external_tomht_tracks_for_crossing(truths, scan_index, timestamp)
 
+        styles = ("r-", "b-")
+    else:
+        truths, scans, timestamps, transition_model, measurement_model, config = (
+            create_bearing_range_mht_example()
+        )
+
+        def build_external_starts(scan_index: int, timestamp: datetime.datetime):
+            return external_tomht_tracks_for_bearing_range(
+                truths, scan_index, timestamp
+            )
+
+        styles = ("g-",)
+
+    delayed_external_start_scan = _resolve_external_start_scan(
+        mode=mode,
+        num_scans=len(scans),
+        external_start_scan=external_start_scan,
+        external_start_delay_scans=external_start_delay_scans,
+    )
+    mode_config = _resolve_mode_configuration(
+        requested_mode=mode,
+        configuration=ModeConfiguration(
+            use_initiator=use_initiator,
+            use_initial_tracks=use_initial_tracks,
+            delayed_external_start_scan=delayed_external_start_scan,
+        ),
+    )
+    use_initiator = mode_config.use_initiator
+    use_initial_tracks = mode_config.use_initial_tracks
+    delayed_external_start_scan = mode_config.delayed_external_start_scan
+    if setup == "crossing":
+        tracks = (
+            initial_tomht_tracks_for_crossing(start_time) if use_initial_tracks else []
+        )
         initiator = (
             tomht_initiator_for_crossing_simple(start_time, measurement_model)
             if use_initiator
@@ -175,22 +290,12 @@ def run_tomht(
                 )
             ),
         )
-        styles = ("r-", "b-")
     else:
-        truths, scans, timestamps, transition_model, measurement_model, config = (
-            create_bearing_range_mht_example()
-        )
         tracks = (
             initial_tomht_tracks_for_bearing_range(timestamps[0])
             if use_initial_tracks
             else []
         )
-
-        def build_external_starts(scan_index: int, timestamp: datetime.datetime):
-            return external_tomht_tracks_for_bearing_range(
-                truths, scan_index, timestamp
-            )
-
         initiator = (
             tomht_initiator_for_bearing_range(
                 timestamps[0], transition_model, measurement_model
@@ -217,22 +322,20 @@ def run_tomht(
                 )
             ),
         )
-        styles = ("g-",)
-
-    delayed_external_start_scan = _resolve_external_start_scan(
-        num_scans=len(scans),
-        external_start_scan=external_start_scan,
-        external_start_delay_scans=external_start_delay_scans,
+    print(
+        "OPERATING_MODE "
+        f"setup={setup} resolved={mode.value} "
+        f"requested={requested_mode_raw} "
+        f"births={'on' if use_initiator else 'off'} "
+        f"initial_tracks={'on' if use_initial_tracks else 'off'} "
+        f"external_starts="
+        f"{f'scan:{delayed_external_start_scan}' if delayed_external_start_scan is not None else 'off'}"
     )
-    if delayed_external_start_scan is not None and use_initial_tracks:
-        raise ValueError(
-            "Delayed external-start mode expects runs without initial tracks. "
-            "Disable initial tracks when configuring external starts."
-        )
     if delayed_external_start_scan is not None:
         print(
             "EXTERNAL_STARTS_CONFIG "
-            f"setup={setup} start_scan={delayed_external_start_scan} "
+            f"setup={setup} mode={mode.value} "
+            f"start_scan={delayed_external_start_scan} "
             "source=scenario_truth_confirmed"
         )
 
