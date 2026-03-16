@@ -127,21 +127,194 @@ This phase does **not** require a separate committed-track store or any broader 
 
 It is sufficient to make ancestry explicit and make commitment semantics correct. Any later design for committed outputs, committed prefixes, or detached committed history can follow after this phase.
 
+## Task 1 design baseline
+
+The following section records the intended code-facing design baseline for Task 1.
+
+It is meant to be specific enough to guide implementation while still allowing small adjustments if the code reveals friction during the migration.
+
+### Internal object model
+
+Use three internal levels:
+
+#### Track hypothesis node
+
+A `TrackHypothesisNode` is the canonical internal unit of branching.
+
+One node represents one logical-track hypothesis at one scan step.
+
+Expected contents of a node include:
+- `node_id`,
+- logical `track_id`,
+- parent pointer,
+- `scan_index`,
+- timestamp,
+- per-step state payload,
+- per-step association label / used detection identity,
+- incremental log contribution for that step,
+- cached maintenance metadata,
+- root provenance.
+
+Recommended cached maintenance metadata includes:
+- `age`,
+- `hits`,
+- `missed_count`,
+- `last_det_key`,
+- `last_det_hit`,
+- optionally small additional inspection fields such as birth/first-scan bookkeeping.
+
+Recommended provenance fields include:
+- `root_source`, with values such as `external_start` or `internal_birth`,
+- `birth_scan_index`.
+
+Important invariants:
+- a node’s parent pointer always refers to the same logical `track_id`,
+- a node stores one step of one hypothesis, not a copied long-history `Track`,
+- recent association history may be derived when needed, but is not the primary internal representation.
+
+#### Global hypothesis
+
+A `GlobalHypothesis` remains intentionally simple:
+- log weight,
+- mapping `track_id -> current leaf node`.
+
+This is the direct structural replacement for the current `track_id -> copied Track` representation.
+
+#### Tracker-owned node registry
+
+The tracker should own the node graph explicitly.
+
+Recommended tracker-owned state includes:
+- a monotonic `node_id` allocator,
+- a registry such as `node_id -> node`,
+- any future commitment / cleanup bookkeeping.
+
+Globals point only to leaf nodes; the tracker owns the full ancestry graph.
+
+### Tracker-owned truth vs reconstructed views
+
+The tracker-owned internal truth should be:
+- node graph,
+- global hypotheses,
+- node metadata,
+- per-node association decisions,
+- node provenance,
+- global log weights.
+
+Temporary Stone Soup `Track` objects should be treated as reconstructed adapter views only.
+
+They may be rebuilt from node ancestry for:
+- hypothesiser compatibility,
+- updater compatibility,
+- public outputs,
+- visualisation,
+- debugging helpers.
+
+Reconstructed `Track` objects should not define branch identity, deduplication, or N-scan commitment semantics.
+
+### Reconstruction boundary
+
+Task 1 should assume one explicit reconstruction boundary from leaf node to temporary `Track`.
+
+Intended behavior:
+- walk ancestry from leaf to root,
+- rebuild a chronological temporary `Track`,
+- project selected metadata fields needed by existing adapters and outputs.
+
+This reconstruction boundary should be the main compatibility bridge during migration.
+
+### Node creation rules
+
+Every structural update to a logical track should occur by creating exactly one new node.
+
+The design should support four main cases:
+- continuation with detection hit,
+- continuation with miss,
+- external-start root node,
+- internal-birth root node.
+
+Expected metadata evolution:
+- hit continuation increments `age` and `hits`, resets `missed_count`, and records the used detection,
+- miss continuation increments `age`, increments `missed_count`, and records a miss association,
+- external-start and internal-birth roots have `parent = None` but retain distinct provenance and scoring semantics.
+
+The structural representation should therefore be shared, while semantics such as scoring and insertion path remain distinct.
+
+### Global expansion semantics
+
+The current global-expansion shape should remain as stable as practical:
+- each resulting global contains at most one active leaf per logical `track_id`,
+- no two leaves in the same global may claim the same detection,
+- a track that exceeds miss limits may be omitted from the resulting global.
+
+The main change in this phase is therefore the payload being branched and stored: leaf nodes instead of copied tracks.
+
+### Dedupe baseline
+
+Task 1 should replace the current history-tail-based deduplication concept with explicit leaf identity.
+
+Baseline intended rule:
+- two globals are duplicates only if they contain the same active leaf node for every active `track_id`.
+
+In other words, dedupe should be based on structural hypothesis identity rather than copied recent history content.
+
+This may initially deduplicate less aggressively than the current approximation, but it is the cleaner structural definition.
+
+Any stronger equivalence rules after commitment should be treated as later refinements, not mixed into the basic meaning of a global.
+
+### True N-scan in code-facing terms
+
+Task 1 should treat true N-scan as an ancestor-identity question.
+
+For scan `k` and N-scan depth `N`:
+- use surviving globals after beam pruning,
+- inspect each active logical track’s ancestor node at boundary `k - N`,
+- compare ancestor node identity explicitly.
+
+A logical track is committed through that boundary when all surviving globals that still contain that track agree on the same ancestor node at the boundary.
+
+This is a per-track commitment rule, not a requirement that whole globals agree everywhere.
+
+Including `scan_index` directly on nodes is recommended so that boundary queries are explicit and not inferred indirectly from timestamps or history length.
+
+### Commitment vs cleanup
+
+Task 1 should explicitly separate:
+1. commitment semantics,
+2. physical cleanup / garbage collection.
+
+Commitment means older branch distinctions are no longer represented among surviving globals at the relevant boundary.
+
+Cleanup means old or orphaned nodes may later be deleted or compacted.
+
+Correctness should depend on explicit ancestry and commitment logic, not on immediate node deletion.
+
+### Public behavior during migration
+
+Public behavior should remain as stable as practical during this phase.
+
+In particular:
+- the internal truth moves to nodes and leaf-based globals,
+- public-facing outputs may still be temporary reconstructed `Track` objects,
+- runner and debugging workflows should continue to work through that adapter layer while the internal representation changes.
+
 ## Migration strategy
 
 This phase should be staged rather than attempted as one giant rewrite.
 
 ### Task 1 — design sketch and internal representation choice
 
-Before coding heavily, lock down the representation in code-facing terms:
+Use the “Task 1 design baseline” section above as the intended representation and semantics baseline for implementation.
+
+Before coding heavily, confirm that the implementation will follow that baseline in code-facing terms:
 - node structure,
 - global structure,
 - node ownership of cached maintenance metadata,
-- how temporary `Track` reconstruction works,
-- what data remains tracker-owned vs reconstructed,
-- the exact meaning of N-scan commitment in this implementation,
-- the separation between commitment and physical node cleanup,
-- the intended replacement for history-tail-based deduplication.
+- reconstruction boundary for temporary `Track` objects,
+- tracker-owned vs reconstructed data,
+- explicit ancestor-based N-scan commitment semantics,
+- separation between commitment and physical cleanup,
+- replacement of history-tail-based deduplication with node-identity-based deduplication.
 
 Deliverable:
 - updated design notes in this document and/or code comments sufficient to guide implementation without relying on the current copied-track representation.
