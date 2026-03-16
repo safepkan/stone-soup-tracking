@@ -298,6 +298,144 @@ In particular:
 - public-facing outputs may still be temporary reconstructed `Track` objects,
 - runner and debugging workflows should continue to work through that adapter layer while the internal representation changes.
 
+
+## Implementation-oriented migration outline
+
+This section sits between the design baseline and the task list on purpose.
+
+The Task 1 design baseline defines the intended representation and semantics.
+The following outline maps that baseline onto the current tracker structure so that implementation can proceed in a controlled order without turning the task list itself into a wall of low-level detail.
+
+### Why keep this as a separate section
+
+A separate implementation-oriented section keeps two levels distinct:
+- the design baseline remains the source of truth for representation and semantics,
+- the migration strategy remains a readable phase/task summary,
+- this section records how the current code is expected to move from one to the other.
+
+This also makes it easier to refine implementation sequencing later without rewriting the higher-level task descriptions.
+
+### Current code seams that the migration should follow
+
+The current tracker already exposes the main seams that the migration should attach to:
+- `GlobalHypothesis` currently stores `track_id -> copied Track`,
+- `ChildCandidate` currently carries a copied child `Track`,
+- `_candidates_for_track(...)` currently reconstructs branch alternatives by copying a full `Track` and appending one more state,
+- `_expand_global_hypothesis(...)` currently performs the cross-track consistency search over those copied child tracks,
+- detection-usage helpers currently read `last_det_key` from `Track.metadata`,
+- external-start insertion and internal-birth insertion already enter the tracker through distinct paths and should keep those semantics,
+- MAP/debug/output code currently expects temporary `Track` objects and can initially continue to do so through reconstruction.
+
+The migration should therefore aim to replace the payload being stored and branched, while preserving the overall control-flow shape as much as practical.
+
+### Recommended implementation order
+
+The following order is recommended even if some edits overlap in practice.
+
+#### Step A — add the new internal types without switching behavior yet
+
+Introduce the new structural types first:
+- `TrackHypothesisNode`,
+- updated `ChildCandidate` carrying `child_node`,
+- updated `GlobalHypothesis` carrying `leaves_by_track_id`,
+- tracker-owned node registry / node-id allocator.
+
+At this point, temporary compatibility code may still allow parts of the tracker to operate on reconstructed `Track` views.
+
+#### Step B — add the reconstruction adapter and make it explicit
+
+Create one clear helper that rebuilds a temporary Stone Soup `Track` from a leaf node ancestry chain.
+
+This helper should become the main compatibility bridge for:
+- hypothesiser input,
+- updater input,
+- MAP/public output,
+- debug display.
+
+The intent is that copied `Track` objects stop being internal truth even before every downstream helper is fully migrated.
+
+#### Step C — switch globals from copied tracks to leaf nodes
+
+Once node creation and reconstruction exist, move the core global representation from:
+- `track_id -> copied Track`
+
+to:
+- `track_id -> current leaf node`.
+
+This is the key representational change. It should happen as early as practical once the compatibility bridge exists.
+
+#### Step D — migrate per-track branching to node creation
+
+Refactor the current continuation logic so that per-track branching creates nodes rather than copied tracks.
+
+In practice this means replacing the current “copy track, append state, mutate metadata” pattern with:
+- reconstruct temporary `Track` view if needed for hypothesiser/updater interaction,
+- create one new child node for hit or miss continuation,
+- store cached maintenance metadata on the node.
+
+This is the point where the current `_candidates_for_track(...)` logic changes most substantially.
+
+#### Step E — migrate global expansion, detection-usage helpers, and dedupe
+
+Once candidates carry nodes, update the global expansion logic so that:
+- cross-track consistency is enforced over leaf nodes,
+- miss-drop logic uses node metadata rather than `Track.metadata`,
+- detection-usage helpers read from nodes rather than tracks,
+- dedupe is based on active leaf-node identity rather than history tails.
+
+This step is where a large amount of copied-track bookkeeping should disappear.
+
+#### Step F — migrate births and external starts into the same node structure
+
+After normal continuation/miss branching works with nodes, convert both root-creation paths:
+- external starts create root-like nodes with external-start provenance,
+- internal births create root-like nodes with internal-birth provenance.
+
+The structure should be shared, while insertion path and scoring semantics remain distinct.
+
+#### Step G — replace N-scan-lite with explicit ancestor-based commitment
+
+Only after the node graph is real should the tracker replace the history-tail approximation.
+
+This step should:
+- inspect ancestor identity at boundary `k - N`,
+- make per-track commitment decisions,
+- keep commitment semantics separate from physical cleanup,
+- avoid coupling correctness to immediate node deletion.
+
+#### Step H — cleanup, instrumentation, and documentation pass
+
+Once the new structure and commitment logic are working:
+- remove or simplify leftover copied-track helpers,
+- update debug output so it talks about nodes / ancestry where appropriate,
+- keep public outputs stable where useful via reconstruction,
+- update `CURRENT_STATE`, `NEXT_STEPS`, and `ROADMAP`.
+
+### How this maps onto Tasks 2–5
+
+The phase-level tasks still make sense, but the code-level work is a little more fine-grained:
+- **Task 2** mainly covers Steps A–C,
+- **Task 3** mainly covers Steps D–F,
+- **Task 4** mainly covers Step G,
+- **Task 5** mainly covers Step H.
+
+So the current task list is still reasonable, but actual implementation work will likely be tracked in smaller subtasks or checkpoints inside those larger tasks.
+
+### Expected areas of overlap
+
+Some overlap between Tasks 2 and 3 is expected. In the current code, representation and branching are tightly coupled, so it may not be possible to complete all of Task 2 before touching parts of Task 3.
+
+That is acceptable as long as the migration keeps the following discipline:
+- representation changes are driven by the Task 1 baseline,
+- reconstructed `Track` objects remain an adapter layer rather than regaining internal-truth status,
+- external-start and internal-birth semantics are preserved while their structural representation changes.
+
+### Working style during implementation
+
+When actual coding begins, it is reasonable to break Tasks 2 and 3 into implementation-sized subtasks or patches.
+
+A good default is to prefer a few coherent updates rather than a long series of tiny edits, but not so large that it becomes hard to verify behavior or reason about breakage.
+
 ## Migration strategy
 
 This phase should be staged rather than attempted as one giant rewrite.
@@ -323,6 +461,11 @@ Deliverable:
 
 Refactor the tracker so globals point to leaf nodes rather than copied `Track` objects.
 
+Primary emphasis in this task:
+- Step A: add the new internal node/global/candidate types and tracker-owned node registry,
+- Step B: add and standardise the reconstruction adapter from leaf node to temporary `Track`,
+- Step C: switch globals from copied tracks to leaf nodes as the primary internal representation.
+
 Constraints:
 - keep overall tracker behavior as stable as practical,
 - keep public APIs stable where possible,
@@ -336,6 +479,11 @@ Expected result:
 ### Task 3 — adapt update / branching flow to the node representation
 
 Make sure normal continuation, miss handling, births, and external starts all create/update nodes consistently.
+
+Primary emphasis in this task:
+- Step D: migrate per-track continuation branching from copied-track mutation to explicit node creation,
+- Step E: migrate global expansion, detection-usage helpers, and dedupe to operate on nodes/leaves,
+- Step F: migrate internal births and external starts into the same shared node structure while preserving distinct semantics.
 
 This is where the transitional reconstruction layer may be needed most heavily.
 
