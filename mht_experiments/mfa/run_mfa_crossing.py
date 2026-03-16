@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mht_experiments.runners.mfa_runner import run_mfa
+from mht_experiments.mfa.mfa_runner import run_mfa
 
 # For VS Code Interactive Window, you can tweak these and re-run:
 SHOW_COMPONENTS = True

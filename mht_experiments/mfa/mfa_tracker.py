@@ -10,7 +10,7 @@ from stonesoup.dataassociator.mfa import MFADataAssociator
 from stonesoup.predictor.base import Predictor
 from stonesoup.updater.base import Updater
 
-from mht_experiments.scenarios.crossing_targets import ScenarioConfig
+from mht_experiments.scenarios.common import ScenarioConfig
 
 
 @dataclass

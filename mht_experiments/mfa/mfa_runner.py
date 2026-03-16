@@ -1,7 +1,7 @@
-# mht_experiments/runners/mfa_runner.py
 from __future__ import annotations
 
-from typing import List, Literal
+import datetime
+from typing import Literal
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -10,22 +10,20 @@ from matplotlib import animation
 from stonesoup.plotter import Plotter
 from stonesoup.types.update import GaussianMixtureUpdate
 
-from mht_experiments.plotting import (
-    plot_tracks as plot_tracks_components,
-    plot_tracks_stable_xy,
-)
-from mht_experiments.scenarios.crossing_targets import (
-    create_crossing_scenario,
+from mht_experiments.mfa.mfa_plotting import plot_mfa_component_tracks
+from mht_experiments.mfa.mfa_scenarios import (
+    initial_mfa_tracks_for_bearing_range,
     initial_mfa_tracks_for_crossing,
 )
-from mht_experiments.scenarios.bearing_range import (
-    create_bearing_range_mht_example,
-    initial_mfa_tracks_for_bearing_range,
-)
-from mht_experiments.trackers.mfa_tracker import (
+from mht_experiments.mfa.mfa_tracker import (
     build_mfa_components_linear,
     build_mfa_components_ukf,
 )
+from mht_experiments.helpers.plotting import plot_tracks_stable_xy
+from mht_experiments.scenarios.bearing_range import (
+    create_bearing_range_mht_example,
+)
+from mht_experiments.scenarios.crossing_targets import create_crossing_scenario
 
 SetupName = Literal["crossing", "bearing_range"]
 
@@ -65,13 +63,6 @@ def run_mfa(setup: SetupName, *, show_components: bool = False) -> None:
             create_crossing_scenario()
         )
         timestamps = [
-            start_time + (scans[0].pop().timestamp - scans[0].pop().timestamp)
-            for _ in ()
-        ]  # dummy to appease linters
-        # simpler: reuse scenario's implicit 1s steps
-        import datetime
-
-        timestamps = [
             start_time + datetime.timedelta(seconds=i) for i in range(len(scans))
         ]
         tracks = initial_mfa_tracks_for_crossing(start_time)
@@ -92,10 +83,10 @@ def run_mfa(setup: SetupName, *, show_components: bool = False) -> None:
         raise ValueError(f"Unknown setup: {setup}")
 
     plotter = Plotter()
-    frames: List[list] = []
+    frames: list[list] = []
 
     for n, (timestamp, detections) in enumerate(zip(timestamps, scans)):
-        artists: List = []
+        artists: list = []
 
         associations = components.data_associator.associate(
             tracks, detections, timestamp
@@ -131,7 +122,7 @@ def run_mfa(setup: SetupName, *, show_components: bool = False) -> None:
 
         if show_components and can_show_components:
             artists.extend(
-                plot_tracks_components(
+                plot_mfa_component_tracks(
                     tracks,
                     ax,
                     measurement_model=measurement_model,

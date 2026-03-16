@@ -32,9 +32,6 @@ from stonesoup.types.array import CovarianceMatrix, StateVector
 from stonesoup.types.detection import Detection
 from stonesoup.types.groundtruth import GroundTruthPath
 from stonesoup.types.state import GaussianState
-from stonesoup.types.mixture import GaussianMixture
-from stonesoup.types.numeric import Probability
-from stonesoup.types.state import TaggedWeightedGaussianState
 from stonesoup.types.track import Track
 
 
@@ -134,36 +131,6 @@ def create_bearing_range_mht_example() -> Tuple[
         timestamps.append(time)
 
     return truths, scans, timestamps, transition_model, measurement_model, config
-
-
-def initial_mfa_tracks_for_bearing_range(
-    start_time: datetime.datetime,
-) -> OrderedSet[Track]:
-    """Create the 3 priors used in the Stone Soup MFT example."""
-    cov = np.diag([10, 1, 10, 1])
-
-    priors = [
-        StateVector([10, 1, 10, 1]),
-        StateVector([-10, -1, -10, -1]),
-        StateVector([-10, -1, 10, 1]),
-    ]
-
-    tracks: OrderedSet[Track] = OrderedSet()
-    for sv in priors:
-        gm = GaussianMixture(
-            [
-                TaggedWeightedGaussianState(
-                    sv,
-                    cov,
-                    timestamp=start_time,
-                    weight=Probability(1),
-                    tag=[],
-                )
-            ]
-        )
-        tracks.add(Track([gm]))
-
-    return tracks
 
 
 def initial_tomht_tracks_for_bearing_range(start_time) -> list[Track]:

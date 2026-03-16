@@ -4,6 +4,14 @@ This document is a cleaned-up snapshot of the current implementation after compl
 
 ## What is now solid
 
+### MFA baseline isolation
+
+The legacy MFA baseline code now lives under `mht_experiments/mfa/` so TO-MHT work stays separated from baseline/reference code.
+
+### TOMHT module flattening
+
+`tomht_runner.py` and `tomht_tracker.py` now live directly under `mht_experiments/` (the old `runners/` and `trackers/` subpackages were removed).
+
 ### Deterministic tracker baseline
 
 The tracker has deterministic ordering and stable beam-management behavior, making it practical to inspect, compare, and iterate on.

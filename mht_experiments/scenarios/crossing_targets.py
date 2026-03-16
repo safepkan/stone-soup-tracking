@@ -17,9 +17,6 @@ from stonesoup.initiator.simple import SimpleMeasurementInitiator
 from stonesoup.types.detection import Clutter, Detection, TrueDetection
 from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
 from stonesoup.types.array import CovarianceMatrix, StateVector
-from stonesoup.types.mixture import GaussianMixture
-from stonesoup.types.numeric import Probability
-from stonesoup.types.state import TaggedWeightedGaussianState
 from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 
@@ -43,7 +40,7 @@ _PROB_GATE = chi2.cdf(_GATE_LEVEL, 2)  # gating probability
 # the product is still positive, so this matches the example's implementation.
 _CLUTTER_DENSITY = _LAMBDA_V / np.prod(_V_BOUNDS[:, 0] - _V_BOUNDS[:, 1])
 
-_SLIDE_WINDOW = 3  # MFA slide window length (in scans)
+_SLIDE_WINDOW = 3  # legacy MFA slide-window default
 
 
 _CONFIG = ScenarioConfig(
@@ -67,7 +64,7 @@ def create_crossing_scenario() -> Tuple[
     LinearGaussian,
     ScenarioConfig,
 ]:
-    """Create the 'two crossing targets + clutter' MFA scenario.
+    """Create the 'two crossing targets + clutter' scenario.
 
     Returns
     -------
@@ -166,34 +163,6 @@ def create_crossing_scenario() -> Tuple[
         scans.append(detections)
 
     return truths, scans, start_time, transition_model, measurement_model, _CONFIG
-
-
-def initial_mfa_tracks_for_crossing(start_time: datetime.datetime) -> OrderedSet[Track]:
-    prior1 = GaussianMixture(
-        [
-            TaggedWeightedGaussianState(
-                [[0.0], [1.0], [0.0], [1.0]],
-                np.diag([1.5, 0.5, 1.5, 0.5]),
-                timestamp=start_time,
-                weight=Probability(1.0),
-                tag=[],
-            )
-        ]
-    )
-
-    prior2 = GaussianMixture(
-        [
-            TaggedWeightedGaussianState(
-                [[0.0], [1.0], [20.0], [-1.0]],
-                np.diag([1.5, 0.5, 1.5, 0.5]),
-                timestamp=start_time,
-                weight=Probability(1.0),
-                tag=[],
-            )
-        ]
-    )
-
-    return OrderedSet((Track([prior1]), Track([prior2])))
 
 
 def initial_tomht_tracks_for_crossing(start_time) -> list[Track]:

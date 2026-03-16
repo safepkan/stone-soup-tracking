@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from mht_experiments.runners.tomht_runner import (
+from mht_experiments.tomht_runner import (
     TOMHTOperatingMode,
     run_tomht,
 )

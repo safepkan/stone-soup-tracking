@@ -13,7 +13,7 @@ from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 from stonesoup.updater.base import Updater
 
-from mht_experiments.trackers.tomht_tracker import (
+from mht_experiments.tomht_tracker import (
     GlobalHypothesis,
     ScanContext,
     TOMHTParams,

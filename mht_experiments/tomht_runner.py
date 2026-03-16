@@ -27,7 +27,7 @@ from matplotlib import animation  # noqa: E402
 
 from stonesoup.plotter import Plotter  # noqa: E402
 
-from mht_experiments.plotting import plot_tracks_stable_xy  # noqa: E402
+from mht_experiments.helpers.plotting import plot_tracks_stable_xy  # noqa: E402
 from mht_experiments.scenarios.bearing_range import (  # noqa: E402
     create_bearing_range_mht_example,
     external_tomht_tracks_for_bearing_range,
@@ -38,7 +38,7 @@ from mht_experiments.scenarios.crossing_targets import (  # noqa: E402
     external_tomht_tracks_for_crossing,
     tomht_initiator_for_crossing_simple,
 )
-from mht_experiments.trackers.tomht_tracker import (  # noqa: E402
+from mht_experiments.tomht_tracker import (  # noqa: E402
     TOMHTParams,
     build_tomht_linear,
     build_tomht_ukf,
@@ -278,7 +278,7 @@ def run_tomht(
         external_start_timing = ExternalStartTimingConfiguration(
             start_scan=None, source="disabled"
         )
-        
+
     use_initiator = mode_config.use_initiator
     delayed_external_start_scan = external_start_timing.start_scan
     if setup == "crossing":

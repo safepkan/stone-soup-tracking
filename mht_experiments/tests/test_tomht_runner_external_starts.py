@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from mht_experiments.runners.tomht_runner import (
+from mht_experiments.tomht_runner import (
     ExternalStartTimingConfiguration,
     ModeConfiguration,
     TOMHTOperatingMode,
