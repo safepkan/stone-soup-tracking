@@ -14,6 +14,7 @@ from stonesoup.types.track import Track
 from stonesoup.updater.base import Updater
 
 from mht_experiments.trackers.tomht_tracker import (
+    GlobalHypothesis,
     ScanContext,
     TOMHTParams,
     TOMHTTracker,
@@ -93,16 +94,25 @@ def _build_tracker(
     initiator: _MultiBirthInitiator,
     params: TOMHTParams,
     scoring_model: _BirthPenaltyScoringModel,
-    initial_tracks: list[Track] | None = None,
 ) -> TOMHTTracker:
     return TOMHTTracker(
         hypothesiser=cast(PDAHypothesiser, object()),
         updater=cast(Updater, object()),
-        initial_tracks=[] if initial_tracks is None else initial_tracks,
         initiator=cast(SimpleMeasurementInitiator, initiator),
         params=params,
         scoring_model=scoring_model,
     )
+
+
+def _seed_existing_tracks(tracker: TOMHTTracker, tracks: list[Track]) -> None:
+    tracks_by_id = {int(track.metadata["track_id"]): track for track in tracks}
+    tracker.global_hypotheses = [
+        GlobalHypothesis(
+            tracks_by_id=tracks_by_id,
+            log_weight=0.0,
+        )
+    ]
+    tracker._next_track_id = (max(tracks_by_id) + 1) if tracks_by_id else 0
 
 
 class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
@@ -191,9 +201,10 @@ class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
                 collect_stats=False,
             ),
             scoring_model=_BirthPenaltyScoringModel(1.0),
-            initial_tracks=[
-                _existing_track(timestamp, track_id=100, last_det_key=0),
-            ],
+        )
+        _seed_existing_tracks(
+            tracker,
+            [_existing_track(timestamp, track_id=100, last_det_key=0)],
         )
         ctx = _scan_context(timestamp)
 
@@ -258,9 +269,10 @@ class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
                 collect_stats=False,
             ),
             scoring_model=_BirthPenaltyScoringModel(1.0),
-            initial_tracks=[
-                _existing_track(timestamp, track_id=7, last_det_key=None),
-            ],
+        )
+        _seed_existing_tracks(
+            tracker,
+            [_existing_track(timestamp, track_id=7, last_det_key=None)],
         )
         ctx = _scan_context(timestamp)
 

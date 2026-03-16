@@ -48,7 +48,6 @@ class _SingleBirthInitiator:
 
 def _build_tracker(
     *,
-    initial_tracks: list[Track] | None = None,
     initiator: SimpleMeasurementInitiator | None = None,
 ) -> TOMHTTracker:
     params = TOMHTParams(
@@ -60,7 +59,6 @@ def _build_tracker(
     return TOMHTTracker(
         hypothesiser=cast(PDAHypothesiser, object()),
         updater=cast(Updater, object()),
-        initial_tracks=[] if initial_tracks is None else initial_tracks,
         initiator=initiator,
         params=params,
         scoring_model=_ZeroScoringModel(),
@@ -98,23 +96,13 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
             list(track.metadata["assoc_history"]),
         )
 
-    def test_constructor_initial_track_metadata_uses_shared_conventions(self) -> None:
-        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
-        initial_track = _external_start(timestamp)
-        initial_track.metadata["source"] = "constructor"
+    def test_tracker_starts_with_empty_initial_global_hypothesis(self) -> None:
+        tracker = _build_tracker()
 
-        tracker = _build_tracker(initial_tracks=[initial_track])
-        inserted = tracker.global_hypotheses[0].tracks_by_id[0]
-
-        self._assert_track_maintenance_metadata(
-            inserted,
-            age=1,
-            hits=0,
-            missed_count=0,
-            last_det_key=None,
-            last_det_hit=False,
-        )
-        self.assertEqual("constructor", inserted.metadata["source"])
+        self.assertEqual(1, len(tracker.global_hypotheses))
+        self.assertEqual({}, tracker.global_hypotheses[0].tracks_by_id)
+        self.assertEqual(0.0, tracker.global_hypotheses[0].log_weight)
+        self.assertEqual(0, tracker._next_track_id)
 
     def test_internal_birth_inserted_track_metadata_uses_shared_conventions(
         self,

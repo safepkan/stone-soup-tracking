@@ -86,14 +86,12 @@ class OperatingModeResolutionTest(unittest.TestCase):
         self.assertEqual(
             ModeConfiguration(
                 use_initiator=False,
-                use_initial_tracks=True,
                 delayed_external_start_scan=4,
             ),
             _resolve_mode_configuration(
                 requested_mode=TOMHTOperatingMode.CUSTOM,
                 configuration=ModeConfiguration(
                     use_initiator=False,
-                    use_initial_tracks=True,
                     delayed_external_start_scan=4,
                 ),
             ),
@@ -103,14 +101,12 @@ class OperatingModeResolutionTest(unittest.TestCase):
         self.assertEqual(
             ModeConfiguration(
                 use_initiator=False,
-                use_initial_tracks=False,
                 delayed_external_start_scan=0,
             ),
             _resolve_mode_configuration(
                 requested_mode=TOMHTOperatingMode.EXTERNAL,
                 configuration=ModeConfiguration(
                     use_initiator=True,
-                    use_initial_tracks=True,
                     delayed_external_start_scan=None,
                 ),
             ),
@@ -120,14 +116,12 @@ class OperatingModeResolutionTest(unittest.TestCase):
         self.assertEqual(
             ModeConfiguration(
                 use_initiator=False,
-                use_initial_tracks=False,
                 delayed_external_start_scan=3,
             ),
             _resolve_mode_configuration(
                 requested_mode=TOMHTOperatingMode.EXTERNAL,
                 configuration=ModeConfiguration(
                     use_initiator=True,
-                    use_initial_tracks=True,
                     delayed_external_start_scan=3,
                 ),
             ),
@@ -137,14 +131,12 @@ class OperatingModeResolutionTest(unittest.TestCase):
         self.assertEqual(
             ModeConfiguration(
                 use_initiator=True,
-                use_initial_tracks=False,
                 delayed_external_start_scan=None,
             ),
             _resolve_mode_configuration(
                 requested_mode=TOMHTOperatingMode.INTERNAL,
                 configuration=ModeConfiguration(
                     use_initiator=False,
-                    use_initial_tracks=True,
                     delayed_external_start_scan=1,
                 ),
             ),
@@ -154,14 +146,12 @@ class OperatingModeResolutionTest(unittest.TestCase):
         self.assertEqual(
             ModeConfiguration(
                 use_initiator=True,
-                use_initial_tracks=False,
                 delayed_external_start_scan=0,
             ),
             _resolve_mode_configuration(
                 requested_mode=TOMHTOperatingMode.BOTH,
                 configuration=ModeConfiguration(
                     use_initiator=False,
-                    use_initial_tracks=True,
                     delayed_external_start_scan=None,
                 ),
             ),

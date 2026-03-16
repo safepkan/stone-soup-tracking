@@ -274,7 +274,6 @@ class TOMHTTracker:
         self,
         hypothesiser: PDAHypothesiser,
         updater: Updater,
-        initial_tracks: Iterable[Track],
         *,
         initiator: SimpleMeasurementInitiator | None = None,
         params: TOMHTParams = TOMHTParams(),
@@ -320,29 +319,10 @@ class TOMHTTracker:
                 f"per_unused_delta={per_unused:+.3f}"
             )
 
-        init_tracks_by_id: dict[int, Track] = {}
-        max_tid = -1
-        for i, tr in enumerate(list(initial_tracks)):
-            tid = int(tr.metadata.get("track_id", i))
-            last_det = tr.metadata.get("last_det_key", None)
-            # Keep constructor defaults as before (age from len(track), hits default 0),
-            # but write tracker-owned fields via the shared metadata path.
-            self._write_track_maintenance_metadata(
-                tr,
-                track_id=tid,
-                age=int(tr.metadata.get("age", len(tr))),
-                hits=int(tr.metadata.get("hits", 0)),
-                missed_count=int(tr.metadata.get("missed_count", 0)),
-                last_det_key=last_det,
-                last_det_hit=tr.metadata.get("last_det_hit", None),
-            )
-            init_tracks_by_id[tid] = tr
-            max_tid = max(max_tid, tid)
-
-        self._next_track_id = max_tid + 1
+        self._next_track_id = 0
 
         self.global_hypotheses: list[GlobalHypothesis] = [
-            GlobalHypothesis(tracks_by_id=init_tracks_by_id, log_weight=0.0)
+            GlobalHypothesis(tracks_by_id={}, log_weight=0.0)
         ]
         self._last_step_timestamp: object | None = None
         self.last_scan_stats: ScanStats | None = None
@@ -1281,7 +1261,6 @@ def build_tomht_linear(
     *,
     prob_detect: float,
     clutter_density: float,
-    tracks: Iterable[Track],
     initiator: SimpleMeasurementInitiator | None = None,
     params: TOMHTParams = TOMHTParams(),
 ) -> TOMHTTracker:
@@ -1294,9 +1273,7 @@ def build_tomht_linear(
         prob_gate=params.prob_gate,
         prob_detect=prob_detect,
     )
-    return TOMHTTracker(
-        hypothesiser, updater, tracks, initiator=initiator, params=params
-    )
+    return TOMHTTracker(hypothesiser, updater, initiator=initiator, params=params)
 
 
 def build_tomht_ukf(
@@ -1305,7 +1282,6 @@ def build_tomht_ukf(
     *,
     prob_detect: float,
     clutter_density: float,
-    tracks: Iterable[Track],
     initiator: SimpleMeasurementInitiator | None = None,
     params: TOMHTParams = TOMHTParams(),
 ) -> TOMHTTracker:
@@ -1318,6 +1294,4 @@ def build_tomht_ukf(
         prob_gate=params.prob_gate,
         prob_detect=prob_detect,
     )
-    return TOMHTTracker(
-        hypothesiser, updater, tracks, initiator=initiator, params=params
-    )
+    return TOMHTTracker(hypothesiser, updater, initiator=initiator, params=params)

@@ -31,13 +31,11 @@ from mht_experiments.plotting import plot_tracks_stable_xy  # noqa: E402
 from mht_experiments.scenarios.bearing_range import (  # noqa: E402
     create_bearing_range_mht_example,
     external_tomht_tracks_for_bearing_range,
-    initial_tomht_tracks_for_bearing_range,
     tomht_initiator_for_bearing_range,
 )
 from mht_experiments.scenarios.crossing_targets import (  # noqa: E402
     create_crossing_scenario,
     external_tomht_tracks_for_crossing,
-    initial_tomht_tracks_for_crossing,
     tomht_initiator_for_crossing_simple,
 )
 from mht_experiments.trackers.tomht_tracker import (  # noqa: E402
@@ -65,7 +63,6 @@ class TOMHTOperatingMode(str, Enum):
 @dataclass(frozen=True)
 class ModeConfiguration:
     use_initiator: bool
-    use_initial_tracks: bool
     delayed_external_start_scan: int | None
 
 
@@ -137,7 +134,6 @@ def _resolve_mode_configuration(
     if requested_mode == TOMHTOperatingMode.EXTERNAL:
         return ModeConfiguration(
             use_initiator=False,
-            use_initial_tracks=False,
             delayed_external_start_scan=_none_to_default(
                 configuration.delayed_external_start_scan
             ),
@@ -145,12 +141,10 @@ def _resolve_mode_configuration(
     if requested_mode == TOMHTOperatingMode.INTERNAL:
         return ModeConfiguration(
             use_initiator=True,
-            use_initial_tracks=False,
             delayed_external_start_scan=None,
         )
     return ModeConfiguration(
         use_initiator=True,
-        use_initial_tracks=False,
         delayed_external_start_scan=_none_to_default(
             configuration.delayed_external_start_scan
         ),
@@ -196,7 +190,6 @@ def run_tomht(
     setup: SetupName,
     *,
     use_initiator: bool = True,
-    use_initial_tracks: bool = False,
     operating_mode: OperatingModeName | str | None = "CUSTOM",
     external_start_scan: int | None = None,
     external_start_delay_scans: int | None = None,
@@ -258,17 +251,12 @@ def run_tomht(
         requested_mode=mode,
         configuration=ModeConfiguration(
             use_initiator=use_initiator,
-            use_initial_tracks=use_initial_tracks,
             delayed_external_start_scan=delayed_external_start_scan,
         ),
     )
     use_initiator = mode_config.use_initiator
-    use_initial_tracks = mode_config.use_initial_tracks
     delayed_external_start_scan = mode_config.delayed_external_start_scan
     if setup == "crossing":
-        tracks = (
-            initial_tomht_tracks_for_crossing(start_time) if use_initial_tracks else []
-        )
         initiator = (
             tomht_initiator_for_crossing_simple(start_time, measurement_model)
             if use_initiator
@@ -279,7 +267,6 @@ def run_tomht(
             measurement_model,
             prob_detect=config.prob_detect,
             clutter_density=config.clutter_density,
-            tracks=tracks,
             initiator=initiator,
             params=_apply_debug_overrides(
                 TOMHTParams(
@@ -291,11 +278,6 @@ def run_tomht(
             ),
         )
     else:
-        tracks = (
-            initial_tomht_tracks_for_bearing_range(timestamps[0])
-            if use_initial_tracks
-            else []
-        )
         initiator = (
             tomht_initiator_for_bearing_range(
                 timestamps[0], transition_model, measurement_model
@@ -308,7 +290,6 @@ def run_tomht(
             measurement_model,
             prob_detect=config.prob_detect,
             clutter_density=config.clutter_density,
-            tracks=tracks,
             initiator=initiator,
             params=_apply_debug_overrides(
                 TOMHTParams(
@@ -327,7 +308,6 @@ def run_tomht(
         f"setup={setup} resolved={mode.value} "
         f"requested={requested_mode_raw} "
         f"births={'on' if use_initiator else 'off'} "
-        f"initial_tracks={'on' if use_initial_tracks else 'off'} "
         f"external_starts="
         f"{f'scan:{delayed_external_start_scan}' if delayed_external_start_scan is not None else 'off'}"
     )

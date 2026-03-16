@@ -19,7 +19,7 @@ The main immediate gap is **integration-facing initiation / birth handling**:
 For the near term, we want the runner/config surface to support explicit primary modes plus a simple custom override mode:
 
 1. **EXTERNAL**
-   - no scenario initial tracks,
+   - tracker starts empty (no constructor-time starts),
    - no internal births,
    - confirmed external starts injected at runtime.
 
@@ -31,13 +31,13 @@ For the near term, we want the runner/config surface to support explicit primary
    - delayed confirmed external-start injection enabled in the same run.
 
 4. **CUSTOM**
-   - explicit low-level flags (`--births`, `--initial-tracks`, delayed external-start config) are used directly.
+   - explicit low-level flags (`--births`, delayed external-start config) are used directly.
 
 ## 2. Design goals for this phase
 
 ### 2.1 External initiation should be first-class
 
-The tracker should be able to consume externally created tracks during a run, not only at construction time.
+The tracker should be able to consume externally created tracks during a run.
 
 This matters for the ISAC system-tracker replacement path, where:
 - sensor trackers and cross-sensor correlation stay upstream,
@@ -135,13 +135,12 @@ Newly inserted tracks currently need internal metadata such as track ID, age/hit
 and association-history fields.
 
 This phase should define one shared helper for initialising newly inserted tracks so that:
-- constructor-time initial tracks,
 - internal births,
 - and external starts
 
 all use a consistent metadata initialisation path where appropriate.
 
-This is mainly a maintainability and consistency improvement, but it should be done now to avoid three slightly different insertion conventions.
+This is mainly a maintainability and consistency improvement, but it should be done now to avoid diverging insertion conventions.
 
 ### 3.6 Make external-initiation-only mode easy
 
@@ -167,7 +166,7 @@ For the first integration step, externally supplied starts are assumed to:
 ### 3.7 Make the existing scenarios runnable in delayed external-start mode
 
 The existing `crossing` and `bearing_range` scenario runners should be extended so they can run in a mode with:
-- no initial tracks,
+- empty startup,
 - optional internal births disabled,
 - and externally injected confirmed starts after a configurable delay or start scan.
 
@@ -316,12 +315,12 @@ Status (2026-03-12):
 - `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now accept `--external-start-delay-scans N` or `--external-start-scan N` and pass the configuration through `run_tomht(...)`.
 - The runner injects confirmed external starts after `step()` at the configured scan via `add_external_starts(...)` and prints explicit `EXTERNAL_STARTS_CONFIG ...` / `EXTERNAL_STARTS ...` log lines.
 - `crossing` derives two confirmed starts from the truth paths at the injection scan; `bearing_range` derives three confirmed starts from the simulator truth paths at the injection scan.
-- The delayed-start mode is intended for runs without scenario initial tracks; internal births remain independently configurable (now surfaced via `CUSTOM`/`EXTERNAL`/`INTERNAL`/`BOTH` mode selection).
+- The delayed-start mode is intended for empty-start runs; internal births remain independently configurable (now surfaced via `CUSTOM`/`EXTERNAL`/`INTERNAL`/`BOTH` mode selection).
 - Focused runner/scenario tests cover delayed-start scan resolution and truth-derived external-start construction for both scenarios.
 
 Scope:
 - extend the `crossing` and `bearing_range` runner workflow so scenarios can run with delayed external confirmed starts,
-- support configurations with no initial tracks,
+- support empty-start configurations,
 - support configurations with internal births disabled,
 - provide a simple configurable delay or start-scan mechanism,
 - preserve existing default behaviour when the mode is unused,
@@ -341,14 +340,12 @@ Review focus:
 ### Task 4 — Implemented: shared inserted-track metadata initialisation path
 
 Status (2026-03-16):
-- Constructor-time initial tracks now write tracker-owned maintenance metadata through the same shared metadata-write helper used by inserted tracks.
-- Internal birth insertion and external-start insertion continue to use the inserted-track metadata helper, which now delegates field writes to that same shared path.
-- Constructor defaults are intentionally unchanged: `age` still defaults to `len(track)` and `hits` still defaults to `0` when absent, while inserted tracks keep their existing conventions.
-- Focused tracker tests now make the metadata conventions explicit across constructor-time initial tracks, internal births, and external starts.
+- Internal birth insertion and external-start insertion use shared tracker-owned maintenance metadata write paths.
+- Legacy constructor-time `initial_tracks` startup support has since been removed (interlude update, 2026-03-16), so the shared path now applies to inserted tracks only.
+- Focused tracker tests cover empty startup plus inserted-track metadata conventions for internal births and external starts.
 
 Scope:
-- factor constructor-time initial-track setup, internal-birth insertion, and external-start insertion
-  through a shared helper where appropriate,
+- factor internal-birth insertion and external-start insertion through a shared helper where appropriate,
 - preserve current behaviour,
 - add/update checks that verify consistent metadata initialisation.
 
@@ -362,8 +359,8 @@ Review focus:
 Status (2026-03-16):
 - Added explicit runner-layer operating modes `CUSTOM`, `EXTERNAL`, `INTERNAL`, and `BOTH`, logged per run via `OPERATING_MODE ...`.
 - Added `--operating-mode {CUSTOM,EXTERNAL,INTERNAL,BOTH}` to `run_tomht_crossing.py` and `run_tomht_bearing_range.py`.
-- `EXTERNAL` / `INTERNAL` / `BOTH` now fully determine births/initial-track/external-start enablement and ignore the births/initial-track toggles.
-- `CUSTOM` mode uses low-level toggles directly and intentionally permits arbitrary combinations.
+- `EXTERNAL` / `INTERNAL` / `BOTH` now fully determine births/external-start enablement.
+- `CUSTOM` mode uses low-level toggles directly (`--births` plus external-start scan options) and intentionally permits arbitrary combinations.
 - `EXTERNAL` and `BOTH` default to `external-start-scan=0` when no external-start scan is specified; `INTERNAL` ignores external-start flags.
 - Focused tests now cover mode normalization and mode-to-configuration mapping.
 - Headless runnable examples now exist for each primary mode in `TO_MHT_CURRENT_STATE.md`.
@@ -411,3 +408,16 @@ Review focus:
 - docs match code,
 - no overclaiming,
 - no stale API wording.
+
+### Task 8 — Implemented: remove legacy constructor-time initial-track startup path
+
+Status (2026-03-16):
+- Removed `initial_tracks` from `TOMHTTracker.__init__`.
+- Removed builder-layer `tracks` plumbing (`build_tomht_linear` / `build_tomht_ukf` now always create empty-start trackers).
+- Removed runner/config/CLI support for scenario initial tracks (including `--initial-tracks`).
+- Updated tests to use empty startup and explicit in-test seeding when birth-branching tests require pre-existing tracks.
+- Updated docs to make the startup model explicit: empty first global hypothesis + runtime confirmed starts via `add_external_starts(...)`.
+
+Remaining TODO (intentionally deferred):
+- pre-first-step external-start insertion is still unsupported because `add_external_starts(...)` requires a completed `step()`;
+- a virtual empty initial update is a possible future enhancement, but out of scope for this phase.

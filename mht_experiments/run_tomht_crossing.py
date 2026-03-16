@@ -17,7 +17,7 @@ if __name__ == "__main__":
         default="CUSTOM",
         help=(
             "Operating mode: CUSTOM (use detailed flags), EXTERNAL, INTERNAL, "
-            "or BOTH. Non-CUSTOM modes ignore births/initial-track toggles."
+            "or BOTH. Non-CUSTOM modes ignore the births toggle."
         ),
     )
     parser.add_argument(
@@ -26,16 +26,6 @@ if __name__ == "__main__":
         action=argparse.BooleanOptionalAction,
         default=True,
         help=("Enable/disable initiator/births. " "Used in CUSTOM mode (default: on)."),
-    )
-    parser.add_argument(
-        "--initial-tracks",
-        dest="initial_tracks",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Enable/disable scenario initial tracks. "
-            "Used in CUSTOM mode (default: off)."
-        ),
     )
     external_start_group = parser.add_mutually_exclusive_group()
     external_start_group.add_argument(
@@ -90,7 +80,6 @@ if __name__ == "__main__":
     run_tomht(
         "crossing",
         use_initiator=args.births,
-        use_initial_tracks=args.initial_tracks,
         operating_mode=args.operating_mode,
         external_start_scan=args.external_start_scan,
         external_start_delay_scans=args.external_start_delay_scans,
