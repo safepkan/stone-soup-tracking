@@ -100,7 +100,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         tracker = _build_tracker()
 
         self.assertEqual(1, len(tracker.global_hypotheses))
-        self.assertEqual({}, tracker.global_hypotheses[0].tracks_by_id)
+        self.assertEqual({}, tracker.global_hypotheses[0].leaf_nodes_by_track_id)
         self.assertEqual(0.0, tracker.global_hypotheses[0].log_weight)
         self.assertEqual(0, tracker._next_track_id)
 
@@ -118,13 +118,17 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         )
         detection = Detection(np.array([[1.0], [2.0]]), timestamp=timestamp)
         ctx = ScanContext(
+            scan_index=0,
             timestamp=timestamp,
             detections=[detection],
             det_index_by_obj={id(detection): 0},
         )
 
         tracker._branch_globals_with_births(ctx)
-        inserted = next(iter(tracker.global_hypotheses[0].tracks_by_id.values()))
+        inserted_node = next(
+            iter(tracker.global_hypotheses[0].leaf_nodes_by_track_id.values())
+        )
+        inserted = tracker._reconstruct_track_from_leaf_node(inserted_node)
 
         self._assert_track_maintenance_metadata(
             inserted,
@@ -151,7 +155,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         tracker.add_external_starts([], timestamp)
 
         self.assertEqual(1, len(tracker.global_hypotheses))
-        self.assertEqual({}, tracker.global_hypotheses[0].tracks_by_id)
+        self.assertEqual({}, tracker.global_hypotheses[0].leaf_nodes_by_track_id)
 
     def test_add_external_starts_rejects_mismatched_timestamp_after_step(self) -> None:
         tracker = _build_tracker()
@@ -194,24 +198,24 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
 
         tracker.step([], timestamp)
         tracker.global_hypotheses = [
-            GlobalHypothesis(tracks_by_id={}, log_weight=-1.5),
-            GlobalHypothesis(tracks_by_id={}, log_weight=-2.5),
+            GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=-1.5),
+            GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=-2.5),
         ]
 
         tracker.add_external_starts([_external_start(timestamp)], timestamp)
 
         self.assertEqual(2, len(tracker.global_hypotheses))
-        first_id, first_track = next(
-            iter(tracker.global_hypotheses[0].tracks_by_id.items())
+        first_id, first_node = next(
+            iter(tracker.global_hypotheses[0].leaf_nodes_by_track_id.items())
         )
-        second_id, second_track = next(
-            iter(tracker.global_hypotheses[1].tracks_by_id.items())
+        second_id, second_node = next(
+            iter(tracker.global_hypotheses[1].leaf_nodes_by_track_id.items())
         )
 
         self.assertEqual(first_id, second_id)
         self.assertEqual(-1.5, tracker.global_hypotheses[0].log_weight)
         self.assertEqual(-2.5, tracker.global_hypotheses[1].log_weight)
-        self.assertIsNot(first_track, second_track)
+        self.assertIs(first_node, second_node)
 
     def test_add_external_starts_empty_list_is_noop(self) -> None:
         tracker = _build_tracker()
@@ -220,13 +224,15 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         tracker.step([], timestamp)
         before_next_track_id = tracker._next_track_id
         before_globals = [
-            (gh.log_weight, dict(gh.tracks_by_id)) for gh in tracker.global_hypotheses
+            (gh.log_weight, dict(gh.leaf_nodes_by_track_id))
+            for gh in tracker.global_hypotheses
         ]
 
         tracker.add_external_starts([], timestamp)
 
         after_globals = [
-            (gh.log_weight, dict(gh.tracks_by_id)) for gh in tracker.global_hypotheses
+            (gh.log_weight, dict(gh.leaf_nodes_by_track_id))
+            for gh in tracker.global_hypotheses
         ]
         self.assertEqual(before_next_track_id, tracker._next_track_id)
         self.assertEqual(before_globals, after_globals)
@@ -240,7 +246,10 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         tracker.step([], timestamp)
         tracker.add_external_starts([external_start], timestamp)
 
-        inserted = next(iter(tracker.global_hypotheses[0].tracks_by_id.values()))
+        inserted_node = next(
+            iter(tracker.global_hypotheses[0].leaf_nodes_by_track_id.values())
+        )
+        inserted = tracker._reconstruct_track_from_leaf_node(inserted_node)
 
         self._assert_track_maintenance_metadata(
             inserted,
@@ -263,7 +272,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         tracker.add_external_starts([external_start], timestamp)
         tracker.add_external_starts([external_start], timestamp)
 
-        track_ids = sorted(tracker.global_hypotheses[0].tracks_by_id)
+        track_ids = sorted(tracker.global_hypotheses[0].leaf_nodes_by_track_id)
         self.assertEqual(2, len(track_ids))
         self.assertNotEqual(track_ids[0], track_ids[1])
 

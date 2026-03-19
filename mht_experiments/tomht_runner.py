@@ -371,7 +371,12 @@ def run_tomht(
                 f"truth_indices=[{truth_indices}]"
             )
             if tracker.global_hypotheses:
-                tracks_out = set(tracker.global_hypotheses[0].tracks_by_id.values())
+                tracks_out = {
+                    tracker._reconstruct_track_from_leaf_node(node)
+                    for node in tracker.global_hypotheses[
+                        0
+                    ].leaf_nodes_by_track_id.values()
+                }
             else:
                 tracks_out = set()
 

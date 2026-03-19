@@ -68,7 +68,7 @@ class TOMHTParams:
 @dataclass(frozen=True)
 class ChildCandidate:
     track_id: int
-    child_track: Track
+    child_node: TrackHypothesisNode
     used_det_key: int | None
     log_delta: float
 
@@ -77,14 +77,39 @@ class ChildCandidate:
 class GlobalHypothesis:
     """One global hypothesis = one leaf per track_id + cumulative log weight."""
 
-    tracks_by_id: dict[int, Track]
+    leaf_nodes_by_track_id: dict[int, TrackHypothesisNode]
     log_weight: float
+
+
+@dataclass(frozen=True)
+class TrackHypothesisNode:
+    """One explicit hypothesis node for one logical track at one scan step."""
+
+    node_id: int
+    track_id: int
+    parent: TrackHypothesisNode | None
+    scan_index: int
+    timestamp: object
+    state: object
+    state_kind: str
+    used_det_key: int | None
+    assoc_label: int
+    log_delta: float
+    age: int
+    hits: int
+    missed_count: int
+    last_det_key: int | None
+    last_det_hit: bool
+    root_source: str
+    birth_scan_index: int
+    track_metadata: dict[str, object]
 
 
 @dataclass(frozen=True)
 class ScanContext:
     """Per-scan context passed into scoring models."""
 
+    scan_index: int
     timestamp: object
     detections: list[Detection]
     det_index_by_obj: dict[int, int]
@@ -104,6 +129,7 @@ class BirthStats:
 @dataclass(frozen=True)
 class BirthTemplate:
     track_id: int
+    leaf_node: TrackHypothesisNode
     template_track: Track
     used_det_key: int | None
 
@@ -247,28 +273,122 @@ class TOMHTTracker:
         hist.append(ASSOC_PAD if last_entry is None else int(last_entry))
         return hist
 
-    def _append_assoc_history(self, track: Track, value: int) -> None:
-        hist = track.metadata.get("assoc_history")
-        if isinstance(hist, deque):
-            hist = deque(hist, maxlen=self.params.assoc_history_len)
-        else:
-            hist = deque([], maxlen=self.params.assoc_history_len)
-        track.metadata["assoc_history"] = hist
-        hist.append(int(value))
+    def _lineage_from_leaf_node(
+        self, leaf_node: TrackHypothesisNode
+    ) -> list[TrackHypothesisNode]:
+        lineage: list[TrackHypothesisNode] = []
+        node: TrackHypothesisNode | None = leaf_node
+        while node is not None:
+            lineage.append(node)
+            node = node.parent
+        lineage.reverse()
+        return lineage
 
-    def _history_tail(self, track: Track) -> tuple[int, ...]:
-        hist = track.metadata.get("assoc_history")
-        hist = deque(
-            hist if isinstance(hist, deque) else [],
-            maxlen=self.params.assoc_history_len,
-        )
+    def _assoc_history_from_leaf_node(
+        self, leaf_node: TrackHypothesisNode
+    ) -> deque[int]:
+        hist: deque[int] = deque([], maxlen=self.params.assoc_history_len)
+        for node in self._lineage_from_leaf_node(leaf_node):
+            hist.append(int(node.assoc_label))
+        return hist
+
+    def _history_tail_from_leaf_node(
+        self, leaf_node: TrackHypothesisNode
+    ) -> tuple[int, ...]:
+        hist = self._assoc_history_from_leaf_node(leaf_node)
         tail_len = min(
             int(self.params.ns_scan_window), int(self.params.assoc_history_len)
         )
+        if tail_len <= 0:
+            return tuple()
         if len(hist) < tail_len:
             pad_needed = tail_len - len(hist)
             return tuple([ASSOC_PAD] * pad_needed + list(hist))
         return tuple(list(hist)[-tail_len:])
+
+    def _allocate_node_id(self) -> int:
+        node_id = self._next_node_id
+        self._next_node_id += 1
+        return node_id
+
+    def _register_node(self, node: TrackHypothesisNode) -> TrackHypothesisNode:
+        self._nodes_by_id[node.node_id] = node
+        return node
+
+    def _create_track_hypothesis_node(
+        self,
+        *,
+        track_id: int,
+        parent: TrackHypothesisNode | None,
+        scan_index: int,
+        timestamp: object,
+        state: object,
+        state_kind: str,
+        used_det_key: int | None,
+        assoc_label: int,
+        log_delta: float,
+        age: int,
+        hits: int,
+        missed_count: int,
+        last_det_key: int | None,
+        last_det_hit: bool,
+        root_source: str,
+        birth_scan_index: int,
+        track_metadata: dict[str, object] | None = None,
+    ) -> TrackHypothesisNode:
+        if parent is not None and parent.track_id != track_id:
+            raise ValueError(
+                "TrackHypothesisNode parent.track_id must match child track_id."
+            )
+        if track_metadata is None:
+            track_metadata = (
+                dict(parent.track_metadata) if parent is not None else dict()
+            )
+        node = TrackHypothesisNode(
+            node_id=self._allocate_node_id(),
+            track_id=int(track_id),
+            parent=parent,
+            scan_index=int(scan_index),
+            timestamp=timestamp,
+            state=state,
+            state_kind=state_kind,
+            used_det_key=used_det_key,
+            assoc_label=int(assoc_label),
+            log_delta=float(log_delta),
+            age=int(age),
+            hits=int(hits),
+            missed_count=int(missed_count),
+            last_det_key=last_det_key,
+            last_det_hit=bool(last_det_hit),
+            root_source=root_source,
+            birth_scan_index=int(birth_scan_index),
+            track_metadata=dict(track_metadata),
+        )
+        return self._register_node(node)
+
+    def _reconstruct_track_from_leaf_node(
+        self, leaf_node: TrackHypothesisNode
+    ) -> Track:
+        """
+        Transitional adapter boundary: reconstruct a Stone Soup Track from node ancestry.
+
+        Internal branch identity remains node-based; this view exists for compatibility
+        with APIs that currently expect Track instances.
+        """
+        lineage = self._lineage_from_leaf_node(leaf_node)
+        tr = Track([node.state for node in lineage])
+        tr.metadata.update(leaf_node.track_metadata)
+        tr.metadata["track_id"] = int(leaf_node.track_id)
+        tr.metadata["node_id"] = int(leaf_node.node_id)
+        tr.metadata["age"] = int(leaf_node.age)
+        tr.metadata["hits"] = int(leaf_node.hits)
+        tr.metadata["missed_count"] = int(leaf_node.missed_count)
+        tr.metadata["last_det_key"] = leaf_node.last_det_key
+        tr.metadata["last_det_hit"] = bool(leaf_node.last_det_hit)
+        tr.metadata["assoc_history"] = self._assoc_history_from_leaf_node(leaf_node)
+        tr.metadata["root_source"] = leaf_node.root_source
+        tr.metadata["birth_scan_index"] = int(leaf_node.birth_scan_index)
+        return tr
 
     def __init__(
         self,
@@ -320,11 +440,14 @@ class TOMHTTracker:
             )
 
         self._next_track_id = 0
+        self._next_node_id = 0
+        self._nodes_by_id: dict[int, TrackHypothesisNode] = {}
 
         self.global_hypotheses: list[GlobalHypothesis] = [
-            GlobalHypothesis(tracks_by_id={}, log_weight=0.0)
+            GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=0.0)
         ]
         self._last_step_timestamp: object | None = None
+        self._last_scan_index: int | None = None
         self.last_scan_stats: ScanStats | None = None
         self._stats: list[ScanStats] = []
         self.reset_stats()
@@ -458,23 +581,23 @@ class TOMHTTracker:
 
     def _display_global_hypotheses(self, det_list: list[Detection]) -> None:
         for gh in self.global_hypotheses[: self.params.debug_globals_max]:
-            used = len(self._used_det_keys_for_tracks(gh.tracks_by_id))
+            used = len(self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id))
             unused = len(det_list) - used
             print(
                 f"logW={gh.log_weight:.3f}, "
-                f"tracks={len(gh.tracks_by_id)}, "
+                f"tracks={len(gh.leaf_nodes_by_track_id)}, "
                 f"used={used}, unused={unused}, "
-                f"ids={sorted(gh.tracks_by_id.keys())}"
+                f"ids={sorted(gh.leaf_nodes_by_track_id.keys())}"
             )
 
-            for tid, tr in sorted(gh.tracks_by_id.items()):
-                last = tr.states[-1].state_vector
-                ldk = tr.metadata.get("last_det_key", None)
-                miss = int(tr.metadata.get("missed_count", 0))
-                dk = self._used_det_key_for_track(tr)
+            for tid, node in sorted(gh.leaf_nodes_by_track_id.items()):
+                last = getattr(node.state, "state_vector")
+                ldk = node.last_det_key
+                miss = int(node.missed_count)
+                dk = self._used_det_key_for_leaf_node(node)
                 used_str = "MISS" if dk is None else "HIT"
-                age = int(tr.metadata.get("age", len(tr)))
-                hits = int(tr.metadata.get("hits", 0))
+                age = int(node.age)
+                hits = int(node.hits)
                 print(
                     f"  id={tid}, {used_str}, age={age}, hits={hits}, miss={miss}, ldk={ldk}, last={self._fmt_state_xyvxvy(last)}"
                 )
@@ -501,62 +624,9 @@ class TOMHTTracker:
         vy = float(sv[3, 0])
         return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
 
-    @staticmethod
-    def _copy_track(track: Track) -> Track:
-        """Copy track states and metadata; deep-copy assoc_history deque if present."""
-        child = Track(list(track.states))
-        child.metadata.update(track.metadata)
-
-        hist = track.metadata.get("assoc_history")
-        if isinstance(hist, deque):
-            child.metadata["assoc_history"] = deque(hist, maxlen=hist.maxlen)
-        return child
-
-    def _write_track_maintenance_metadata(
-        self,
-        track: Track,
-        *,
-        track_id: int,
-        age: int,
-        hits: int,
-        missed_count: int,
-        last_det_key: int | None,
-        last_det_hit: bool | None = None,
-    ) -> None:
-        """Write tracker-owned maintenance metadata fields in one place."""
-        track.metadata["track_id"] = int(track_id)
-        track.metadata["age"] = int(age)
-        track.metadata["hits"] = int(hits)
-        track.metadata["missed_count"] = int(missed_count)
-        track.metadata["last_det_key"] = last_det_key
-        track.metadata["last_det_hit"] = (
-            last_det_key is not None if last_det_hit is None else bool(last_det_hit)
-        )
-        track.metadata["assoc_history"] = self._new_assoc_history(last_det_key)
-
-    def _initialise_inserted_track_metadata(
-        self,
-        track: Track,
-        *,
-        track_id: int,
-        age: int,
-        hits: int,
-        last_det_key: int | None,
-        last_det_hit: bool | None = None,
-    ) -> None:
-        age = max(int(age), 1)
-        hits = min(max(int(hits), 0), age)
-        self._write_track_maintenance_metadata(
-            track,
-            track_id=track_id,
-            age=age,
-            hits=hits,
-            missed_count=0,
-            last_det_key=last_det_key,
-            last_det_hit=last_det_hit,
-        )
-
-    def _make_external_start_template(self, start: Track, timestamp: object) -> Track:
+    def _make_external_start_template(
+        self, start: Track, timestamp: object
+    ) -> TrackHypothesisNode:
         if len(start) == 0:
             raise ValueError(
                 "External starts must contain at least one state at the current timestamp."
@@ -572,40 +642,47 @@ class TOMHTTracker:
         track_id = self._next_track_id
         self._next_track_id += 1
 
-        template = self._copy_track(start)
-        age = max(int(template.metadata.get("age", len(template))), 1)
-        hits = int(template.metadata.get("hits", age))
+        age = max(int(start.metadata.get("age", len(start))), 1)
+        hits = int(start.metadata.get("hits", age))
         hits = min(max(hits, 1), age)
-        self._initialise_inserted_track_metadata(
-            template,
+        state = start.states[-1]
+        assert self._last_scan_index is not None
+        return self._create_track_hypothesis_node(
             track_id=track_id,
+            parent=None,
+            scan_index=int(self._last_scan_index),
+            timestamp=getattr(state, "timestamp", timestamp),
+            state=state,
+            state_kind="external_start",
+            used_det_key=None,
+            assoc_label=ASSOC_PAD,
+            log_delta=0.0,
             age=age,
             hits=hits,
+            missed_count=0,
             last_det_key=None,
             last_det_hit=False,
+            root_source="external_start",
+            birth_scan_index=int(self._last_scan_index),
+            track_metadata=dict(start.metadata),
         )
-        return template
 
-    def _used_det_key_for_track(self, tr: Track) -> int | None:
-        # Deterministic per-scan key assigned in _candidates_for_track
-        val = tr.metadata.get("last_det_key", None)
+    def _used_det_key_for_leaf_node(self, leaf_node: TrackHypothesisNode) -> int | None:
+        val = leaf_node.last_det_key
         return int(val) if val is not None else None
 
-    def _used_det_keys_for_tracks(self, tracks_by_id: dict[int, Track]) -> set[int]:
+    def _used_det_keys_for_leaf_nodes(
+        self, leaf_nodes_by_track_id: dict[int, TrackHypothesisNode]
+    ) -> set[int]:
         used: set[int] = set()
-        for tr in tracks_by_id.values():
-            dk = self._used_det_key_for_track(tr)
+        for leaf_node in leaf_nodes_by_track_id.values():
+            dk = self._used_det_key_for_leaf_node(leaf_node)
             if dk is not None:
                 used.add(dk)
         return used
 
     def _used_det_keys_in_global(self, gh: GlobalHypothesis) -> set[int]:
-        used: set[int] = set()
-        for tr in gh.tracks_by_id.values():
-            dk = self._used_det_key_for_track(tr)
-            if dk is not None:
-                used.add(dk)
-        return used
+        return self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id)
 
     def _residual_detections(
         self,
@@ -630,12 +707,13 @@ class TOMHTTracker:
     ) -> GlobalHypothesis:
         if not ctx.detections:
             return gh
-        used = self._used_det_keys_for_tracks(gh.tracks_by_id)
+        used = self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id)
         delta = self.scoring_model.score_unused_detections(used_det_keys=used, ctx=ctx)
         if delta == 0.0:
             return gh
         return GlobalHypothesis(
-            tracks_by_id=gh.tracks_by_id, log_weight=gh.log_weight + delta
+            leaf_nodes_by_track_id=gh.leaf_nodes_by_track_id,
+            log_weight=gh.log_weight + delta,
         )
 
     def _birth_support_points(self, birth: Track) -> int:
@@ -665,9 +743,11 @@ class TOMHTTracker:
     def _candidates_for_track(
         self,
         track_id: int,
-        track: Track,
+        leaf_node: TrackHypothesisNode,
         ctx: ScanContext,
     ) -> list[ChildCandidate]:
+        # Transitional adapter: hypothesiser/updater still run on Track views.
+        track = self._reconstruct_track_from_leaf_node(leaf_node)
         multi = self.hypothesiser.hypothesise(track, ctx.detections, ctx.timestamp)
         singles = list(multi)
 
@@ -708,36 +788,47 @@ class TOMHTTracker:
 
         candidates: list[ChildCandidate] = []
         for hyp in kept:
-            child = self._copy_track(track)
-            child.metadata.setdefault("track_id", track_id)
-
             if not hyp:
-                child.append(hyp.prediction)
-                child.metadata["missed_count"] = (
-                    int(track.metadata.get("missed_count", 0)) + 1
-                )
+                state = hyp.prediction
+                missed_count = int(leaf_node.missed_count) + 1
                 used = None
-                self._append_assoc_history(child, ASSOC_MISS)
+                assoc_label = ASSOC_MISS
+                state_kind = "prediction"
             else:
-                upd = self.updater.update(hyp)
-                child.append(upd)
-                child.metadata["missed_count"] = 0
+                state = self.updater.update(hyp)
+                missed_count = 0
                 used = ctx.det_index_by_obj[id(hyp.measurement)]
-                self._append_assoc_history(child, used)
+                assoc_label = int(used)
+                state_kind = "update"
 
-            child.metadata["age"] = int(track.metadata.get("age", len(track))) + 1
-            child.metadata["hits"] = int(track.metadata.get("hits", 0)) + (
-                1 if hyp else 0
+            age = int(leaf_node.age) + 1
+            hits = int(leaf_node.hits) + (1 if hyp else 0)
+            log_delta = float(hyp_scores.get(id(hyp), 0.0))
+            child_node = self._create_track_hypothesis_node(
+                track_id=track_id,
+                parent=leaf_node,
+                scan_index=ctx.scan_index,
+                timestamp=getattr(state, "timestamp", ctx.timestamp),
+                state=state,
+                state_kind=state_kind,
+                used_det_key=used,
+                assoc_label=assoc_label,
+                log_delta=log_delta,
+                age=age,
+                hits=hits,
+                missed_count=missed_count,
+                last_det_key=used,
+                last_det_hit=used is not None,
+                root_source=leaf_node.root_source,
+                birth_scan_index=leaf_node.birth_scan_index,
             )
-            child.metadata["last_det_key"] = used
-            child.metadata["last_det_hit"] = used is not None
 
             candidates.append(
                 ChildCandidate(
                     track_id=track_id,
-                    child_track=child,
+                    child_node=child_node,
                     used_det_key=used,
-                    log_delta=float(hyp_scores.get(id(hyp), 0.0)),
+                    log_delta=log_delta,
                 )
             )
 
@@ -749,14 +840,14 @@ class TOMHTTracker:
         gh: GlobalHypothesis,
         ctx: ScanContext,
     ) -> list[GlobalHypothesis]:
-        track_ids = sorted(gh.tracks_by_id.keys())
+        track_ids = sorted(gh.leaf_nodes_by_track_id.keys())
 
         per_track_candidates: list[list[ChildCandidate]] = []
         for tid in track_ids:
             per_track_candidates.append(
                 self._candidates_for_track(
                     tid,
-                    gh.tracks_by_id[tid],
+                    gh.leaf_nodes_by_track_id[tid],
                     ctx,
                 )
             )
@@ -764,11 +855,17 @@ class TOMHTTracker:
         new_globals: list[GlobalHypothesis] = []
 
         def backtrack(
-            i: int, used: set[int], acc_tracks: dict[int, Track], acc_log: float
+            i: int,
+            used: set[int],
+            acc_leaf_nodes: dict[int, TrackHypothesisNode],
+            acc_log: float,
         ) -> None:
             if i == len(track_ids):
                 new_globals.append(
-                    GlobalHypothesis(tracks_by_id=dict(acc_tracks), log_weight=acc_log)
+                    GlobalHypothesis(
+                        leaf_nodes_by_track_id=dict(acc_leaf_nodes),
+                        log_weight=acc_log,
+                    )
                 )
                 return
 
@@ -777,19 +874,17 @@ class TOMHTTracker:
                 if cand.used_det_key is not None and cand.used_det_key in used:
                     continue
 
-                child = cand.child_track
-                missed = int(child.metadata.get("missed_count", 0))
+                child = cand.child_node
+                missed = int(child.missed_count)
                 if missed > self.params.max_missed:
-                    acc_tracks.pop(tid, None)
-                    backtrack(i + 1, used, acc_tracks, acc_log + cand.log_delta)
-                    # restore for other branches
-                    acc_tracks[tid] = child
+                    backtrack(i + 1, used, acc_leaf_nodes, acc_log + cand.log_delta)
                     continue
 
                 if cand.used_det_key is not None:
                     used.add(cand.used_det_key)
-                acc_tracks[tid] = child
-                backtrack(i + 1, used, acc_tracks, acc_log + cand.log_delta)
+                acc_leaf_nodes[tid] = child
+                backtrack(i + 1, used, acc_leaf_nodes, acc_log + cand.log_delta)
+                acc_leaf_nodes.pop(tid, None)
                 if cand.used_det_key is not None:
                     used.remove(cand.used_det_key)
 
@@ -894,7 +989,10 @@ class TOMHTTracker:
         return born
 
     def _prepare_birth_templates(
-        self, born: list[Track], det_index_by_obj: dict[int, int]
+        self,
+        born: list[Track],
+        det_index_by_obj: dict[int, int],
+        ctx: ScanContext,
     ) -> tuple[list[BirthTemplate], set[int]]:
         birth_templates: list[BirthTemplate] = []
         birth_track_ids: set[int] = set()
@@ -902,9 +1000,30 @@ class TOMHTTracker:
             tid = self._next_track_id
             self._next_track_id += 1
             used_key = self._birth_used_key(tr, det_index_by_obj)
+            state = tr.states[-1]
+            leaf_node = self._create_track_hypothesis_node(
+                track_id=tid,
+                parent=None,
+                scan_index=ctx.scan_index,
+                timestamp=getattr(state, "timestamp", ctx.timestamp),
+                state=state,
+                state_kind="birth",
+                used_det_key=used_key,
+                assoc_label=ASSOC_PAD if used_key is None else int(used_key),
+                log_delta=0.0,
+                age=1,
+                hits=1 if used_key is not None else 0,
+                missed_count=0,
+                last_det_key=used_key,
+                last_det_hit=used_key is not None,
+                root_source="internal_birth",
+                birth_scan_index=ctx.scan_index,
+                track_metadata=dict(tr.metadata),
+            )
             birth_templates.append(
                 BirthTemplate(
                     track_id=tid,
+                    leaf_node=leaf_node,
                     template_track=tr,
                     used_det_key=used_key,
                 )
@@ -918,28 +1037,20 @@ class TOMHTTracker:
         templates: Iterable[BirthTemplate],
         ctx: ScanContext,
     ) -> GlobalHypothesis:
-        tracks_by_id = dict(gh.tracks_by_id)
+        leaf_nodes_by_track_id = dict(gh.leaf_nodes_by_track_id)
         birth_delta_total = 0.0
 
         for template in templates:
-            tr_copy = self._copy_track(template.template_track)
-            self._initialise_inserted_track_metadata(
-                tr_copy,
-                track_id=template.track_id,
-                age=1,
-                hits=1 if template.used_det_key is not None else 0,
-                last_det_key=template.used_det_key,
-            )
-            tracks_by_id[template.track_id] = tr_copy
+            leaf_nodes_by_track_id[template.track_id] = template.leaf_node
 
             birth_delta_total += self.scoring_model.score_birth(
-                birth_track=tr_copy,
+                birth_track=template.template_track,
                 used_det_key=template.used_det_key,
                 ctx=ctx,
             )
 
         return GlobalHypothesis(
-            tracks_by_id=tracks_by_id,
+            leaf_nodes_by_track_id=leaf_nodes_by_track_id,
             log_weight=gh.log_weight + birth_delta_total,
         )
 
@@ -962,7 +1073,7 @@ class TOMHTTracker:
         branched: list[GlobalHypothesis] = []
 
         # If there are no tracks yet, don't keep the empty hypothesis once we have births to add.
-        if gh.tracks_by_id:
+        if gh.leaf_nodes_by_track_id:
             branched.append(gh)
 
         # Always allow one-birth variants for compatible candidates.
@@ -1020,16 +1131,13 @@ class TOMHTTracker:
         birth_track_instances_in_beam = sum(
             1
             for gh in self.global_hypotheses
-            for tr in gh.tracks_by_id.values()
-            if int(tr.metadata.get("track_id", -1)) in birth_track_ids
+            for tid in gh.leaf_nodes_by_track_id
+            if tid in birth_track_ids
         )
         globals_with_birth = sum(
             1
             for gh in self.global_hypotheses
-            if any(
-                int(tr.metadata.get("track_id", -1)) in birth_track_ids
-                for tr in gh.tracks_by_id.values()
-            )
+            if any(tid in birth_track_ids for tid in gh.leaf_nodes_by_track_id)
         )
         return birth_track_instances_in_beam, globals_with_birth
 
@@ -1059,6 +1167,7 @@ class TOMHTTracker:
                 birth_templates, birth_track_ids = self._prepare_birth_templates(
                     born,
                     ctx.det_index_by_obj,
+                    ctx,
                 )
                 self._branch_globals_with_birth_templates(birth_templates, ctx)
 
@@ -1088,7 +1197,8 @@ class TOMHTTracker:
         for gh in globals:
             sig = tuple(
                 sorted(
-                    (tid, self._history_tail(tr)) for tid, tr in gh.tracks_by_id.items()
+                    (tid, self._history_tail_from_leaf_node(leaf_node))
+                    for tid, leaf_node in gh.leaf_nodes_by_track_id.items()
                 )
             )
             prev = best.get(sig)
@@ -1097,7 +1207,7 @@ class TOMHTTracker:
         return list(best.values())
 
     def _validate_external_starts_timestamp(self, timestamp: object) -> None:
-        if self._last_step_timestamp is None:
+        if self._last_step_timestamp is None or self._last_scan_index is None:
             raise RuntimeError(
                 "add_external_starts() requires a completed step() first."
             )
@@ -1127,13 +1237,12 @@ class TOMHTTracker:
 
         new_globals: list[GlobalHypothesis] = []
         for gh in self.global_hypotheses:
-            tracks_by_id = dict(gh.tracks_by_id)
+            leaf_nodes_by_track_id = dict(gh.leaf_nodes_by_track_id)
             for template in templates:
-                tid = int(template.metadata["track_id"])
-                tracks_by_id[tid] = self._copy_track(template)
+                leaf_nodes_by_track_id[template.track_id] = template
             new_globals.append(
                 GlobalHypothesis(
-                    tracks_by_id=tracks_by_id,
+                    leaf_nodes_by_track_id=leaf_nodes_by_track_id,
                     log_weight=gh.log_weight,
                 )
             )
@@ -1141,13 +1250,19 @@ class TOMHTTracker:
 
     def step(self, detections: Iterable[Detection], timestamp) -> set[Track]:
         globals_in = len(self.global_hypotheses)
+        scan_index = (
+            0 if self._last_scan_index is None else int(self._last_scan_index) + 1
+        )
         det_list = self._sorted_detections(detections)
         # Use id(det) because Stone Soup hypotheses keep the original Detection
         # objects; hash/equality isn't defined on Detection, but identity is
         # stable within a scan.
         det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}
         ctx = ScanContext(
-            timestamp=timestamp, detections=det_list, det_index_by_obj=det_index_by_obj
+            scan_index=scan_index,
+            timestamp=timestamp,
+            detections=det_list,
+            det_index_by_obj=det_index_by_obj,
         )
 
         # Expand globals with current batch of detections
@@ -1188,17 +1303,19 @@ class TOMHTTracker:
         map_mean_hit_rate = 0.0
         if self.global_hypotheses:
             best = self.global_hypotheses[0]
-            map_tracks = len(best.tracks_by_id)
-            map_used = len(self._used_det_keys_for_tracks(best.tracks_by_id))
+            map_tracks = len(best.leaf_nodes_by_track_id)
+            map_used = len(
+                self._used_det_keys_for_leaf_nodes(best.leaf_nodes_by_track_id)
+            )
             map_unused = len(det_list) - map_used
 
             hit_rates: list[float] = []
-            for tr in best.tracks_by_id.values():
-                misses = int(tr.metadata.get("missed_count", 0))
+            for leaf_node in best.leaf_nodes_by_track_id.values():
+                misses = int(leaf_node.missed_count)
                 map_miss_hist[misses] = map_miss_hist.get(misses, 0) + 1
-                age = int(tr.metadata.get("age", len(tr)))
+                age = int(leaf_node.age)
                 if age > 0:
-                    hits = int(tr.metadata.get("hits", 0))
+                    hits = int(leaf_node.hits)
                     hit_rates.append(float(hits) / float(age))
             if hit_rates:
                 map_mean_hit_rate = float(np.mean(hit_rates))
@@ -1246,13 +1363,17 @@ class TOMHTTracker:
                 )
 
         self._last_step_timestamp = timestamp
+        self._last_scan_index = scan_index
 
         # Output MAP global hypothesis
         if not self.global_hypotheses:
             return set()
 
         best = self.global_hypotheses[0]
-        return set(best.tracks_by_id.values())
+        return {
+            self._reconstruct_track_from_leaf_node(leaf_node)
+            for leaf_node in best.leaf_nodes_by_track_id.values()
+        }
 
 
 def build_tomht_linear(

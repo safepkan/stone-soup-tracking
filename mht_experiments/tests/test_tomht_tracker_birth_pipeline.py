@@ -14,6 +14,7 @@ from stonesoup.types.track import Track
 from stonesoup.updater.base import Updater
 
 from mht_experiments.tomht_tracker import (
+    ASSOC_PAD,
     GlobalHypothesis,
     ScanContext,
     TOMHTParams,
@@ -83,6 +84,7 @@ def _scan_context(timestamp: datetime.datetime) -> ScanContext:
     det0 = Detection(np.array([[1.0], [2.0]]), timestamp=timestamp)
     det1 = Detection(np.array([[3.0], [4.0]]), timestamp=timestamp)
     return ScanContext(
+        scan_index=0,
         timestamp=timestamp,
         detections=[det0, det1],
         det_index_by_obj={id(det0): 0, id(det1): 1},
@@ -105,14 +107,38 @@ def _build_tracker(
 
 
 def _seed_existing_tracks(tracker: TOMHTTracker, tracks: list[Track]) -> None:
-    tracks_by_id = {int(track.metadata["track_id"]): track for track in tracks}
+    nodes_by_track_id = {}
+    for track in tracks:
+        track_id = int(track.metadata["track_id"])
+        state = track.states[-1]
+        last_det_key = track.metadata.get("last_det_key")
+        node = tracker._create_track_hypothesis_node(
+            track_id=track_id,
+            parent=None,
+            scan_index=0,
+            timestamp=getattr(state, "timestamp", None),
+            state=state,
+            state_kind="seed_existing",
+            used_det_key=int(last_det_key) if last_det_key is not None else None,
+            assoc_label=(ASSOC_PAD if last_det_key is None else int(last_det_key)),
+            log_delta=0.0,
+            age=int(track.metadata.get("age", len(track))),
+            hits=int(track.metadata.get("hits", 0)),
+            missed_count=int(track.metadata.get("missed_count", 0)),
+            last_det_key=int(last_det_key) if last_det_key is not None else None,
+            last_det_hit=bool(track.metadata.get("last_det_hit", False)),
+            root_source="seed_existing",
+            birth_scan_index=0,
+            track_metadata=dict(track.metadata),
+        )
+        nodes_by_track_id[track_id] = node
     tracker.global_hypotheses = [
         GlobalHypothesis(
-            tracks_by_id=tracks_by_id,
+            leaf_nodes_by_track_id=nodes_by_track_id,
             log_weight=0.0,
         )
     ]
-    tracker._next_track_id = (max(tracks_by_id) + 1) if tracks_by_id else 0
+    tracker._next_track_id = (max(nodes_by_track_id) + 1) if nodes_by_track_id else 0
 
 
 class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
@@ -166,9 +192,9 @@ class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
             stats = tracker._branch_globals_with_births(ctx)
 
         labels_in_beam = {
-            tr.metadata.get("label")
+            tracker._reconstruct_track_from_leaf_node(node).metadata.get("label")
             for gh in tracker.global_hypotheses
-            for tr in gh.tracks_by_id.values()
+            for node in gh.leaf_nodes_by_track_id.values()
         }
         self.assertEqual({"A", "B"}, labels_in_beam)
         self.assertNotIn("C", labels_in_beam)
@@ -233,10 +259,11 @@ class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
             [gh.log_weight for gh in tracker.global_hypotheses],
         )
         labels_in_beam = {
-            tr.metadata.get("label")
+            tracker._reconstruct_track_from_leaf_node(node).metadata.get("label")
             for gh in tracker.global_hypotheses
-            for tr in gh.tracks_by_id.values()
-            if tr.metadata.get("label") is not None
+            for node in gh.leaf_nodes_by_track_id.values()
+            if tracker._reconstruct_track_from_leaf_node(node).metadata.get("label")
+            is not None
         }
         self.assertEqual({"OK"}, labels_in_beam)
         self.assertNotIn("CONFLICTS", labels_in_beam)

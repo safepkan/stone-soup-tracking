@@ -6,6 +6,14 @@
 
 This phase replaces the old startup/birth-cleanup plan. The external-initiation phase is considered complete enough, and the next priority is to make the tracker structurally match a proper track-oriented MHT.
 
+### Implementation status (2026-03-19)
+
+- Task 2 / Step A representation groundwork is now in code:
+  - explicit `TrackHypothesisNode` objects exist and are tracker-owned,
+  - globals now store `track_id -> leaf node`,
+  - a temporary reconstruction adapter keeps Stone Soup `Track` compatibility at hypothesiser/updater/output boundaries.
+- True ancestor-based N-scan commitment is not implemented yet.
+
 ## Why this phase is next
 
 The current implementation is usable and reasonably clean, but its core representation is still not correct for a true TO-MHT:
