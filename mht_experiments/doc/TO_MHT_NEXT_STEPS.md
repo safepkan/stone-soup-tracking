@@ -17,7 +17,12 @@ This phase replaces the old startup/birth-cleanup plan. The external-initiation 
   - global expansion and detection-usage checks operate over node fields,
   - dedupe now uses structural leaf identity (`track_id -> node_id`) rather than history tails,
   - external starts and internal births both create root-like nodes via the same structural helper while keeping distinct provenance/scoring semantics.
-- True ancestor-based N-scan commitment is not implemented yet.
+- Task 4 / Step G ancestor-based N-scan commitment is now in code:
+  - commitment runs after beam pruning and before births using boundary `b = k - N`,
+  - per-track agreement checks use explicit ancestor node identity at scan `b`,
+  - only globals that still contain a `track_id` participate in that track’s agreement check,
+  - tracks without an exact-boundary ancestor (for example born after `b`) are conservatively left uncommitted,
+  - commitment bookkeeping is explicit, while physical node cleanup/GC remains deferred.
 
 ## Why this phase is next
 

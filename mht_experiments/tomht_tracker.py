@@ -143,6 +143,9 @@ class ScanStats:
     globals_after_unused: int
     globals_after_dedupe: int
     globals_after_beam: int
+    nscan_boundary_scan_index: int
+    nscan_tracks_in_scope: int
+    nscan_tracks_committed: int
     globals_after_births: int
     birth_candidates: int
     birth_tracks_created: int
@@ -265,6 +268,12 @@ class TOMHTTracker:
       (one child per track_id, no shared detections).
     """
 
+    _last_nscan_boundary_scan_index: int | None
+    _last_nscan_tracks_in_scope: int
+    _last_nscan_committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
+    _committed_boundary_by_track_id: dict[int, int]
+    _committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
+
     def _lineage_from_leaf_node(
         self, leaf_node: TrackHypothesisNode
     ) -> list[TrackHypothesisNode]:
@@ -284,6 +293,124 @@ class TOMHTTracker:
         for node in self._lineage_from_leaf_node(leaf_node):
             hist.append(int(node.assoc_label))
         return hist
+
+    def _ancestor_at_scan_boundary(
+        self,
+        leaf_node: TrackHypothesisNode,
+        boundary_scan_index: int,
+    ) -> TrackHypothesisNode | None:
+        """
+        Return this track's ancestor node exactly at `boundary_scan_index`.
+
+        Returns None when no exact-boundary ancestor exists, for example:
+        - boundary is before this track's birth/root scan, or
+        - ancestry has no node exactly at that scan index.
+        """
+        if boundary_scan_index < 0:
+            return None
+        node: TrackHypothesisNode | None = leaf_node
+        while node is not None and int(node.scan_index) > boundary_scan_index:
+            node = node.parent
+        if node is None:
+            return None
+        if int(node.scan_index) != boundary_scan_index:
+            return None
+        return node
+
+    def _compute_committed_track_ancestors_at_boundary(
+        self,
+        post_beam_globals: list[GlobalHypothesis],
+        boundary_scan_index: int,
+    ) -> tuple[dict[int, TrackHypothesisNode], int]:
+        """
+        Compute per-track ancestor-identity agreement at one N-scan boundary.
+
+        The agreement set is per-track and only uses globals that still contain
+        that track_id. Track absence in some globals is not disagreement.
+
+        Conservative choice: if any participating global has no exact-boundary
+        ancestor for a track (e.g. track born after boundary), that track is not
+        marked committed at this boundary.
+        """
+        if boundary_scan_index < 0 or not post_beam_globals:
+            return {}, 0
+
+        track_ids = sorted(
+            {
+                track_id
+                for gh in post_beam_globals
+                for track_id in gh.leaf_nodes_by_track_id.keys()
+            }
+        )
+
+        committed: dict[int, TrackHypothesisNode] = {}
+        tracks_in_scope = 0
+        for track_id in track_ids:
+            boundary_ancestors: list[TrackHypothesisNode] = []
+            missing_exact_boundary = False
+            participating_globals = 0
+
+            for gh in post_beam_globals:
+                leaf_node = gh.leaf_nodes_by_track_id.get(track_id)
+                if leaf_node is None:
+                    continue
+                participating_globals += 1
+                boundary_ancestor = self._ancestor_at_scan_boundary(
+                    leaf_node,
+                    boundary_scan_index,
+                )
+                if boundary_ancestor is None:
+                    missing_exact_boundary = True
+                    break
+                boundary_ancestors.append(boundary_ancestor)
+
+            if participating_globals == 0:
+                continue
+            tracks_in_scope += 1
+            if not boundary_ancestors:
+                continue
+            if missing_exact_boundary:
+                continue
+
+            first = boundary_ancestors[0]
+            if all(anc.node_id == first.node_id for anc in boundary_ancestors[1:]):
+                committed[track_id] = first
+        return committed, tracks_in_scope
+
+    def _update_n_scan_commitment(
+        self,
+        *,
+        scan_index: int,
+        post_beam_globals: list[GlobalHypothesis],
+    ) -> tuple[int, int, int]:
+        """
+        Update tracker-owned N-scan commitment state for this scan.
+
+        Runs after beam pruning and before births, using boundary b = k - N.
+        Physical cleanup/GC is intentionally deferred; this function only records
+        commitment agreement state.
+        """
+        boundary_scan_index = int(scan_index) - int(self.params.ns_scan_window)
+        self._last_nscan_boundary_scan_index = boundary_scan_index
+        self._last_nscan_committed_ancestor_by_track_id = {}
+        self._last_nscan_tracks_in_scope = 0
+
+        committed, tracks_in_scope = (
+            self._compute_committed_track_ancestors_at_boundary(
+                post_beam_globals,
+                boundary_scan_index,
+            )
+        )
+        self._last_nscan_tracks_in_scope = tracks_in_scope
+        self._last_nscan_committed_ancestor_by_track_id = committed
+
+        for track_id, ancestor in committed.items():
+            prev_boundary = self._committed_boundary_by_track_id.get(track_id)
+            if prev_boundary is None or boundary_scan_index > prev_boundary:
+                self._committed_boundary_by_track_id[track_id] = boundary_scan_index
+                self._committed_ancestor_by_track_id[track_id] = ancestor
+
+        return boundary_scan_index, tracks_in_scope, len(committed)
 
     def _allocate_node_id(self) -> int:
         node_id = self._next_node_id
@@ -456,6 +583,13 @@ class TOMHTTracker:
         self._next_track_id = 0
         self._next_node_id = 0
         self._nodes_by_id: dict[int, TrackHypothesisNode] = {}
+        # N-scan commitment bookkeeping; physical node cleanup is intentionally
+        # deferred to a later phase.
+        self._last_nscan_boundary_scan_index = None
+        self._last_nscan_tracks_in_scope = 0
+        self._last_nscan_committed_ancestor_by_track_id = {}
+        self._committed_boundary_by_track_id = {}
+        self._committed_ancestor_by_track_id = {}
 
         self.global_hypotheses: list[GlobalHypothesis] = [
             GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=0.0)
@@ -487,6 +621,8 @@ class TOMHTTracker:
         map_unused = [s.map_unused for s in stats]
         map_used = [s.map_used for s in stats]
         map_hit_rate = [s.map_mean_hit_rate for s in stats]
+        nscan_tracks_in_scope = [s.nscan_tracks_in_scope for s in stats]
+        nscan_tracks_committed = [s.nscan_tracks_committed for s in stats]
 
         def _mean(values: list[int] | list[float]) -> float:
             if not values:
@@ -535,6 +671,12 @@ class TOMHTTracker:
             f"tracks_kept med={median(birth_kept):.1f} mean={_mean(birth_kept):.2f} max={max(birth_kept)} "
             f"globals_with_birth={scans_with_birth_globals}/{num_scans} ({scans_with_birth_globals / num_scans:.1%}) "
             f"birth_pushes_to_full={scans_birth_push_to_full}/{num_scans} ({scans_birth_push_to_full / num_scans:.1%})"
+        )
+        print(
+            "SUMMARY nscan "
+            f"in_scope med={median(nscan_tracks_in_scope):.1f} mean={_mean(nscan_tracks_in_scope):.2f} "
+            f"committed med={median(nscan_tracks_committed):.1f} mean={_mean(nscan_tracks_committed):.2f} "
+            f"latest_boundary={self._last_nscan_boundary_scan_index}"
         )
         miss_hist_all: dict[int, int] = {}
         for scan in stats:
@@ -1305,6 +1447,14 @@ class TOMHTTracker:
         expanded.sort(key=lambda g: g.log_weight, reverse=True)
         self.global_hypotheses = expanded[: self.params.max_global_hypotheses]
         globals_after_beam = len(self.global_hypotheses)
+        (
+            nscan_boundary_scan_index,
+            nscan_tracks_in_scope,
+            nscan_tracks_committed,
+        ) = self._update_n_scan_commitment(
+            scan_index=scan_index,
+            post_beam_globals=self.global_hypotheses,
+        )
 
         # Births: run initiator once on residual detections, then branch globals with/without births.
         birth_stats = self._branch_globals_with_births(ctx)
@@ -1350,6 +1500,9 @@ class TOMHTTracker:
             globals_after_unused=globals_after_unused,
             globals_after_dedupe=globals_after_dedupe,
             globals_after_beam=globals_after_beam,
+            nscan_boundary_scan_index=nscan_boundary_scan_index,
+            nscan_tracks_in_scope=nscan_tracks_in_scope,
+            nscan_tracks_committed=nscan_tracks_committed,
             globals_after_births=birth_stats.globals_after_births,
             birth_candidates=birth_stats.residual_detections_considered,
             birth_tracks_created=birth_stats.birth_tracks_created,
@@ -1371,7 +1524,11 @@ class TOMHTTracker:
                 f"SCAN t={timestamp} det={scan_stats.num_detections} "
                 f"globals in={scan_stats.globals_in} exp={scan_stats.globals_expanded} "
                 f"after_unused={scan_stats.globals_after_unused} dedup={scan_stats.globals_after_dedupe} "
-                f"beam={scan_stats.globals_after_beam} births cand={scan_stats.birth_candidates} "
+                f"beam={scan_stats.globals_after_beam} "
+                f"nscan_b={scan_stats.nscan_boundary_scan_index} "
+                f"nscan_scope={scan_stats.nscan_tracks_in_scope} "
+                f"nscan_commit={scan_stats.nscan_tracks_committed} "
+                f"births cand={scan_stats.birth_candidates} "
                 f"tracks_created={scan_stats.birth_tracks_created} tracks_kept={scan_stats.birth_tracks_kept} "
                 f"beam_inst={scan_stats.birth_track_instances_in_beam} "
                 f"globals_with_birth={scan_stats.globals_with_birth} "
