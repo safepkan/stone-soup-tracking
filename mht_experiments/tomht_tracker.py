@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from math import log
 from statistics import median
 from ordered_set import OrderedSet
-from typing import Iterable, Mapping, Protocol
+from typing import Any, Iterable, Mapping, Protocol
 
 import numpy as np
 
@@ -265,14 +265,6 @@ class TOMHTTracker:
       (one child per track_id, no shared detections).
     """
 
-    def _new_assoc_history(self, last_entry: int | None) -> deque[int]:
-        hist = deque(
-            [ASSOC_PAD] * max(self.params.assoc_history_len - 1, 0),
-            maxlen=self.params.assoc_history_len,
-        )
-        hist.append(ASSOC_PAD if last_entry is None else int(last_entry))
-        return hist
-
     def _lineage_from_leaf_node(
         self, leaf_node: TrackHypothesisNode
     ) -> list[TrackHypothesisNode]:
@@ -287,24 +279,11 @@ class TOMHTTracker:
     def _assoc_history_from_leaf_node(
         self, leaf_node: TrackHypothesisNode
     ) -> deque[int]:
-        hist: deque[int] = deque([], maxlen=self.params.assoc_history_len)
+        hist_len = max(int(self.params.assoc_history_len), 0)
+        hist: deque[int] = deque([ASSOC_PAD] * hist_len, maxlen=hist_len)
         for node in self._lineage_from_leaf_node(leaf_node):
             hist.append(int(node.assoc_label))
         return hist
-
-    def _history_tail_from_leaf_node(
-        self, leaf_node: TrackHypothesisNode
-    ) -> tuple[int, ...]:
-        hist = self._assoc_history_from_leaf_node(leaf_node)
-        tail_len = min(
-            int(self.params.ns_scan_window), int(self.params.assoc_history_len)
-        )
-        if tail_len <= 0:
-            return tuple()
-        if len(hist) < tail_len:
-            pad_needed = tail_len - len(hist)
-            return tuple([ASSOC_PAD] * pad_needed + list(hist))
-        return tuple(list(hist)[-tail_len:])
 
     def _allocate_node_id(self) -> int:
         node_id = self._next_node_id
@@ -365,6 +344,41 @@ class TOMHTTracker:
             track_metadata=dict(track_metadata),
         )
         return self._register_node(node)
+
+    def _create_root_node(
+        self,
+        *,
+        track_id: int,
+        scan_index: int,
+        timestamp: object,
+        state: object,
+        state_kind: str,
+        used_det_key: int | None,
+        assoc_label: int,
+        age: int,
+        hits: int,
+        root_source: str,
+        track_metadata: dict[str, object] | None = None,
+    ) -> TrackHypothesisNode:
+        return self._create_track_hypothesis_node(
+            track_id=track_id,
+            parent=None,
+            scan_index=scan_index,
+            timestamp=timestamp,
+            state=state,
+            state_kind=state_kind,
+            used_det_key=used_det_key,
+            assoc_label=assoc_label,
+            log_delta=0.0,
+            age=age,
+            hits=hits,
+            missed_count=0,
+            last_det_key=used_det_key,
+            last_det_hit=used_det_key is not None,
+            root_source=root_source,
+            birth_scan_index=scan_index,
+            track_metadata=track_metadata,
+        )
 
     def _reconstruct_track_from_leaf_node(
         self, leaf_node: TrackHypothesisNode
@@ -647,28 +661,22 @@ class TOMHTTracker:
         hits = min(max(hits, 1), age)
         state = start.states[-1]
         assert self._last_scan_index is not None
-        return self._create_track_hypothesis_node(
+        return self._create_root_node(
             track_id=track_id,
-            parent=None,
             scan_index=int(self._last_scan_index),
             timestamp=getattr(state, "timestamp", timestamp),
             state=state,
             state_kind="external_start",
             used_det_key=None,
             assoc_label=ASSOC_PAD,
-            log_delta=0.0,
             age=age,
             hits=hits,
-            missed_count=0,
-            last_det_key=None,
-            last_det_hit=False,
             root_source="external_start",
-            birth_scan_index=int(self._last_scan_index),
             track_metadata=dict(start.metadata),
         )
 
     def _used_det_key_for_leaf_node(self, leaf_node: TrackHypothesisNode) -> int | None:
-        val = leaf_node.last_det_key
+        val = leaf_node.used_det_key
         return int(val) if val is not None else None
 
     def _used_det_keys_for_leaf_nodes(
@@ -740,9 +748,56 @@ class TOMHTTracker:
         misses = max(age - support, 0)
         return support, age, misses
 
-    def _candidates_for_track(
+    def _candidate_from_hypothesis(
         self,
-        track_id: int,
+        *,
+        leaf_node: TrackHypothesisNode,
+        hypothesis: Any,
+        ctx: ScanContext,
+        log_delta: float,
+    ) -> ChildCandidate:
+        if not hypothesis:
+            state = getattr(hypothesis, "prediction")
+            used_det_key = None
+            assoc_label = ASSOC_MISS
+            state_kind = "prediction"
+            missed_count = int(leaf_node.missed_count) + 1
+            last_det_key = leaf_node.last_det_key
+        else:
+            state = self.updater.update(hypothesis)
+            used_det_key = int(ctx.det_index_by_obj[id(hypothesis.measurement)])
+            assoc_label = used_det_key
+            state_kind = "update"
+            missed_count = 0
+            last_det_key = used_det_key
+
+        child_node = self._create_track_hypothesis_node(
+            track_id=leaf_node.track_id,
+            parent=leaf_node,
+            scan_index=ctx.scan_index,
+            timestamp=getattr(state, "timestamp", ctx.timestamp),
+            state=state,
+            state_kind=state_kind,
+            used_det_key=used_det_key,
+            assoc_label=assoc_label,
+            log_delta=log_delta,
+            age=int(leaf_node.age) + 1,
+            hits=int(leaf_node.hits) + (0 if used_det_key is None else 1),
+            missed_count=missed_count,
+            last_det_key=last_det_key,
+            last_det_hit=used_det_key is not None,
+            root_source=leaf_node.root_source,
+            birth_scan_index=leaf_node.birth_scan_index,
+        )
+        return ChildCandidate(
+            track_id=leaf_node.track_id,
+            child_node=child_node,
+            used_det_key=used_det_key,
+            log_delta=log_delta,
+        )
+
+    def _candidates_for_track_leaf(
+        self,
         leaf_node: TrackHypothesisNode,
         ctx: ScanContext,
     ) -> list[ChildCandidate]:
@@ -786,52 +841,15 @@ class TOMHTTracker:
         if miss is not None and miss not in kept:
             kept.append(miss)
 
-        candidates: list[ChildCandidate] = []
-        for hyp in kept:
-            if not hyp:
-                state = hyp.prediction
-                missed_count = int(leaf_node.missed_count) + 1
-                used = None
-                assoc_label = ASSOC_MISS
-                state_kind = "prediction"
-            else:
-                state = self.updater.update(hyp)
-                missed_count = 0
-                used = ctx.det_index_by_obj[id(hyp.measurement)]
-                assoc_label = int(used)
-                state_kind = "update"
-
-            age = int(leaf_node.age) + 1
-            hits = int(leaf_node.hits) + (1 if hyp else 0)
-            log_delta = float(hyp_scores.get(id(hyp), 0.0))
-            child_node = self._create_track_hypothesis_node(
-                track_id=track_id,
-                parent=leaf_node,
-                scan_index=ctx.scan_index,
-                timestamp=getattr(state, "timestamp", ctx.timestamp),
-                state=state,
-                state_kind=state_kind,
-                used_det_key=used,
-                assoc_label=assoc_label,
-                log_delta=log_delta,
-                age=age,
-                hits=hits,
-                missed_count=missed_count,
-                last_det_key=used,
-                last_det_hit=used is not None,
-                root_source=leaf_node.root_source,
-                birth_scan_index=leaf_node.birth_scan_index,
+        candidates = [
+            self._candidate_from_hypothesis(
+                leaf_node=leaf_node,
+                hypothesis=hyp,
+                ctx=ctx,
+                log_delta=float(hyp_scores.get(id(hyp), 0.0)),
             )
-
-            candidates.append(
-                ChildCandidate(
-                    track_id=track_id,
-                    child_node=child_node,
-                    used_det_key=used,
-                    log_delta=log_delta,
-                )
-            )
-
+            for hyp in kept
+        ]
         candidates.sort(key=lambda c: c.log_delta, reverse=True)
         return candidates
 
@@ -845,11 +863,7 @@ class TOMHTTracker:
         per_track_candidates: list[list[ChildCandidate]] = []
         for tid in track_ids:
             per_track_candidates.append(
-                self._candidates_for_track(
-                    tid,
-                    gh.leaf_nodes_by_track_id[tid],
-                    ctx,
-                )
+                self._candidates_for_track_leaf(gh.leaf_nodes_by_track_id[tid], ctx)
             )
 
         new_globals: list[GlobalHypothesis] = []
@@ -871,6 +885,10 @@ class TOMHTTracker:
 
             tid = track_ids[i]
             for cand in per_track_candidates[i]:
+                if cand.track_id != tid:
+                    raise RuntimeError(
+                        "ChildCandidate track_id mismatch during global expansion."
+                    )
                 if cand.used_det_key is not None and cand.used_det_key in used:
                     continue
 
@@ -1001,23 +1019,17 @@ class TOMHTTracker:
             self._next_track_id += 1
             used_key = self._birth_used_key(tr, det_index_by_obj)
             state = tr.states[-1]
-            leaf_node = self._create_track_hypothesis_node(
+            leaf_node = self._create_root_node(
                 track_id=tid,
-                parent=None,
                 scan_index=ctx.scan_index,
                 timestamp=getattr(state, "timestamp", ctx.timestamp),
                 state=state,
                 state_kind="birth",
                 used_det_key=used_key,
                 assoc_label=ASSOC_PAD if used_key is None else int(used_key),
-                log_delta=0.0,
                 age=1,
                 hits=1 if used_key is not None else 0,
-                missed_count=0,
-                last_det_key=used_key,
-                last_det_hit=used_key is not None,
                 root_source="internal_birth",
-                birth_scan_index=ctx.scan_index,
                 track_metadata=dict(tr.metadata),
             )
             birth_templates.append(
@@ -1189,18 +1201,28 @@ class TOMHTTracker:
             globals_after_births=len(self.global_hypotheses),
         )
 
-    def _dedupe_globals_by_history(
+    def _leaf_signature_for_global(
+        self, gh: GlobalHypothesis
+    ) -> tuple[tuple[int, int], ...]:
+        return tuple(
+            sorted(
+                (track_id, leaf_node.node_id)
+                for track_id, leaf_node in gh.leaf_nodes_by_track_id.items()
+            )
+        )
+
+    def _dedupe_globals_by_leaf_identity(
         self, globals: list[GlobalHypothesis]
     ) -> list[GlobalHypothesis]:
-        """Keep best log_weight per (track_id, history_tail) signature."""
-        best: dict[tuple[tuple[int, tuple[int, ...]], ...], GlobalHypothesis] = {}
+        """
+        Keep best log_weight per structural leaf signature.
+
+        Two globals are duplicates only when they contain the same leaf node for
+        every active track_id.
+        """
+        best: dict[tuple[tuple[int, int], ...], GlobalHypothesis] = {}
         for gh in globals:
-            sig = tuple(
-                sorted(
-                    (tid, self._history_tail_from_leaf_node(leaf_node))
-                    for tid, leaf_node in gh.leaf_nodes_by_track_id.items()
-                )
-            )
+            sig = self._leaf_signature_for_global(gh)
             prev = best.get(sig)
             if prev is None or gh.log_weight > prev.log_weight:
                 best[sig] = gh
@@ -1276,7 +1298,7 @@ class TOMHTTracker:
         globals_after_unused = len(expanded)
 
         # Dedupe
-        expanded = self._dedupe_globals_by_history(expanded)
+        expanded = self._dedupe_globals_by_leaf_identity(expanded)
         globals_after_dedupe = len(expanded)
 
         # Keep top-K globals (beam)

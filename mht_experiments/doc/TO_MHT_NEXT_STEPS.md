@@ -12,6 +12,11 @@ This phase replaces the old startup/birth-cleanup plan. The external-initiation 
   - explicit `TrackHypothesisNode` objects exist and are tracker-owned,
   - globals now store `track_id -> leaf node`,
   - a temporary reconstruction adapter keeps Stone Soup `Track` compatibility at hypothesiser/updater/output boundaries.
+- Task 3 / Steps D-F operational migration is now in code:
+  - per-track continuation now creates child nodes directly from parent leaves (with Track reconstruction only at compatibility boundaries),
+  - global expansion and detection-usage checks operate over node fields,
+  - dedupe now uses structural leaf identity (`track_id -> node_id`) rather than history tails,
+  - external starts and internal births both create root-like nodes via the same structural helper while keeping distinct provenance/scoring semantics.
 - True ancestor-based N-scan commitment is not implemented yet.
 
 ## Why this phase is next
