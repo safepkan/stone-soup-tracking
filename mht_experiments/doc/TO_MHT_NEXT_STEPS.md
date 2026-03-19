@@ -23,15 +23,21 @@ This phase replaces the old startup/birth-cleanup plan. The external-initiation 
   - only globals that still contain a `track_id` participate in that track’s agreement check,
   - tracks without an exact-boundary ancestor (for example born after `b`) are conservatively left uncommitted,
   - commitment bookkeeping is explicit, while physical node cleanup/GC remains deferred.
+- Task 5 / Step H cleanup/instrumentation/docs pass is now in code:
+  - transitional helpers were trimmed where safe while preserving the Track reconstruction adapter at hypothesiser/updater/output boundaries,
+  - debug wording now surfaces leaf-node IDs, ancestor-boundary commitment, and committed-track totals more explicitly,
+  - a small commitment snapshot helper now exposes latest/accumulated N-scan commitment state for tests and debugging.
 
 ## Why this phase is next
 
-The current implementation is usable and reasonably clean, but its core representation is still not correct for a true TO-MHT:
-- global hypotheses hold copied track objects,
-- ancestry is implicit rather than structural,
-- current N-scan behavior is only a history-tail approximation.
+This section records the phase-start rationale (kept for context); see the implementation-status section above for what is now in code.
 
-That is now the main blocker to calling the tracker a proper TO-MHT and to having clearer architecture discussions with the ISAC group.
+At phase start, the implementation was usable and reasonably clean, but its core representation was still not correct for a true TO-MHT:
+- global hypotheses held copied track objects,
+- ancestry was implicit rather than structural,
+- N-scan behavior was only a history-tail approximation.
+
+That was the main blocker to calling the tracker a proper TO-MHT and to having clearer architecture discussions with the ISAC group.
 
 ## Design stance for this phase
 

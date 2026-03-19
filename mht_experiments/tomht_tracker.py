@@ -35,6 +35,7 @@ class TOMHTParams:
     log_epsilon: float = 1e-12
     scoring_mode: str = "beta_ratio"  # Only beta_ratio is supported.
 
+    # Reconstructed Track metadata/debug compatibility window.
     assoc_history_len: int = 3
     ns_scan_window: int = 0  # default set in __post_init__
 
@@ -60,7 +61,7 @@ class TOMHTParams:
     collect_stats: bool = True
 
     def __post_init__(self) -> None:
-        # Default the N-scan window to the stored history length.
+        # Keep a practical default while assoc-history metadata is still exposed.
         if self.ns_scan_window <= 0:
             object.__setattr__(self, "ns_scan_window", self.assoc_history_len)
 
@@ -157,6 +158,17 @@ class ScanStats:
     map_unused: int
     map_miss_hist: dict[int, int]
     map_mean_hit_rate: float
+
+
+@dataclass(frozen=True)
+class NScanCommitmentSnapshot:
+    """Read-only copy of current ancestor-identity N-scan commitment state."""
+
+    boundary_scan_index: int | None
+    tracks_in_scope: int
+    latest_committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
+    committed_boundary_by_track_id: dict[int, int]
+    committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
 
 
 class ScoringModel(Protocol):
@@ -288,6 +300,7 @@ class TOMHTTracker:
     def _assoc_history_from_leaf_node(
         self, leaf_node: TrackHypothesisNode
     ) -> deque[int]:
+        # Compatibility metadata for reconstructed Track views.
         hist_len = max(int(self.params.assoc_history_len), 0)
         hist: deque[int] = deque([ASSOC_PAD] * hist_len, maxlen=hist_len)
         for node in self._lineage_from_leaf_node(leaf_node):
@@ -411,6 +424,18 @@ class TOMHTTracker:
                 self._committed_ancestor_by_track_id[track_id] = ancestor
 
         return boundary_scan_index, tracks_in_scope, len(committed)
+
+    def get_n_scan_commitment_snapshot(self) -> NScanCommitmentSnapshot:
+        """Return a copy of current N-scan commitment state for debug/tests."""
+        return NScanCommitmentSnapshot(
+            boundary_scan_index=self._last_nscan_boundary_scan_index,
+            tracks_in_scope=int(self._last_nscan_tracks_in_scope),
+            latest_committed_ancestor_by_track_id=dict(
+                self._last_nscan_committed_ancestor_by_track_id
+            ),
+            committed_boundary_by_track_id=dict(self._committed_boundary_by_track_id),
+            committed_ancestor_by_track_id=dict(self._committed_ancestor_by_track_id),
+        )
 
     def _allocate_node_id(self) -> int:
         node_id = self._next_node_id
@@ -674,9 +699,10 @@ class TOMHTTracker:
         )
         print(
             "SUMMARY nscan "
-            f"in_scope med={median(nscan_tracks_in_scope):.1f} mean={_mean(nscan_tracks_in_scope):.2f} "
-            f"committed med={median(nscan_tracks_committed):.1f} mean={_mean(nscan_tracks_committed):.2f} "
-            f"latest_boundary={self._last_nscan_boundary_scan_index}"
+            f"tracks_in_scope med={median(nscan_tracks_in_scope):.1f} mean={_mean(nscan_tracks_in_scope):.2f} "
+            f"committed_now med={median(nscan_tracks_committed):.1f} mean={_mean(nscan_tracks_committed):.2f} "
+            f"latest_boundary={self._last_nscan_boundary_scan_index} "
+            f"committed_tracks_total={len(self._committed_boundary_by_track_id)}"
         )
         miss_hist_all: dict[int, int] = {}
         for scan in stats:
@@ -750,12 +776,26 @@ class TOMHTTracker:
                 last = getattr(node.state, "state_vector")
                 ldk = node.last_det_key
                 miss = int(node.missed_count)
-                dk = self._used_det_key_for_leaf_node(node)
+                dk = node.used_det_key
                 used_str = "MISS" if dk is None else "HIT"
                 age = int(node.age)
                 hits = int(node.hits)
+                parent_node_id = (
+                    None if node.parent is None else int(node.parent.node_id)
+                )
+                committed_boundary = self._committed_boundary_by_track_id.get(tid)
+                committed_node = self._committed_ancestor_by_track_id.get(tid)
+                if committed_boundary is None or committed_node is None:
+                    committed_str = "none"
+                else:
+                    committed_str = (
+                        f"b={committed_boundary}->node={committed_node.node_id}"
+                    )
                 print(
-                    f"  id={tid}, {used_str}, age={age}, hits={hits}, miss={miss}, ldk={ldk}, last={self._fmt_state_xyvxvy(last)}"
+                    f"  tid={tid}, leaf={node.node_id}, parent={parent_node_id}, "
+                    f"{used_str}, age={age}, hits={hits}, miss={miss}, ldk={ldk}, "
+                    f"root={node.root_source}, committed={committed_str}, "
+                    f"last={self._fmt_state_xyvxvy(last)}"
                 )
 
     def _display_births(
@@ -817,18 +857,13 @@ class TOMHTTracker:
             track_metadata=dict(start.metadata),
         )
 
-    def _used_det_key_for_leaf_node(self, leaf_node: TrackHypothesisNode) -> int | None:
-        val = leaf_node.used_det_key
-        return int(val) if val is not None else None
-
     def _used_det_keys_for_leaf_nodes(
         self, leaf_nodes_by_track_id: dict[int, TrackHypothesisNode]
     ) -> set[int]:
         used: set[int] = set()
         for leaf_node in leaf_nodes_by_track_id.values():
-            dk = self._used_det_key_for_leaf_node(leaf_node)
-            if dk is not None:
-                used.add(dk)
+            if leaf_node.used_det_key is not None:
+                used.add(int(leaf_node.used_det_key))
         return used
 
     def _used_det_keys_in_global(self, gh: GlobalHypothesis) -> set[int]:
@@ -1520,14 +1555,16 @@ class TOMHTTracker:
             self._stats.append(scan_stats)
 
         if self.params.debug_display_scan_stats:
+            nscan_snapshot = self.get_n_scan_commitment_snapshot()
             print(
                 f"SCAN t={timestamp} det={scan_stats.num_detections} "
                 f"globals in={scan_stats.globals_in} exp={scan_stats.globals_expanded} "
                 f"after_unused={scan_stats.globals_after_unused} dedup={scan_stats.globals_after_dedupe} "
                 f"beam={scan_stats.globals_after_beam} "
-                f"nscan_b={scan_stats.nscan_boundary_scan_index} "
-                f"nscan_scope={scan_stats.nscan_tracks_in_scope} "
-                f"nscan_commit={scan_stats.nscan_tracks_committed} "
+                f"nscan boundary={scan_stats.nscan_boundary_scan_index} "
+                f"in_scope={scan_stats.nscan_tracks_in_scope} "
+                f"committed_now={scan_stats.nscan_tracks_committed} "
+                f"committed_total={len(nscan_snapshot.committed_boundary_by_track_id)} "
                 f"births cand={scan_stats.birth_candidates} "
                 f"tracks_created={scan_stats.birth_tracks_created} tracks_kept={scan_stats.birth_tracks_kept} "
                 f"beam_inst={scan_stats.birth_track_instances_in_beam} "
@@ -1536,6 +1573,18 @@ class TOMHTTracker:
                 f"used={scan_stats.map_used} unused={scan_stats.map_unused} "
                 f"hit_rate={scan_stats.map_mean_hit_rate:.2f}"
             )
+            if nscan_snapshot.latest_committed_ancestor_by_track_id:
+                committed_pairs = ", ".join(
+                    f"{track_id}->node{ancestor.node_id}@s{ancestor.scan_index}"
+                    for track_id, ancestor in sorted(
+                        nscan_snapshot.latest_committed_ancestor_by_track_id.items()
+                    )
+                )
+                print(
+                    "SCAN_NSCAN_COMMITTED "
+                    f"t={timestamp} boundary={nscan_snapshot.boundary_scan_index} "
+                    f"{committed_pairs}"
+                )
             if self.params.debug_display_map_miss_hist:
                 print(
                     f"SCAN_MAP_MISS_HIST t={timestamp} miss_hist={scan_stats.map_miss_hist}"

@@ -118,11 +118,10 @@ class TOMHTTrackerNScanCommitmentTest(unittest.TestCase):
         self.assertEqual(1, boundary)
         self.assertEqual(1, in_scope)
         self.assertEqual(1, committed_count)
-        self.assertIs(
-            shared, tracker._last_nscan_committed_ancestor_by_track_id[track_id]
-        )
-        self.assertIs(shared, tracker._committed_ancestor_by_track_id[track_id])
-        self.assertEqual(1, tracker._committed_boundary_by_track_id[track_id])
+        snapshot = tracker.get_n_scan_commitment_snapshot()
+        self.assertIs(shared, snapshot.latest_committed_ancestor_by_track_id[track_id])
+        self.assertIs(shared, snapshot.committed_ancestor_by_track_id[track_id])
+        self.assertEqual(1, snapshot.committed_boundary_by_track_id[track_id])
 
     def test_no_commit_when_surviving_globals_disagree_on_boundary_ancestor(
         self,
@@ -149,8 +148,9 @@ class TOMHTTrackerNScanCommitmentTest(unittest.TestCase):
 
         self.assertEqual(1, in_scope)
         self.assertEqual(0, committed_count)
-        self.assertNotIn(track_id, tracker._last_nscan_committed_ancestor_by_track_id)
-        self.assertNotIn(track_id, tracker._committed_boundary_by_track_id)
+        snapshot = tracker.get_n_scan_commitment_snapshot()
+        self.assertNotIn(track_id, snapshot.latest_committed_ancestor_by_track_id)
+        self.assertNotIn(track_id, snapshot.committed_boundary_by_track_id)
 
     def test_track_absence_in_other_globals_is_not_disagreement(self) -> None:
         tracker = self._build_tracker(ns_scan_window=1)
@@ -179,9 +179,8 @@ class TOMHTTrackerNScanCommitmentTest(unittest.TestCase):
         )
 
         self.assertEqual(2, committed_count)
-        self.assertIs(
-            shared, tracker._last_nscan_committed_ancestor_by_track_id[track_id]
-        )
+        snapshot = tracker.get_n_scan_commitment_snapshot()
+        self.assertIs(shared, snapshot.latest_committed_ancestor_by_track_id[track_id])
 
     def test_no_commit_when_boundary_is_before_available_ancestry(self) -> None:
         tracker = self._build_tracker(ns_scan_window=3)
@@ -211,7 +210,8 @@ class TOMHTTrackerNScanCommitmentTest(unittest.TestCase):
         self.assertEqual(1, boundary)
         self.assertEqual(1, in_scope)
         self.assertEqual(0, committed_count)
-        self.assertNotIn(track_id, tracker._last_nscan_committed_ancestor_by_track_id)
+        snapshot = tracker.get_n_scan_commitment_snapshot()
+        self.assertNotIn(track_id, snapshot.latest_committed_ancestor_by_track_id)
 
 
 if __name__ == "__main__":
