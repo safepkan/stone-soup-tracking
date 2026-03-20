@@ -101,6 +101,24 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         self.assertEqual({}, tracker.global_hypotheses[0].leaf_nodes_by_track_id)
         self.assertEqual(0.0, tracker.global_hypotheses[0].log_weight)
         self.assertEqual(0, tracker._next_track_id)
+        map_snapshot = tracker.get_map_hypothesis_snapshot()
+        self.assertIsNotNone(map_snapshot)
+        assert map_snapshot is not None
+        self.assertEqual(0.0, map_snapshot.log_weight)
+        self.assertEqual({}, dict(map_snapshot.leaf_nodes_by_track_id))
+        self.assertEqual(set(), tracker.get_map_output_tracks())
+
+    def test_map_snapshot_leaf_mapping_is_read_only(self) -> None:
+        tracker = _build_tracker()
+        map_snapshot = tracker.get_map_hypothesis_snapshot()
+        self.assertIsNotNone(map_snapshot)
+        assert map_snapshot is not None
+        mutable_view = cast(
+            dict[int, TrackHypothesisNode],
+            map_snapshot.leaf_nodes_by_track_id,
+        )
+        with self.assertRaises(TypeError):
+            mutable_view[0] = cast(TrackHypothesisNode, object())
 
     def test_internal_birth_inserted_track_metadata_uses_shared_conventions(
         self,

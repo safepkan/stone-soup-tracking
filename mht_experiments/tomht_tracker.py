@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import log
 from statistics import median
+from types import MappingProxyType
 from ordered_set import OrderedSet
 from typing import Any, Iterable, Mapping, Protocol
 
@@ -34,7 +35,7 @@ class TOMHTParams:
     log_epsilon: float = 1e-12
     scoring_mode: str = "beta_ratio"  # Only beta_ratio is supported.
 
-    # Legacy defaulting knob kept for backward parameter compatibility.
+    # Legacy compatibility knob. assoc_history metadata is no longer projected.
     assoc_history_len: int = 3
     ns_scan_window: int = 0  # default set in __post_init__
 
@@ -175,7 +176,7 @@ class MAPHypothesisSnapshot:
     """Read-only copy of current MAP global hypothesis in node-native form."""
 
     log_weight: float
-    leaf_nodes_by_track_id: dict[int, TrackHypothesisNode]
+    leaf_nodes_by_track_id: Mapping[int, TrackHypothesisNode]
 
 
 class ScoringModel(Protocol):
@@ -441,7 +442,7 @@ class TOMHTTracker:
         best = self.global_hypotheses[0]
         return MAPHypothesisSnapshot(
             log_weight=float(best.log_weight),
-            leaf_nodes_by_track_id=dict(best.leaf_nodes_by_track_id),
+            leaf_nodes_by_track_id=MappingProxyType(dict(best.leaf_nodes_by_track_id)),
         )
 
     def get_map_output_tracks(self) -> set[Track]:
@@ -874,7 +875,7 @@ class TOMHTTracker:
         )
 
     def _used_det_keys_for_leaf_nodes(
-        self, leaf_nodes_by_track_id: dict[int, TrackHypothesisNode]
+        self, leaf_nodes_by_track_id: Mapping[int, TrackHypothesisNode]
     ) -> set[int]:
         used: set[int] = set()
         for leaf_node in leaf_nodes_by_track_id.values():

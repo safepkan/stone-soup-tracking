@@ -192,7 +192,7 @@ class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
             stats = tracker._branch_globals_with_births(ctx)
 
         labels_in_beam = {
-            tracker._reconstruct_track_from_leaf_node(node).metadata.get("label")
+            node.track_metadata.get("label")
             for gh in tracker.global_hypotheses
             for node in gh.leaf_nodes_by_track_id.values()
         }
@@ -259,11 +259,10 @@ class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
             [gh.log_weight for gh in tracker.global_hypotheses],
         )
         labels_in_beam = {
-            tracker._reconstruct_track_from_leaf_node(node).metadata.get("label")
+            node.track_metadata.get("label")
             for gh in tracker.global_hypotheses
             for node in gh.leaf_nodes_by_track_id.values()
-            if tracker._reconstruct_track_from_leaf_node(node).metadata.get("label")
-            is not None
+            if node.track_metadata.get("label") is not None
         }
         self.assertEqual({"OK"}, labels_in_beam)
         self.assertNotIn("CONFLICTS", labels_in_beam)

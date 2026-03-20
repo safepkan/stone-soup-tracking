@@ -28,7 +28,8 @@ This phase replaces the old startup/birth-cleanup plan. The external-initiation 
   - debug wording now surfaces leaf-node IDs, ancestor-boundary commitment, and committed-track totals more explicitly,
   - a small commitment snapshot helper now exposes latest/accumulated N-scan commitment state for tests and debugging,
   - legacy reconstructed `assoc_history` metadata projection has been retired,
-  - small read-only MAP inspection helpers now expose the current MAP leaf-node view (and its output-track reconstruction view) without runner code touching private internals.
+  - small read-only MAP inspection helpers now expose the current MAP leaf-node view (and its output-track reconstruction view) without runner code touching private internals,
+  - the MAP snapshot leaf mapping is now explicitly read-only, and metadata/MAP tests no longer rely on private leaf-to-Track reconstruction internals.
 
 ## Why this phase is next
 

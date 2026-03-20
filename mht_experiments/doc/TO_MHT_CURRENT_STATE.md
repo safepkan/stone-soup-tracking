@@ -2,6 +2,8 @@
 
 This document is a cleaned-up snapshot of the current implementation after completing the external-initiation and birth-pipeline cleanup phase.
 
+Note (2026-03-20): this document reflects pre-Phase-B architecture context and is now stale. For current implementation status, see `TO_MHT_NEXT_STEPS.md`.
+
 ## What is now solid
 
 ### MFA baseline isolation
