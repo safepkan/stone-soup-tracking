@@ -13,10 +13,10 @@ from stonesoup.initiator.simple import SimpleMeasurementInitiator
 from stonesoup.updater.base import Updater
 
 from mht_experiments.tomht_tracker import (
-    ASSOC_PAD,
     GlobalHypothesis,
     ScanContext,
     TOMHTParams,
+    TrackHypothesisNode,
     TOMHTTracker,
 )
 
@@ -75,26 +75,24 @@ def _external_start(timestamp: datetime.datetime) -> Track:
 
 
 class TOMHTTrackerExternalStartsTest(unittest.TestCase):
-    def _assert_track_maintenance_metadata(
+    def _assert_leaf_maintenance_fields(
         self,
-        track: Track,
+        node: TrackHypothesisNode,
         *,
         age: int,
         hits: int,
         missed_count: int,
         last_det_key: int | None,
         last_det_hit: bool,
+        root_source: str,
     ) -> None:
-        self.assertIsInstance(track.metadata["track_id"], int)
-        self.assertEqual(age, track.metadata["age"])
-        self.assertEqual(hits, track.metadata["hits"])
-        self.assertEqual(missed_count, track.metadata["missed_count"])
-        self.assertEqual(last_det_key, track.metadata["last_det_key"])
-        self.assertEqual(last_det_hit, track.metadata["last_det_hit"])
-        self.assertEqual(
-            [ASSOC_PAD] * track.metadata["assoc_history"].maxlen,
-            list(track.metadata["assoc_history"]),
-        )
+        self.assertIsInstance(node.track_id, int)
+        self.assertEqual(age, node.age)
+        self.assertEqual(hits, node.hits)
+        self.assertEqual(missed_count, node.missed_count)
+        self.assertEqual(last_det_key, node.last_det_key)
+        self.assertEqual(last_det_hit, node.last_det_hit)
+        self.assertEqual(root_source, node.root_source)
 
     def test_tracker_starts_with_empty_initial_global_hypothesis(self) -> None:
         tracker = _build_tracker()
@@ -125,20 +123,21 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         )
 
         tracker._branch_globals_with_births(ctx)
-        inserted_node = next(
-            iter(tracker.global_hypotheses[0].leaf_nodes_by_track_id.values())
-        )
-        inserted = tracker._reconstruct_track_from_leaf_node(inserted_node)
+        map_snapshot = tracker.get_map_hypothesis_snapshot()
+        self.assertIsNotNone(map_snapshot)
+        assert map_snapshot is not None
+        inserted_node = next(iter(map_snapshot.leaf_nodes_by_track_id.values()))
 
-        self._assert_track_maintenance_metadata(
-            inserted,
+        self._assert_leaf_maintenance_fields(
+            inserted_node,
             age=1,
             hits=0,
             missed_count=0,
             last_det_key=None,
             last_det_hit=False,
+            root_source="internal_birth",
         )
-        self.assertEqual("initiator", inserted.metadata["source"])
+        self.assertEqual("initiator", inserted_node.track_metadata["source"])
 
     def test_add_external_starts_rejects_call_before_step(self) -> None:
         tracker = _build_tracker()
@@ -246,20 +245,21 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         tracker.step([], timestamp)
         tracker.add_external_starts([external_start], timestamp)
 
-        inserted_node = next(
-            iter(tracker.global_hypotheses[0].leaf_nodes_by_track_id.values())
-        )
-        inserted = tracker._reconstruct_track_from_leaf_node(inserted_node)
+        map_snapshot = tracker.get_map_hypothesis_snapshot()
+        self.assertIsNotNone(map_snapshot)
+        assert map_snapshot is not None
+        inserted_node = next(iter(map_snapshot.leaf_nodes_by_track_id.values()))
 
-        self._assert_track_maintenance_metadata(
-            inserted,
+        self._assert_leaf_maintenance_fields(
+            inserted_node,
             age=1,
             hits=1,
             missed_count=0,
             last_det_key=None,
             last_det_hit=False,
+            root_source="external_start",
         )
-        self.assertEqual("upstream", inserted.metadata["source"])
+        self.assertEqual("upstream", inserted_node.track_metadata["source"])
 
     def test_add_external_starts_repeated_insertion_creates_distinct_tracks(
         self,

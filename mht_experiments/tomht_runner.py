@@ -370,15 +370,7 @@ def run_tomht(
                 f"setup={setup} scan={n} t={timestamp} count={len(external_starts)} "
                 f"truth_indices=[{truth_indices}]"
             )
-            if tracker.global_hypotheses:
-                tracks_out = {
-                    tracker._reconstruct_track_from_leaf_node(node)
-                    for node in tracker.global_hypotheses[
-                        0
-                    ].leaf_nodes_by_track_id.values()
-                }
-            else:
-                tracks_out = set()
+            tracks_out = tracker.get_map_output_tracks()
 
         ax = plotter.ax
         ax.set_xlabel("$x$")

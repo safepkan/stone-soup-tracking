@@ -6,7 +6,7 @@
 
 This phase replaces the old startup/birth-cleanup plan. The external-initiation phase is considered complete enough, and the next priority is to make the tracker structurally match a proper track-oriented MHT.
 
-### Implementation status (2026-03-19)
+### Implementation status (2026-03-20)
 
 - Task 2 / Step A representation groundwork is now in code:
   - explicit `TrackHypothesisNode` objects exist and are tracker-owned,
@@ -26,7 +26,9 @@ This phase replaces the old startup/birth-cleanup plan. The external-initiation 
 - Task 5 / Step H cleanup/instrumentation/docs pass is now in code:
   - transitional helpers were trimmed where safe while preserving the Track reconstruction adapter at hypothesiser/updater/output boundaries,
   - debug wording now surfaces leaf-node IDs, ancestor-boundary commitment, and committed-track totals more explicitly,
-  - a small commitment snapshot helper now exposes latest/accumulated N-scan commitment state for tests and debugging.
+  - a small commitment snapshot helper now exposes latest/accumulated N-scan commitment state for tests and debugging,
+  - legacy reconstructed `assoc_history` metadata projection has been retired,
+  - small read-only MAP inspection helpers now expose the current MAP leaf-node view (and its output-track reconstruction view) without runner code touching private internals.
 
 ## Why this phase is next
 

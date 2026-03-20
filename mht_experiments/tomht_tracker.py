@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass
 from math import log
 from statistics import median
@@ -35,7 +34,7 @@ class TOMHTParams:
     log_epsilon: float = 1e-12
     scoring_mode: str = "beta_ratio"  # Only beta_ratio is supported.
 
-    # Reconstructed Track metadata/debug compatibility window.
+    # Legacy defaulting knob kept for backward parameter compatibility.
     assoc_history_len: int = 3
     ns_scan_window: int = 0  # default set in __post_init__
 
@@ -61,7 +60,7 @@ class TOMHTParams:
     collect_stats: bool = True
 
     def __post_init__(self) -> None:
-        # Keep a practical default while assoc-history metadata is still exposed.
+        # Keep legacy behavior: default N-scan window from assoc_history_len.
         if self.ns_scan_window <= 0:
             object.__setattr__(self, "ns_scan_window", self.assoc_history_len)
 
@@ -169,6 +168,14 @@ class NScanCommitmentSnapshot:
     latest_committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
     committed_boundary_by_track_id: dict[int, int]
     committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
+
+
+@dataclass(frozen=True)
+class MAPHypothesisSnapshot:
+    """Read-only copy of current MAP global hypothesis in node-native form."""
+
+    log_weight: float
+    leaf_nodes_by_track_id: dict[int, TrackHypothesisNode]
 
 
 class ScoringModel(Protocol):
@@ -296,16 +303,6 @@ class TOMHTTracker:
             node = node.parent
         lineage.reverse()
         return lineage
-
-    def _assoc_history_from_leaf_node(
-        self, leaf_node: TrackHypothesisNode
-    ) -> deque[int]:
-        # Compatibility metadata for reconstructed Track views.
-        hist_len = max(int(self.params.assoc_history_len), 0)
-        hist: deque[int] = deque([ASSOC_PAD] * hist_len, maxlen=hist_len)
-        for node in self._lineage_from_leaf_node(leaf_node):
-            hist.append(int(node.assoc_label))
-        return hist
 
     def _ancestor_at_scan_boundary(
         self,
@@ -437,6 +434,26 @@ class TOMHTTracker:
             committed_ancestor_by_track_id=dict(self._committed_ancestor_by_track_id),
         )
 
+    def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
+        """Return a copy of the current MAP leaf-node view."""
+        if not self.global_hypotheses:
+            return None
+        best = self.global_hypotheses[0]
+        return MAPHypothesisSnapshot(
+            log_weight=float(best.log_weight),
+            leaf_nodes_by_track_id=dict(best.leaf_nodes_by_track_id),
+        )
+
+    def get_map_output_tracks(self) -> set[Track]:
+        """Return reconstructed Track outputs for the current MAP leaf-node view."""
+        map_snapshot = self.get_map_hypothesis_snapshot()
+        if map_snapshot is None:
+            return set()
+        return {
+            self._reconstruct_track_from_leaf_node(leaf_node)
+            for leaf_node in map_snapshot.leaf_nodes_by_track_id.values()
+        }
+
     def _allocate_node_id(self) -> int:
         node_id = self._next_node_id
         self._next_node_id += 1
@@ -551,7 +568,6 @@ class TOMHTTracker:
         tr.metadata["missed_count"] = int(leaf_node.missed_count)
         tr.metadata["last_det_key"] = leaf_node.last_det_key
         tr.metadata["last_det_hit"] = bool(leaf_node.last_det_hit)
-        tr.metadata["assoc_history"] = self._assoc_history_from_leaf_node(leaf_node)
         tr.metadata["root_source"] = leaf_node.root_source
         tr.metadata["birth_scan_index"] = int(leaf_node.birth_scan_index)
         return tr
@@ -1503,21 +1519,21 @@ class TOMHTTracker:
             print(f"\nGlobal hypotheses at timestamp {timestamp}:")
             self._display_global_hypotheses(det_list)
 
+        map_snapshot = self.get_map_hypothesis_snapshot()
         map_tracks = 0
         map_used = 0
         map_unused = len(det_list)
         map_miss_hist: dict[int, int] = {}
         map_mean_hit_rate = 0.0
-        if self.global_hypotheses:
-            best = self.global_hypotheses[0]
-            map_tracks = len(best.leaf_nodes_by_track_id)
+        if map_snapshot is not None:
+            map_tracks = len(map_snapshot.leaf_nodes_by_track_id)
             map_used = len(
-                self._used_det_keys_for_leaf_nodes(best.leaf_nodes_by_track_id)
+                self._used_det_keys_for_leaf_nodes(map_snapshot.leaf_nodes_by_track_id)
             )
             map_unused = len(det_list) - map_used
 
             hit_rates: list[float] = []
-            for leaf_node in best.leaf_nodes_by_track_id.values():
+            for leaf_node in map_snapshot.leaf_nodes_by_track_id.values():
                 misses = int(leaf_node.missed_count)
                 map_miss_hist[misses] = map_miss_hist.get(misses, 0) + 1
                 age = int(leaf_node.age)
@@ -1594,14 +1610,7 @@ class TOMHTTracker:
         self._last_scan_index = scan_index
 
         # Output MAP global hypothesis
-        if not self.global_hypotheses:
-            return set()
-
-        best = self.global_hypotheses[0]
-        return {
-            self._reconstruct_track_from_leaf_node(leaf_node)
-            for leaf_node in best.leaf_nodes_by_track_id.values()
-        }
+        return self.get_map_output_tracks()
 
 
 def build_tomht_linear(
