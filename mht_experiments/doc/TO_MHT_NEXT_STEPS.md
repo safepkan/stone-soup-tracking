@@ -49,6 +49,32 @@ Questions to answer:
 
 This item is primarily about identifying risk, not immediately redesigning scoring unless integration forces it.
 
+Current implementation note (2026-03-21):
+- `PDAHypothesiser` conformance is sufficient but not strictly necessary at runtime; the tracker currently relies on a narrower duck-typed contract at the hypothesiser boundary.
+Runtime hypothesiser contract used by `TOMHTTracker` today:
+- `hypothesiser.hypothesise(track,detections,timestamp)` must return an iterable of per-track hypotheses.
+- Each hypothesis must support hit/miss truthiness (`bool(hyp)`): miss is handled on the `False` path, hit on the `True` path.
+- Miss hypotheses must expose `.prediction` (used directly as the propagated state).
+- Hit hypotheses must expose `.measurement`, and that measurement must be the same object identity as one of the input detections for this scan (the tracker maps detections by `id(det)`).
+- Hit hypotheses must be compatible with `updater.update(hypothesis)`.
+- Practical stability expectation: each active track should produce at least one candidate (normally including a miss hypothesis), or expansion can collapse.
+Additional assumptions in current default scoring mode (`scoring_mode="beta_ratio"`):
+- Per-hypothesis `.probability` is consumed as a numeric-like association weight.
+- Miss probability mass (`beta0`) is derived from miss hypotheses (identified by miss truthiness and/or `MissedDetection` measurement).
+- Hypothesiser-level parameters are read opportunistically: `prob_detect`, `prob_gate`, and `clutter_density` or `clutter_spatial_density` (with fallbacks if missing).
+Implication for ISAC integration:
+- If ISAC hypothesiser matches the runtime contract and provides PDA-like probability semantics, it should work with current default scoring.
+- If it matches only the runtime association contract (but not PDA-like probability semantics), integration is still possible via a custom `scoring_model` adapter on our side.
+Typing note for later cleanup:
+- Current type hints use `PDAHypothesiser`, but the actual runtime contract is broader; deciding whether to loosen type annotations to a Stone Soup base `Hypothesiser`/interface can be deferred.
+
+Working assessment for integration planning (2026-03-21):
+- Local replay integration is treated as unblocked by hypothesiser shape; we control that path and can select/adapt a hypothesiser to satisfy the current contract.
+- ISAC integration hypothesiser compatibility is still to be confirmed with the ISAC side.
+- Current planning assumption: hypothesiser mismatch is unlikely to block initial ISAC integration, because short-term adaptation on either side is likely feasible if needed.
+- Therefore, item 2 is currently treated as "risk understood, monitor during integration" rather than "hard blocker before item 3."
+- Scoring redesign/cleanup is still expected in the near future, so current compatibility work should prioritise pragmatic initial integration over overfitting to the current beta-ratio scoring details.
+
 ### 3. Local replay-data integration and validation
 
 Primary goal:
