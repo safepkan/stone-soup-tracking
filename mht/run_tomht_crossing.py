@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
 
-from mht_experiments.tomht_runner import (
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from mht.tomht_runner import (
     TOMHTOperatingMode,
     run_tomht,
 )

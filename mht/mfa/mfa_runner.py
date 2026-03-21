@@ -10,20 +10,20 @@ from matplotlib import animation
 from stonesoup.plotter import Plotter
 from stonesoup.types.update import GaussianMixtureUpdate
 
-from mht_experiments.mfa.mfa_plotting import plot_mfa_component_tracks
-from mht_experiments.mfa.mfa_scenarios import (
+from mht.mfa.mfa_plotting import plot_mfa_component_tracks
+from mht.mfa.mfa_scenarios import (
     initial_mfa_tracks_for_bearing_range,
     initial_mfa_tracks_for_crossing,
 )
-from mht_experiments.mfa.mfa_tracker import (
+from mht.mfa.mfa_tracker import (
     build_mfa_components_linear,
     build_mfa_components_ukf,
 )
-from mht_experiments.helpers.plotting import plot_tracks_stable_xy
-from mht_experiments.scenarios.bearing_range import (
+from mht.helpers.plotting import plot_tracks_stable_xy
+from mht.scenarios.bearing_range import (
     create_bearing_range_mht_example,
 )
-from mht_experiments.scenarios.crossing_targets import create_crossing_scenario
+from mht.scenarios.crossing_targets import create_crossing_scenario
 
 SetupName = Literal["crossing", "bearing_range"]
 

@@ -9,7 +9,7 @@ from stonesoup.hypothesiser.probability import PDAHypothesiser
 from stonesoup.types.state import GaussianState
 from stonesoup.updater.base import Updater
 
-from mht_experiments.tomht_tracker import (
+from mht.tomht_tracker import (
     ASSOC_PAD,
     GlobalHypothesis,
     TOMHTParams,

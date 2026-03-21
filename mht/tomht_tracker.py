@@ -25,7 +25,7 @@ from stonesoup.updater.kalman import KalmanUpdater, UnscentedKalmanUpdater
 from stonesoup.initiator.simple import SimpleMeasurementInitiator
 from stonesoup.updater.base import Updater
 
-from mht_experiments.helpers.hypothesiser import RobustPDAHypothesiser
+from mht.helpers.hypothesiser import RobustPDAHypothesiser
 
 ASSOC_PAD = -1
 ASSOC_MISS = -2

@@ -2,7 +2,7 @@
 
 - The goal is to implement a TO-MHT-style tracker in Python on top of Stone Soup.
 - High-level planning happens with ChatGPT via the web UI; coding and execution happen here in the CLI.
-- Markdown documents in `mht_experiments/doc`:
+- Markdown documents in `mht/doc`:
   - `TO_MHT_CURRENT_STATE.md` — what the tracker currently does
   - `TO_MHT_NEXT_STEPS.md` — the ordered task list
   - `TO_MHT_ROADMAP.md` — phases / milestones / sequencing
@@ -13,7 +13,7 @@
 - Mark completed items in `TO_MHT_NEXT_STEPS.md` as implemented (and tighten the wording to match what was actually done if the original listed options), but leave them in place; they can be batch-cleaned in separate commits later.
 - Ask before running commands that modify environments outside the repo or require new dependencies.
 - Default to README/AGENTS for workflow notes; keep design/algorithm rationale in the doc files.
-- For starting a fresh ChatGPT thread, paste `mht_experiments/doc/CHAT_CONTEXT.md` into the first message.
+- For starting a fresh ChatGPT thread, paste `mht/doc/CHAT_CONTEXT.md` into the first message.
 
 ## Code Guidelines
 
@@ -25,10 +25,10 @@
 
 ## Scenarios / Smoke Tests
 
-- Two baseline scenarios: `run_tomht("crossing")` and `run_tomht("bearing_range")`; convenience scripts `mht_experiments/run_tomht_crossing.py` and `mht_experiments/run_tomht_bearing_range.py`.
+- Two baseline scenarios: `run_tomht("crossing")` and `run_tomht("bearing_range")`; convenience scripts `mht/run_tomht_crossing.py` and `mht/run_tomht_bearing_range.py`.
 - Runner auto-creates `/tmp/.cache` and `/tmp/mplconfig` (if not set) and sets `XDG_CACHE_HOME`/`MPLCONFIGDIR` to avoid font-cache warnings. Canonical single-scenario headless incantations:
-  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_crossing.py`
-  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_bearing_range.py`
+  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht/run_tomht_crossing.py`
+  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht/run_tomht_bearing_range.py`
   The runner detects non-interactive backends and skips `plt.show()`.
 - Control animation display: set `TOMHT_SHOW=1` to force showing even with non-interactive backends; set `TOMHT_NO_SHOW=1` to suppress entirely.
 - Expected behavior: scripts complete without exceptions; logs print global hypotheses over time and end-of-run `SUMMARY ...` aggregate ScanStats lines. Use output to spot regressions; at minimum ensure they don’t crash after code changes.

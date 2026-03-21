@@ -40,11 +40,11 @@ This means external track initiation is a first-class integration requirement.
 ## Ways of working
 - High-level planning and design review happen in ChatGPT.
 - Coding and execution happen in VS Code / Codex.
-- When code changes are made, update the relevant docs in `mht_experiments/doc`.
+- When code changes are made, update the relevant docs in `mht/doc`.
 - Use the project venv Python for commands; avoid plain `python`.
 - Workflow details and repo conventions live in `AGENTS.md`.
 
 ## Quick sanity checks
 - Smoke test (headless): `make smoke`
-- Crossing only (headless): `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_crossing.py`
-- Bearing-range only (headless): `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht_experiments/run_tomht_bearing_range.py`
+- Crossing only (headless): `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht/run_tomht_crossing.py`
+- Bearing-range only (headless): `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht/run_tomht_bearing_range.py`

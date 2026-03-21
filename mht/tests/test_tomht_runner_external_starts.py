@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from mht_experiments.tomht_runner import (
+from mht.tomht_runner import (
     ExternalStartTimingConfiguration,
     ModeConfiguration,
     TOMHTOperatingMode,
@@ -13,11 +13,11 @@ from mht_experiments.tomht_runner import (
     _resolve_external_start_timing,
     _resolve_mode_configuration,
 )
-from mht_experiments.scenarios.bearing_range import (
+from mht.scenarios.bearing_range import (
     create_bearing_range_mht_example,
     external_tomht_tracks_for_bearing_range,
 )
-from mht_experiments.scenarios.crossing_targets import (
+from mht.scenarios.crossing_targets import (
     create_crossing_scenario,
     external_tomht_tracks_for_crossing,
 )

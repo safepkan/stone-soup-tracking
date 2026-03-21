@@ -21,7 +21,7 @@ from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 
 
-from mht_experiments.scenarios.common import ScenarioConfig
+from mht.scenarios.common import ScenarioConfig
 
 
 # ----- Global-ish parameters for this scenario -----

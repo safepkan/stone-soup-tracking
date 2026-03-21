@@ -35,7 +35,7 @@ from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 
 
-from mht_experiments.scenarios.common import ScenarioConfig
+from mht.scenarios.common import ScenarioConfig
 
 
 def _det_sort_key(det: Detection) -> tuple[float, float]:
