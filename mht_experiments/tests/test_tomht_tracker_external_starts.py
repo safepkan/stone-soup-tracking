@@ -118,6 +118,45 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         self.assertEqual(set(), tracks)
         self.assertEqual(set(), tracker.tracks)
 
+    def test_get_unused_detections_rejects_call_before_update_tracker(self) -> None:
+        tracker = _build_tracker()
+
+        with self.assertRaisesRegex(
+            RuntimeError, "completed update_tracker\\(\\) first"
+        ):
+            tracker.get_unused_detections()
+
+    def test_get_unused_detections_returns_residual_when_initiator_disabled(
+        self,
+    ) -> None:
+        tracker = _build_tracker()
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        detection = Detection(np.array([[1.0], [2.0]]), timestamp=timestamp)
+
+        tracker.update_tracker(timestamp, [detection])
+
+        unused = tracker.get_unused_detections()
+        self.assertEqual([detection], unused)
+        # Getter should be defensive: mutating the returned list must not mutate tracker state.
+        unused.clear()
+        self.assertEqual([detection], tracker.get_unused_detections())
+
+    def test_get_unused_detections_returns_empty_when_internal_births_enabled(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        tracker = _build_tracker(
+            initiator=cast(
+                SimpleMeasurementInitiator,
+                _SingleBirthInitiator(_external_start(timestamp)),
+            )
+        )
+        detection = Detection(np.array([[1.0], [2.0]]), timestamp=timestamp)
+
+        tracker.update_tracker(timestamp, [detection])
+
+        self.assertEqual([], tracker.get_unused_detections())
+
     def test_tracker_iter_uses_detector_and_returns_update_output(self) -> None:
         tracker = _build_tracker()
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)

@@ -370,6 +370,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         ]
         self._last_update_timestamp: object | None = None
         self._last_scan_index: int | None = None
+        self._last_unused_detections: list[Detection] = []
         self.last_scan_stats: ScanStats | None = None
         self._stats: list[ScanStats] = []
         self.reset_stats()
@@ -387,6 +388,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         time: datetime.datetime,
         detections: Iterable[Detection],
     ) -> tuple[datetime.datetime, set[Track]]:
+        self._last_unused_detections = []
         globals_in = len(self.global_hypotheses)
         scan_index = (
             0 if self._last_scan_index is None else int(self._last_scan_index) + 1
@@ -481,6 +483,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 )
             )
         self.global_hypotheses = new_globals
+
+    def get_unused_detections(self) -> list[Detection]:
+        """
+        Return residual detections from the most recent completed update_tracker().
+
+        Residual detections are considered consumed when internal births are enabled
+        (i.e. ``initiator is not None``), so this returns an empty list in that mode.
+        """
+        if self._last_update_timestamp is None:
+            raise RuntimeError(
+                "get_unused_detections() requires a completed update_tracker() first."
+            )
+        return list(self._last_unused_detections)
 
     def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
         """Return a copy of the current MAP leaf-node view."""
@@ -1101,15 +1116,15 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         return True
 
-    def _generate_birth_candidates(self, ctx: ScanContext) -> tuple[int, list[Track]]:
-        residual = self._residual_detections(self.global_hypotheses, ctx.detections)
+    def _generate_birth_candidates(
+        self, residual: list[Detection], timestamp: object
+    ) -> list[Track]:
         assert self.initiator is not None
-        born = (
-            list(self.initiator.initiate(OrderedSet(residual), ctx.timestamp))
+        return (
+            list(self.initiator.initiate(OrderedSet(residual), timestamp))
             if residual
             else []
         )
-        return len(residual), born
 
     def _filter_birth_candidates(self, born: list[Track]) -> list[Track]:
         return [tr for tr in born if self._birth_is_sane(tr)]
@@ -1311,8 +1326,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         ctx: ScanContext,
     ) -> BirthStats:
         globals_before_births = len(self.global_hypotheses)
+        residual = self._residual_detections(self.global_hypotheses, ctx.detections)
         if self.initiator is not None and self.global_hypotheses:
-            residual_detections_considered, born = self._generate_birth_candidates(ctx)
+            self._last_unused_detections = []
+            residual_detections_considered = len(residual)
+            born = self._generate_birth_candidates(residual, ctx.timestamp)
             birth_tracks_created = len(born)
 
             born = self._filter_birth_candidates(born)
@@ -1349,6 +1367,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 globals_before_births=globals_before_births,
                 globals_after_births=len(self.global_hypotheses),
             )
+        if self.initiator is None:
+            self._last_unused_detections = residual
+        else:
+            self._last_unused_detections = []
         return BirthStats(
             globals_before_births=globals_before_births,
             globals_after_births=len(self.global_hypotheses),
