@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 import datetime
 from math import log
@@ -70,28 +68,12 @@ class TOMHTParams:
 
 
 @dataclass(frozen=True)
-class ChildCandidate:
-    track_id: int
-    child_node: TrackHypothesisNode
-    used_det_key: int | None
-    log_delta: float
-
-
-@dataclass(frozen=True)
-class GlobalHypothesis:
-    """One global hypothesis = one leaf per track_id + cumulative log weight."""
-
-    leaf_nodes_by_track_id: dict[int, TrackHypothesisNode]
-    log_weight: float
-
-
-@dataclass(frozen=True)
 class TrackHypothesisNode:
     """One explicit hypothesis node for one logical track at one scan step."""
 
     node_id: int
     track_id: int
-    parent: TrackHypothesisNode | None
+    parent: "TrackHypothesisNode | None"
     scan_index: int
     timestamp: object
     state: object
@@ -107,6 +89,22 @@ class TrackHypothesisNode:
     root_source: str
     birth_scan_index: int
     track_metadata: dict[str, object]
+
+
+@dataclass(frozen=True)
+class GlobalHypothesis:
+    """One global hypothesis = one leaf per track_id + cumulative log weight."""
+
+    leaf_nodes_by_track_id: dict[int, TrackHypothesisNode]
+    log_weight: float
+
+
+@dataclass(frozen=True)
+class ChildCandidate:
+    track_id: int
+    child_node: TrackHypothesisNode
+    used_det_key: int | None
+    log_delta: float
 
 
 @dataclass(frozen=True)
@@ -1716,6 +1714,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         y = float(sv[2, 0])
         vy = float(sv[3, 0])
         return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
+
+
+def get_track_id(track: Track) -> int:
+    """Return the stable track ID for a TOMHTTracker-produced track.
+
+    TOMHTTracker assigns each logical track a stable integer ID that persists
+    across scans.  The Track objects returned by ``update_tracker()`` and the
+    ``tracks`` property are reconstructed each scan, so ``Track.id`` (a UUID)
+    is *not* stable.  Use this helper instead.
+    """
+    return track.metadata["track_id"]
 
 
 def build_tomht_linear(
