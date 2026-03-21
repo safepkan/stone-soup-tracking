@@ -357,7 +357,7 @@ def run_tomht(
     for n, (timestamp, detections) in enumerate(zip(timestamps, scans)):
         artists: list = []
 
-        tracks_out = tracker.step(detections, timestamp)
+        _, tracks_out = tracker.update_tracker(timestamp, detections)
         if delayed_external_start_scan == n:
             external_starts = build_external_starts(n, timestamp)
             tracker.add_external_starts(external_starts, timestamp)

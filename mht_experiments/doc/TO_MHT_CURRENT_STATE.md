@@ -77,6 +77,13 @@ The tracker now exposes small read-only helpers for inspecting the current MAP h
 
 This reduces the need for runner/test code to reach into private reconstruction internals just to inspect the MAP view.
 
+### Stone Soup tracker interface compliance is now explicit
+
+`TOMHTTracker` now implements Stone Soup's tracker interface directly:
+- it subclasses the tracker mixin/base interface,
+- supports `update_tracker(time,detections)` returning `(time,tracks)`,
+- supports iterator-driven progression when `detector` is set.
+
 ## What is still transitional or awkward
 
 The core structure is now much better, but the implementation is not “finished” in every respect.
@@ -139,7 +146,7 @@ The tracker is therefore in a much better architectural state, but it has **not*
 The tracker still supports externally supplied confirmed starts via the external-start path.
 
 Current semantics remain:
-- external starts are injected after a completed `step()` at the same timestamp,
+- external starts are injected after a completed `update_tracker()` at the same timestamp,
 - they are inserted structurally into the current global hypotheses,
 - they are not routed through internal residual birth discovery,
 - they do not receive internal birth penalties.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import datetime
 from math import log
 from statistics import median
 from types import MappingProxyType
@@ -9,11 +10,13 @@ from typing import Any, Iterable, Mapping, Protocol
 
 import numpy as np
 
+from stonesoup.base import Property
 from stonesoup.hypothesiser.probability import PDAHypothesiser
 from stonesoup.types.detection import MissedDetection
 from stonesoup.models.measurement.base import MeasurementModel
 from stonesoup.models.transition.base import TransitionModel
 from stonesoup.predictor.kalman import KalmanPredictor, UnscentedKalmanPredictor
+from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.types.detection import Detection
 from stonesoup.types.track import Track
 from stonesoup.types.update import Update
@@ -279,7 +282,7 @@ class BetaRatioScoringModel:
         return -self.birth_log_penalty
 
 
-class TOMHTTracker:
+class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     """
     Track-Oriented MHT with K-best global hypotheses (beam search).
 
@@ -287,6 +290,13 @@ class TOMHTTracker:
     - Each scan: branch each track (per global hyp), then form consistent globals
       (one child per track_id, no shared detections).
     """
+
+    hypothesiser: PDAHypothesiser = Property(
+        doc="Hypothesiser used to branch per-track hypotheses."
+    )
+    updater: Updater = Property(
+        doc="Updater used to generate posteriors from selected hypotheses."
+    )
 
     _last_nscan_boundary_scan_index: int | None
     _last_nscan_tracks_in_scope: int
@@ -578,12 +588,13 @@ class TOMHTTracker:
         hypothesiser: PDAHypothesiser,
         updater: Updater,
         *,
+        detector: Any | None = None,
         initiator: SimpleMeasurementInitiator | None = None,
         params: TOMHTParams = TOMHTParams(),
         scoring_model: ScoringModel | None = None,
     ) -> None:
-        self.hypothesiser = hypothesiser
-        self.updater = updater
+        super().__init__(hypothesiser, updater)
+        self.detector = detector
         self.params = params
         self.initiator = initiator
         if scoring_model is None:
@@ -636,7 +647,7 @@ class TOMHTTracker:
         self.global_hypotheses: list[GlobalHypothesis] = [
             GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=0.0)
         ]
-        self._last_step_timestamp: object | None = None
+        self._last_update_timestamp: object | None = None
         self._last_scan_index: int | None = None
         self.last_scan_stats: ScanStats | None = None
         self._stats: list[ScanStats] = []
@@ -645,6 +656,10 @@ class TOMHTTracker:
     def reset_stats(self) -> None:
         self._stats = []
         self.last_scan_stats = None
+
+    @property
+    def tracks(self) -> set[Track]:
+        return self.get_map_output_tracks()
 
     def print_summary_stats(self) -> None:
         stats = self._stats
@@ -1423,14 +1438,14 @@ class TOMHTTracker:
         return list(best.values())
 
     def _validate_external_starts_timestamp(self, timestamp: object) -> None:
-        if self._last_step_timestamp is None or self._last_scan_index is None:
+        if self._last_update_timestamp is None or self._last_scan_index is None:
             raise RuntimeError(
-                "add_external_starts() requires a completed step() first."
+                "add_external_starts() requires a completed update_tracker() first."
             )
-        if timestamp != self._last_step_timestamp:
+        if timestamp != self._last_update_timestamp:
             raise ValueError(
                 "add_external_starts() timestamp must match the most recent "
-                f"completed step() timestamp. Expected {self._last_step_timestamp!r}, "
+                f"completed update_tracker() timestamp. Expected {self._last_update_timestamp!r}, "
                 f"got {timestamp!r}."
             )
 
@@ -1464,7 +1479,11 @@ class TOMHTTracker:
             )
         self.global_hypotheses = new_globals
 
-    def step(self, detections: Iterable[Detection], timestamp) -> set[Track]:
+    def update_tracker(
+        self,
+        time: datetime.datetime,
+        detections: Iterable[Detection],
+    ) -> tuple[datetime.datetime, set[Track]]:
         globals_in = len(self.global_hypotheses)
         scan_index = (
             0 if self._last_scan_index is None else int(self._last_scan_index) + 1
@@ -1476,7 +1495,7 @@ class TOMHTTracker:
         det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}
         ctx = ScanContext(
             scan_index=scan_index,
-            timestamp=timestamp,
+            timestamp=time,
             detections=det_list,
             det_index_by_obj=det_index_by_obj,
         )
@@ -1512,12 +1531,12 @@ class TOMHTTracker:
         birth_stats = self._branch_globals_with_births(ctx)
 
         if self.params.debug_display_detections:
-            print(f"\nDetections at timestamp {timestamp}:")
+            print(f"\nDetections at timestamp {time}:")
             for det in det_list:
                 print(f"  {det.state_vector}")
 
         if self.params.debug_display_hypotheses:
-            print(f"\nGlobal hypotheses at timestamp {timestamp}:")
+            print(f"\nGlobal hypotheses at timestamp {time}:")
             self._display_global_hypotheses(det_list)
 
         map_snapshot = self.get_map_hypothesis_snapshot()
@@ -1545,7 +1564,7 @@ class TOMHTTracker:
                 map_mean_hit_rate = float(np.mean(hit_rates))
 
         scan_stats = ScanStats(
-            timestamp=timestamp,
+            timestamp=time,
             num_detections=len(det_list),
             globals_in=globals_in,
             globals_expanded=globals_expanded,
@@ -1574,7 +1593,7 @@ class TOMHTTracker:
         if self.params.debug_display_scan_stats:
             nscan_snapshot = self.get_n_scan_commitment_snapshot()
             print(
-                f"SCAN t={timestamp} det={scan_stats.num_detections} "
+                f"SCAN t={time} det={scan_stats.num_detections} "
                 f"globals in={scan_stats.globals_in} exp={scan_stats.globals_expanded} "
                 f"after_unused={scan_stats.globals_after_unused} dedup={scan_stats.globals_after_dedupe} "
                 f"beam={scan_stats.globals_after_beam} "
@@ -1599,19 +1618,19 @@ class TOMHTTracker:
                 )
                 print(
                     "SCAN_NSCAN_COMMITTED "
-                    f"t={timestamp} boundary={nscan_snapshot.boundary_scan_index} "
+                    f"t={time} boundary={nscan_snapshot.boundary_scan_index} "
                     f"{committed_pairs}"
                 )
             if self.params.debug_display_map_miss_hist:
                 print(
-                    f"SCAN_MAP_MISS_HIST t={timestamp} miss_hist={scan_stats.map_miss_hist}"
+                    f"SCAN_MAP_MISS_HIST t={time} miss_hist={scan_stats.map_miss_hist}"
                 )
 
-        self._last_step_timestamp = timestamp
+        self._last_update_timestamp = time
         self._last_scan_index = scan_index
 
         # Output MAP global hypothesis
-        return self.get_map_output_tracks()
+        return time, self.get_map_output_tracks()
 
 
 def build_tomht_linear(

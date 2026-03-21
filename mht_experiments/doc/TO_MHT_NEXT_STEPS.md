@@ -27,7 +27,6 @@ Current likely items:
 - add `(_TrackerMixInUpdate, Tracker)` inheritance if it remains straightforward,
 - add `update_tracker(time, detections)` that delegates to current scan logic,
 - add `tracks` property returning current MAP output,
-- keep the existing `step(...)` path working while this interface is added,
 - review whether any small public inspection helpers should be exposed or documented more clearly.
 
 ### 2. Hypothesiser / scoring dependency check

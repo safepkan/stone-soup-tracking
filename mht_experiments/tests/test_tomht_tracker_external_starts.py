@@ -108,6 +108,26 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         self.assertEqual({}, dict(map_snapshot.leaf_nodes_by_track_id))
         self.assertEqual(set(), tracker.get_map_output_tracks())
 
+    def test_update_tracker_returns_timestamp_and_tracks(self) -> None:
+        tracker = _build_tracker()
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+
+        result_timestamp, tracks = tracker.update_tracker(timestamp, set())
+
+        self.assertEqual(timestamp, result_timestamp)
+        self.assertEqual(set(), tracks)
+        self.assertEqual(set(), tracker.tracks)
+
+    def test_tracker_iter_uses_detector_and_returns_update_output(self) -> None:
+        tracker = _build_tracker()
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        tracker.detector = [(timestamp, set())]
+
+        result_timestamp, tracks = next(iter(tracker))
+
+        self.assertEqual(timestamp, result_timestamp)
+        self.assertEqual(set(), tracks)
+
     def test_map_snapshot_leaf_mapping_is_read_only(self) -> None:
         tracker = _build_tracker()
         map_snapshot = tracker.get_map_hypothesis_snapshot()
@@ -157,46 +177,54 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         )
         self.assertEqual("initiator", inserted_node.track_metadata["source"])
 
-    def test_add_external_starts_rejects_call_before_step(self) -> None:
+    def test_add_external_starts_rejects_call_before_update_tracker(self) -> None:
         tracker = _build_tracker()
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
 
-        with self.assertRaisesRegex(RuntimeError, "completed step\\(\\) first"):
+        with self.assertRaisesRegex(
+            RuntimeError, "completed update_tracker\\(\\) first"
+        ):
             tracker.add_external_starts([_external_start(timestamp)], timestamp)
 
-    def test_add_external_starts_accepts_matching_timestamp_after_step(self) -> None:
+    def test_add_external_starts_accepts_matching_timestamp_after_update_tracker(
+        self,
+    ) -> None:
         tracker = _build_tracker()
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
 
-        tracker.step([], timestamp)
+        tracker.update_tracker(timestamp, [])
         tracker.add_external_starts([], timestamp)
 
         self.assertEqual(1, len(tracker.global_hypotheses))
         self.assertEqual({}, tracker.global_hypotheses[0].leaf_nodes_by_track_id)
 
-    def test_add_external_starts_rejects_mismatched_timestamp_after_step(self) -> None:
+    def test_add_external_starts_rejects_mismatched_timestamp_after_update_tracker(
+        self,
+    ) -> None:
         tracker = _build_tracker()
-        step_timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
-        external_timestamp = step_timestamp + datetime.timedelta(seconds=1)
+        update_timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        external_timestamp = update_timestamp + datetime.timedelta(seconds=1)
 
-        tracker.step([], step_timestamp)
+        tracker.update_tracker(update_timestamp, [])
 
         with self.assertRaisesRegex(
             ValueError,
-            "must match the most recent completed step\\(\\) timestamp",
+            "must match the most recent completed update_tracker\\(\\) timestamp",
         ):
             tracker.add_external_starts(
                 [_external_start(external_timestamp)],
                 external_timestamp,
             )
 
-    def test_add_external_starts_uses_most_recent_step_timestamp(self) -> None:
+    def test_add_external_starts_uses_most_recent_update_tracker_timestamp(
+        self,
+    ) -> None:
         tracker = _build_tracker()
         first_timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
         second_timestamp = first_timestamp + datetime.timedelta(seconds=1)
 
-        tracker.step([], first_timestamp)
-        tracker.step([], second_timestamp)
+        tracker.update_tracker(first_timestamp, [])
+        tracker.update_tracker(second_timestamp, [])
 
         with self.assertRaises(ValueError):
             tracker.add_external_starts(
@@ -213,7 +241,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         tracker = _build_tracker()
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
 
-        tracker.step([], timestamp)
+        tracker.update_tracker(timestamp, [])
         tracker.global_hypotheses = [
             GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=-1.5),
             GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=-2.5),
@@ -238,7 +266,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         tracker = _build_tracker()
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
 
-        tracker.step([], timestamp)
+        tracker.update_tracker(timestamp, [])
         before_next_track_id = tracker._next_track_id
         before_globals = [
             (gh.log_weight, dict(gh.leaf_nodes_by_track_id))
@@ -260,7 +288,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         external_start = _external_start(timestamp)
         external_start.metadata["source"] = "upstream"
 
-        tracker.step([], timestamp)
+        tracker.update_tracker(timestamp, [])
         tracker.add_external_starts([external_start], timestamp)
 
         map_snapshot = tracker.get_map_hypothesis_snapshot()
@@ -286,7 +314,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
         external_start = _external_start(timestamp)
 
-        tracker.step([], timestamp)
+        tracker.update_tracker(timestamp, [])
         tracker.add_external_starts([external_start], timestamp)
         tracker.add_external_starts([external_start], timestamp)
 
