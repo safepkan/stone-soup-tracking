@@ -1,92 +1,188 @@
 # TO-MHT Current State
 
-This document is a cleaned-up snapshot of the current implementation after completing the external-initiation and birth-pipeline cleanup phase.
+This document is a current snapshot of the implementation after completing Phase B: explicit track-hypothesis structure and true ancestor-based N-scan commitment.
 
-Note (2026-03-20): this document reflects pre-Phase-B architecture context and is now stale. For current implementation status, see `TO_MHT_NEXT_STEPS.md`.
+It replaces the earlier pre-Phase-B description in which globals still stored copied `Track` objects and N-scan was only a history-tail approximation. That older description is no longer accurate. `TO_MHT_NEXT_STEPS.md` remains the main phase-planning document; this file is the implementation-status snapshot. 
 
-## What is now solid
+## What is now structurally correct
 
-### MFA baseline isolation
+### Explicit track-oriented hypothesis structure
 
-The legacy MFA baseline code now lives under `mht_experiments/mfa/` so TO-MHT work stays separated from baseline/reference code.
+The tracker now uses an explicit per-track hypothesis-node representation.
 
-### TOMHT module flattening
+In the current implementation:
+- `TrackHypothesisNode` is the canonical internal unit of branching,
+- each node carries a same-track parent pointer,
+- each node has explicit `track_id`, `node_id`, `scan_index`, per-step state payload, association label / used detection identity, and cached maintenance fields,
+- ancestry is represented structurally by shared node identity rather than by copied history content. 
 
-`tomht_runner.py` and `tomht_tracker.py` now live directly under `mht_experiments/` (the old `runners/` and `trackers/` subpackages were removed).
+This means the internal representation is now much closer to a real TO-MHT than before.
 
-### Deterministic tracker baseline
+### Globals now reference leaf nodes, not copied tracks
 
-The tracker has deterministic ordering and stable beam-management behavior, making it practical to inspect, compare, and iterate on.
+`GlobalHypothesis` now stores `track_id -> leaf node` plus cumulative log weight.
 
-### External confirmed-start support
+That means:
+- globals no longer use copied full-history `Track` objects as primary internal truth,
+- shared ancestry is expressed through shared node references,
+- branch identity is node-based rather than reconstructed from copied recent history.
 
-The tracker now supports externally supplied confirmed track starts via `add_external_starts(starts, timestamp)`.
+### Per-track branching is node-native
 
-Current semantics:
+Continuation now works structurally as parent-leaf to child-node creation.
+
+In practice:
+- hit and miss continuations create new child nodes,
+- global expansion operates over leaf nodes,
+- detection-usage checks read node fields,
+- deduplication is based on structural leaf identity (`track_id -> node_id`) rather than recent association-history tails.
+
+### Births and external starts now share the same structural system
+
+External starts and internal births are now both represented as root-like nodes in the same hypothesis structure.
+
+Their semantics remain distinct:
+- external starts are introduced through the external-start path and do not inherit internal-birth scoring semantics,
+- internal births are introduced through the birth path and remain birth-scored.
+
+So the structure is shared while provenance and scoring remain separate.
+
+### True N-scan commitment is now explicit
+
+N-scan handling is no longer just a history-tail approximation.
+
+The current implementation now computes commitment as follows:
+- after expansion/scoring and beam pruning,
+- before births,
+- at boundary `b = k - N`,
+- per logical `track_id`,
+- using explicit ancestor node identity at that boundary,
+- considering only surviving globals that still contain that `track_id`.
+
+A track is considered committed at boundary `b` only when all participating surviving globals agree on the same exact-boundary ancestor node.
+
+This is the intended Phase B semantic correction.
+
+### Commitment bookkeeping is explicit
+
+The tracker now keeps explicit internal commitment state and exposes a small read-only snapshot for debug/tests.
+
+This makes the current N-scan state inspectable without treating node cleanup or committed-history materialisation as already solved.
+
+### Small read-only MAP inspection helpers now exist
+
+The tracker now exposes small read-only helpers for inspecting the current MAP hypothesis in the new structure:
+- a node-native MAP snapshot,
+- and a public helper for reconstructed MAP output tracks.
+
+This reduces the need for runner/test code to reach into private reconstruction internals just to inspect the MAP view.
+
+## What is still transitional or awkward
+
+The core structure is now much better, but the implementation is not “finished” in every respect.
+
+### Stone Soup `Track` reconstruction is still an adapter boundary
+
+The tracker still reconstructs temporary Stone Soup `Track` objects from leaf-node ancestry for:
+- hypothesiser compatibility,
+- updater compatibility,
+- output,
+- some debugging/display paths.
+
+This is acceptable for now, but it is still a compatibility boundary rather than the ideal end-state.
+
+### `track_metadata` is still carried on nodes
+
+`TrackHypothesisNode` still carries a `track_metadata` dict, and reconstructed `Track.metadata` is still partly projected from it.
+
+This is now mostly a compatibility residue rather than a core architectural concept.
+
+It does not block the current structure from being a real node-based TO-MHT, but it is one of the clearest remaining pieces of “old world” flavor in the implementation.
+
+### Physical node cleanup / GC is still deferred
+
+Commitment semantics are now explicit, but physical node lifecycle cleanup is still deferred.
+
+In particular, the current implementation does **not** yet:
+- garbage-collect unreachable/orphaned ancestry aggressively,
+- compact committed prefixes,
+- or use commitment state to shrink memory structurally.
+
+This was an intentional Phase B non-goal.
+
+### Committed-history materialisation is still deferred
+
+The tracker does not yet maintain a separate committed-history store, committed-track object model, or detached committed-prefix representation.
+
+Committed branch decisions are now explicit, but committed output materialisation is still a later-phase design question.
+
+### Some compatibility knobs remain
+
+`assoc_history` metadata projection has been removed, but `assoc_history_len` still exists in `TOMHTParams` as a legacy compatibility/defaulting knob for `ns_scan_window` when `ns_scan_window <= 0`.
+
+This is not harmful, but it is a leftover compatibility feature rather than a clean long-term concept.
+
+### Performance has not been the focus yet
+
+Phase B prioritised structural correctness and semantic clarity.
+
+The tracker is therefore in a much better architectural state, but it has **not** yet been pushed hard on:
+- memory efficiency,
+- ancestry compaction,
+- avoiding reconstruction overhead,
+- or broader scaling/performance cleanup.
+
+## What is now solid operationally
+
+### External confirmed-start support remains in place
+
+The tracker still supports externally supplied confirmed starts via the external-start path.
+
+Current semantics remain:
 - external starts are injected after a completed `step()` at the same timestamp,
-- they are inserted structurally into each current global hypothesis,
-- they are not routed through internal residual/birth discovery,
-- they do not receive internal birth penalties,
-- the tracker starts empty and no longer supports constructor-time `initial_tracks`.
+- they are inserted structurally into the current global hypotheses,
+- they are not routed through internal residual birth discovery,
+- they do not receive internal birth penalties.
 
-### Scenario / runner support
+### Runner operating-mode support remains usable
 
-The existing `crossing` and `bearing_range` runners can exercise:
+The existing runner still supports:
 - external-only operation,
 - internal-only operation,
 - both external starts and internal births,
-- custom flag-driven configurations.
+- explicit operating-mode and external-start timing configuration.
 
-The runner layer now makes operating mode, external-start enablement, and external-start timing explicit enough for practical experimentation.
+So the integration-facing work from the previous phase remains intact while the tracker internals have become more structurally correct.
 
-### Internal birth path readability
+### Deterministic/stable experimentation remains practical
 
-The internal birth path has been refactored into explicit helper stages, making the current logic easier to reason about without changing its intended behavior.
+The tracker still has deterministic enough ordering / beam-management behavior to make inspection, debugging, and scenario comparison practical.
 
-### Metadata / startup cleanup
+That remains important because the new structure is more correct, but it also needs to stay inspectable.
 
-The tracker’s startup model is now simpler:
-- start empty,
-- process a step,
-- optionally inject confirmed external starts at that timestamp,
-- continue normal maintenance.
+## What is still not ideal or still clearly “bad”
 
-This is a cleaner interface for upcoming integration work than the earlier constructor-time initial-track path.
+To be explicit about the remaining shortcomings:
 
-## What still works, but is architecturally wrong
+- reconstructed `Track` views are still used at several compatibility boundaries,
+- `track_metadata` is still propagated on nodes,
+- node lifecycle / GC is not yet designed or implemented,
+- committed-history output/materialisation does not exist,
+- the `assoc_history_len` parameter is still a legacy compatibility relic,
+- performance/efficiency has not yet been revisited after the structural refactor.
 
-The biggest remaining limitation is structural.
+None of these invalidate the Phase B result, but they are the main remaining sources of technical awkwardness.
 
-### Flat globals with copied track objects
+## Bottom line
 
-Global hypotheses still store copied per-track `Track` objects rather than explicit shared per-track hypothesis ancestry.
+The tracker is now in a meaningfully better architectural state than before:
+- explicit node-based ancestry exists,
+- globals reference per-track leaf nodes,
+- dedupe is structural,
+- births and external starts live in the same hypothesis structure,
+- and N-scan commitment is now explicit and ancestor-identity-based.
 
-That means:
-- shared history is not represented directly,
-- ancestry is implicit rather than explicit,
-- multiple globals duplicate track-history content instead of sharing nodes,
-- pruning/commitment cannot be expressed cleanly in true TO-MHT terms.
+So the main Phase B architectural goal has been achieved.
 
-### N-scan is still only an approximation
-
-The current N-scan behavior is still based on recent association-history tail logic rather than explicit ancestor-based commitment.
-
-This is good enough for the current prototype, but it is not yet a true TO-MHT representation.
-
-## What this means
-
-The implementation is now in a good place to stop polishing startup/birth-interface details and move to the next real structural step:
-
-**introducing explicit track-hypothesis structure and true N-scan pruning.**
-
-That is the current architectural bottleneck, and it should be addressed before deeper scoring work.
-
-## Deferred topics intentionally left for later
-
-These are known topics, but are not the current priority:
-
-- richer external-start scheduling,
-- pre-first-step external starts,
-- deeper scoring cleanup,
-- more principled birth/existence modelling,
-- performance optimisation.
+The remaining issues are no longer “the tracker is structurally not a TO-MHT.”
+They are now mostly compatibility, cleanup, lifecycle, and future-design questions.
