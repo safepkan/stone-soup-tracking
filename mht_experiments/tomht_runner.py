@@ -360,7 +360,7 @@ def run_tomht(
         _, tracks_out = tracker.update_tracker(timestamp, detections)
         if delayed_external_start_scan == n:
             external_starts = build_external_starts(n, timestamp)
-            tracker.add_external_starts(external_starts, timestamp)
+            tracker.add_external_starts(timestamp, external_starts)
             truth_indices = ",".join(
                 str(int(track.metadata["scenario_truth_index"]))
                 for track in external_starts

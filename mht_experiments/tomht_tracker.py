@@ -368,7 +368,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self.global_hypotheses: list[GlobalHypothesis] = [
             GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=0.0)
         ]
-        self._last_update_timestamp: object | None = None
+        self._last_update_timestamp: datetime.datetime | None = None
         self._last_scan_index: int | None = None
         self._last_unused_detections: list[Detection] = []
         self.last_scan_stats: ScanStats | None = None
@@ -454,7 +454,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         # Output MAP global hypothesis
         return time, self.get_map_output_tracks()
 
-    def add_external_starts(self, starts: Iterable[Track], timestamp: object) -> None:
+    def add_external_starts(
+        self, time: datetime.datetime, starts: Iterable[Track]
+    ) -> None:
         """
         Insert confirmed external starts into each current global hypothesis.
 
@@ -462,13 +464,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         treated as a distinct confirmed track and receives a fresh tracker-owned
         track_id.
         """
-        self._validate_external_starts_timestamp(timestamp)
+        self._validate_external_starts_timestamp(time)
         start_list = list(starts)
         if not start_list or not self.global_hypotheses:
             return
 
         templates = [
-            self._make_external_start_template(start, timestamp) for start in start_list
+            self._make_external_start_template(start, time) for start in start_list
         ]
 
         new_globals: list[GlobalHypothesis] = []
@@ -1628,7 +1630,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         return tr
 
     def _make_external_start_template(
-        self, start: Track, timestamp: object
+        self, start: Track, time: datetime.datetime
     ) -> TrackHypothesisNode:
         if len(start) == 0:
             raise ValueError(
@@ -1636,10 +1638,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
 
         start_timestamp = getattr(start.states[-1], "timestamp", None)
-        if start_timestamp != timestamp:
+        if start_timestamp != time:
             raise ValueError(
                 "External starts must already be initialised at the supplied "
-                f"timestamp. Expected {timestamp!r}, got {start_timestamp!r}."
+                f"timestamp. Expected {time!r}, got {start_timestamp!r}."
             )
 
         track_id = self._next_track_id
@@ -1653,7 +1655,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         return self._create_root_node(
             track_id=track_id,
             scan_index=int(self._last_scan_index),
-            timestamp=getattr(state, "timestamp", timestamp),
+            timestamp=getattr(state, "timestamp", time),
             state=state,
             state_kind="external_start",
             used_det_key=None,
@@ -1664,16 +1666,20 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             track_metadata=dict(start.metadata),
         )
 
-    def _validate_external_starts_timestamp(self, timestamp: object) -> None:
+    def _validate_external_starts_timestamp(self, time: datetime.datetime) -> None:
+        if not isinstance(time, datetime.datetime):
+            raise TypeError(
+                "add_external_starts() time must be a datetime.datetime instance."
+            )
         if self._last_update_timestamp is None or self._last_scan_index is None:
             raise RuntimeError(
                 "add_external_starts() requires a completed update_tracker() first."
             )
-        if timestamp != self._last_update_timestamp:
+        if time != self._last_update_timestamp:
             raise ValueError(
-                "add_external_starts() timestamp must match the most recent "
+                "add_external_starts() time must match the most recent "
                 f"completed update_tracker() timestamp. Expected {self._last_update_timestamp!r}, "
-                f"got {timestamp!r}."
+                f"got {time!r}."
             )
 
     # Debug Display Helpers

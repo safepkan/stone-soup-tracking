@@ -223,7 +223,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         with self.assertRaisesRegex(
             RuntimeError, "completed update_tracker\\(\\) first"
         ):
-            tracker.add_external_starts([_external_start(timestamp)], timestamp)
+            tracker.add_external_starts(timestamp, [_external_start(timestamp)])
 
     def test_add_external_starts_accepts_matching_timestamp_after_update_tracker(
         self,
@@ -232,10 +232,19 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
 
         tracker.update_tracker(timestamp, [])
-        tracker.add_external_starts([], timestamp)
+        tracker.add_external_starts(timestamp, [])
 
         self.assertEqual(1, len(tracker.global_hypotheses))
         self.assertEqual({}, tracker.global_hypotheses[0].leaf_nodes_by_track_id)
+
+    def test_add_external_starts_rejects_non_datetime_time(self) -> None:
+        tracker = _build_tracker()
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+
+        tracker.update_tracker(timestamp, [])
+
+        with self.assertRaisesRegex(TypeError, "time must be a datetime\\.datetime"):
+            tracker.add_external_starts(cast(datetime.datetime, object()), [])
 
     def test_add_external_starts_rejects_mismatched_timestamp_after_update_tracker(
         self,
@@ -251,8 +260,8 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
             "must match the most recent completed update_tracker\\(\\) timestamp",
         ):
             tracker.add_external_starts(
-                [_external_start(external_timestamp)],
                 external_timestamp,
+                [_external_start(external_timestamp)],
             )
 
     def test_add_external_starts_uses_most_recent_update_tracker_timestamp(
@@ -267,13 +276,13 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             tracker.add_external_starts(
-                [_external_start(first_timestamp)],
                 first_timestamp,
+                [_external_start(first_timestamp)],
             )
 
         tracker.add_external_starts(
-            [_external_start(second_timestamp)],
             second_timestamp,
+            [_external_start(second_timestamp)],
         )
 
     def test_add_external_starts_inserts_into_each_active_global(self) -> None:
@@ -286,7 +295,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
             GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=-2.5),
         ]
 
-        tracker.add_external_starts([_external_start(timestamp)], timestamp)
+        tracker.add_external_starts(timestamp, [_external_start(timestamp)])
 
         self.assertEqual(2, len(tracker.global_hypotheses))
         first_id, first_node = next(
@@ -312,7 +321,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
             for gh in tracker.global_hypotheses
         ]
 
-        tracker.add_external_starts([], timestamp)
+        tracker.add_external_starts(timestamp, [])
 
         after_globals = [
             (gh.log_weight, dict(gh.leaf_nodes_by_track_id))
@@ -328,7 +337,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         external_start.metadata["source"] = "upstream"
 
         tracker.update_tracker(timestamp, [])
-        tracker.add_external_starts([external_start], timestamp)
+        tracker.add_external_starts(timestamp, [external_start])
 
         map_snapshot = tracker.get_map_hypothesis_snapshot()
         self.assertIsNotNone(map_snapshot)
@@ -354,8 +363,8 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         external_start = _external_start(timestamp)
 
         tracker.update_tracker(timestamp, [])
-        tracker.add_external_starts([external_start], timestamp)
-        tracker.add_external_starts([external_start], timestamp)
+        tracker.add_external_starts(timestamp, [external_start])
+        tracker.add_external_starts(timestamp, [external_start])
 
         track_ids = sorted(tracker.global_hypotheses[0].leaf_nodes_by_track_id)
         self.assertEqual(2, len(track_ids))
