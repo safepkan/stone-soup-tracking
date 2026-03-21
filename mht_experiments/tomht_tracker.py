@@ -435,42 +435,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         # Births: run initiator once on residual detections, then branch globals with/without births.
         birth_stats = self._branch_globals_with_births(ctx)
 
-        if self.params.debug_display_detections:
-            print(f"\nDetections at timestamp {time}:")
-            for det in det_list:
-                print(f"  {det.state_vector}")
-
-        if self.params.debug_display_hypotheses:
-            print(f"\nGlobal hypotheses at timestamp {time}:")
-            self._display_global_hypotheses(det_list)
-
-        map_snapshot = self.get_map_hypothesis_snapshot()
-        map_tracks = 0
-        map_used = 0
-        map_unused = len(det_list)
-        map_miss_hist: dict[int, int] = {}
-        map_mean_hit_rate = 0.0
-        if map_snapshot is not None:
-            map_tracks = len(map_snapshot.leaf_nodes_by_track_id)
-            map_used = len(
-                self._used_det_keys_for_leaf_nodes(map_snapshot.leaf_nodes_by_track_id)
-            )
-            map_unused = len(det_list) - map_used
-
-            hit_rates: list[float] = []
-            for leaf_node in map_snapshot.leaf_nodes_by_track_id.values():
-                misses = int(leaf_node.missed_count)
-                map_miss_hist[misses] = map_miss_hist.get(misses, 0) + 1
-                age = int(leaf_node.age)
-                if age > 0:
-                    hits = int(leaf_node.hits)
-                    hit_rates.append(float(hits) / float(age))
-            if hit_rates:
-                map_mean_hit_rate = float(np.mean(hit_rates))
-
-        scan_stats = ScanStats(
-            timestamp=time,
-            num_detections=len(det_list),
+        self._run_scan_instrumentation(
+            ctx=ctx,
             globals_in=globals_in,
             globals_expanded=globals_expanded,
             globals_after_unused=globals_after_unused,
@@ -479,57 +445,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             nscan_boundary_scan_index=nscan_boundary_scan_index,
             nscan_tracks_in_scope=nscan_tracks_in_scope,
             nscan_tracks_committed=nscan_tracks_committed,
-            globals_after_births=birth_stats.globals_after_births,
-            birth_candidates=birth_stats.residual_detections_considered,
-            birth_tracks_created=birth_stats.birth_tracks_created,
-            birth_tracks_kept=birth_stats.birth_tracks_kept,
-            birth_track_instances_in_beam=birth_stats.birth_track_instances_in_beam,
-            globals_with_birth=birth_stats.globals_with_birth,
-            map_tracks=map_tracks,
-            map_used=map_used,
-            map_unused=map_unused,
-            map_miss_hist=map_miss_hist,
-            map_mean_hit_rate=map_mean_hit_rate,
+            birth_stats=birth_stats,
         )
-        self.last_scan_stats = scan_stats
-        if self.params.collect_stats:
-            self._stats.append(scan_stats)
-
-        if self.params.debug_display_scan_stats:
-            nscan_snapshot = self.get_n_scan_commitment_snapshot()
-            print(
-                f"SCAN t={time} det={scan_stats.num_detections} "
-                f"globals in={scan_stats.globals_in} exp={scan_stats.globals_expanded} "
-                f"after_unused={scan_stats.globals_after_unused} dedup={scan_stats.globals_after_dedupe} "
-                f"beam={scan_stats.globals_after_beam} "
-                f"nscan boundary={scan_stats.nscan_boundary_scan_index} "
-                f"in_scope={scan_stats.nscan_tracks_in_scope} "
-                f"committed_now={scan_stats.nscan_tracks_committed} "
-                f"committed_total={len(nscan_snapshot.committed_boundary_by_track_id)} "
-                f"births cand={scan_stats.birth_candidates} "
-                f"tracks_created={scan_stats.birth_tracks_created} tracks_kept={scan_stats.birth_tracks_kept} "
-                f"beam_inst={scan_stats.birth_track_instances_in_beam} "
-                f"globals_with_birth={scan_stats.globals_with_birth} "
-                f"after={scan_stats.globals_after_births} MAP tracks={scan_stats.map_tracks} "
-                f"used={scan_stats.map_used} unused={scan_stats.map_unused} "
-                f"hit_rate={scan_stats.map_mean_hit_rate:.2f}"
-            )
-            if nscan_snapshot.latest_committed_ancestor_by_track_id:
-                committed_pairs = ", ".join(
-                    f"{track_id}->node{ancestor.node_id}@s{ancestor.scan_index}"
-                    for track_id, ancestor in sorted(
-                        nscan_snapshot.latest_committed_ancestor_by_track_id.items()
-                    )
-                )
-                print(
-                    "SCAN_NSCAN_COMMITTED "
-                    f"t={time} boundary={nscan_snapshot.boundary_scan_index} "
-                    f"{committed_pairs}"
-                )
-            if self.params.debug_display_map_miss_hist:
-                print(
-                    f"SCAN_MAP_MISS_HIST t={time} miss_hist={scan_stats.map_miss_hist}"
-                )
 
         self._last_update_timestamp = time
         self._last_scan_index = scan_index
@@ -732,6 +649,162 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         det_list = list(detections)
         det_list.sort(key=self._det_sort_key)
         return det_list
+
+    def _run_scan_instrumentation(
+        self,
+        *,
+        ctx: ScanContext,
+        globals_in: int,
+        globals_expanded: int,
+        globals_after_unused: int,
+        globals_after_dedupe: int,
+        globals_after_beam: int,
+        nscan_boundary_scan_index: int,
+        nscan_tracks_in_scope: int,
+        nscan_tracks_committed: int,
+        birth_stats: BirthStats,
+    ) -> None:
+        self._maybe_display_scan_debug_output(ctx)
+        scan_stats = self._build_scan_stats(
+            ctx=ctx,
+            globals_in=globals_in,
+            globals_expanded=globals_expanded,
+            globals_after_unused=globals_after_unused,
+            globals_after_dedupe=globals_after_dedupe,
+            globals_after_beam=globals_after_beam,
+            nscan_boundary_scan_index=nscan_boundary_scan_index,
+            nscan_tracks_in_scope=nscan_tracks_in_scope,
+            nscan_tracks_committed=nscan_tracks_committed,
+            birth_stats=birth_stats,
+        )
+        self.last_scan_stats = scan_stats
+        if self.params.collect_stats:
+            self._stats.append(scan_stats)
+        self._maybe_display_scan_stats(timestamp=ctx.timestamp, scan_stats=scan_stats)
+
+    def _maybe_display_scan_debug_output(self, ctx: ScanContext) -> None:
+        if self.params.debug_display_detections:
+            print(f"\nDetections at timestamp {ctx.timestamp}:")
+            for det in ctx.detections:
+                print(f"  {det.state_vector}")
+
+        if self.params.debug_display_hypotheses:
+            print(f"\nGlobal hypotheses at timestamp {ctx.timestamp}:")
+            self._display_global_hypotheses(ctx.detections)
+
+    def _map_stats_for_current_map(
+        self, detections: list[Detection]
+    ) -> tuple[int, int, int, dict[int, int], float]:
+        map_snapshot = self.get_map_hypothesis_snapshot()
+        map_tracks = 0
+        map_used = 0
+        map_unused = len(detections)
+        map_miss_hist: dict[int, int] = {}
+        map_mean_hit_rate = 0.0
+        if map_snapshot is None:
+            return map_tracks, map_used, map_unused, map_miss_hist, map_mean_hit_rate
+
+        map_tracks = len(map_snapshot.leaf_nodes_by_track_id)
+        map_used = len(
+            self._used_det_keys_for_leaf_nodes(map_snapshot.leaf_nodes_by_track_id)
+        )
+        map_unused = len(detections) - map_used
+
+        hit_rates: list[float] = []
+        for leaf_node in map_snapshot.leaf_nodes_by_track_id.values():
+            misses = int(leaf_node.missed_count)
+            map_miss_hist[misses] = map_miss_hist.get(misses, 0) + 1
+            age = int(leaf_node.age)
+            if age > 0:
+                hits = int(leaf_node.hits)
+                hit_rates.append(float(hits) / float(age))
+        if hit_rates:
+            map_mean_hit_rate = float(np.mean(hit_rates))
+        return map_tracks, map_used, map_unused, map_miss_hist, map_mean_hit_rate
+
+    def _build_scan_stats(
+        self,
+        *,
+        ctx: ScanContext,
+        globals_in: int,
+        globals_expanded: int,
+        globals_after_unused: int,
+        globals_after_dedupe: int,
+        globals_after_beam: int,
+        nscan_boundary_scan_index: int,
+        nscan_tracks_in_scope: int,
+        nscan_tracks_committed: int,
+        birth_stats: BirthStats,
+    ) -> ScanStats:
+        map_tracks, map_used, map_unused, map_miss_hist, map_mean_hit_rate = (
+            self._map_stats_for_current_map(ctx.detections)
+        )
+        return ScanStats(
+            timestamp=ctx.timestamp,
+            num_detections=len(ctx.detections),
+            globals_in=globals_in,
+            globals_expanded=globals_expanded,
+            globals_after_unused=globals_after_unused,
+            globals_after_dedupe=globals_after_dedupe,
+            globals_after_beam=globals_after_beam,
+            nscan_boundary_scan_index=nscan_boundary_scan_index,
+            nscan_tracks_in_scope=nscan_tracks_in_scope,
+            nscan_tracks_committed=nscan_tracks_committed,
+            globals_after_births=birth_stats.globals_after_births,
+            birth_candidates=birth_stats.residual_detections_considered,
+            birth_tracks_created=birth_stats.birth_tracks_created,
+            birth_tracks_kept=birth_stats.birth_tracks_kept,
+            birth_track_instances_in_beam=birth_stats.birth_track_instances_in_beam,
+            globals_with_birth=birth_stats.globals_with_birth,
+            map_tracks=map_tracks,
+            map_used=map_used,
+            map_unused=map_unused,
+            map_miss_hist=map_miss_hist,
+            map_mean_hit_rate=map_mean_hit_rate,
+        )
+
+    def _maybe_display_scan_stats(
+        self,
+        *,
+        timestamp: object,
+        scan_stats: ScanStats,
+    ) -> None:
+        if not self.params.debug_display_scan_stats:
+            return
+        nscan_snapshot = self.get_n_scan_commitment_snapshot()
+        print(
+            f"SCAN t={timestamp} det={scan_stats.num_detections} "
+            f"globals in={scan_stats.globals_in} exp={scan_stats.globals_expanded} "
+            f"after_unused={scan_stats.globals_after_unused} dedup={scan_stats.globals_after_dedupe} "
+            f"beam={scan_stats.globals_after_beam} "
+            f"nscan boundary={scan_stats.nscan_boundary_scan_index} "
+            f"in_scope={scan_stats.nscan_tracks_in_scope} "
+            f"committed_now={scan_stats.nscan_tracks_committed} "
+            f"committed_total={len(nscan_snapshot.committed_boundary_by_track_id)} "
+            f"births cand={scan_stats.birth_candidates} "
+            f"tracks_created={scan_stats.birth_tracks_created} tracks_kept={scan_stats.birth_tracks_kept} "
+            f"beam_inst={scan_stats.birth_track_instances_in_beam} "
+            f"globals_with_birth={scan_stats.globals_with_birth} "
+            f"after={scan_stats.globals_after_births} MAP tracks={scan_stats.map_tracks} "
+            f"used={scan_stats.map_used} unused={scan_stats.map_unused} "
+            f"hit_rate={scan_stats.map_mean_hit_rate:.2f}"
+        )
+        if nscan_snapshot.latest_committed_ancestor_by_track_id:
+            committed_pairs = ", ".join(
+                f"{track_id}->node{ancestor.node_id}@s{ancestor.scan_index}"
+                for track_id, ancestor in sorted(
+                    nscan_snapshot.latest_committed_ancestor_by_track_id.items()
+                )
+            )
+            print(
+                "SCAN_NSCAN_COMMITTED "
+                f"t={timestamp} boundary={nscan_snapshot.boundary_scan_index} "
+                f"{committed_pairs}"
+            )
+        if self.params.debug_display_map_miss_hist:
+            print(
+                f"SCAN_MAP_MISS_HIST t={timestamp} miss_hist={scan_stats.map_miss_hist}"
+            )
 
     def _used_det_keys_for_leaf_nodes(
         self, leaf_nodes_by_track_id: Mapping[int, TrackHypothesisNode]

@@ -4,6 +4,10 @@ This document is a current snapshot of the implementation after completing Phase
 
 It replaces the earlier pre-Phase-B description in which globals still stored copied `Track` objects and N-scan was only a history-tail approximation. That older description is no longer accurate. `TO_MHT_NEXT_STEPS.md` remains the main phase-planning document; this file is the implementation-status snapshot. 
 
+## Recent updates
+
+- 2026-03-21: `update_tracker()` was refactored so scan stats and debug output are handled by dedicated private helpers. The core scan pipeline path is now easier to read without instrumentation details inline.
+
 ## What is now structurally correct
 
 ### Explicit track-oriented hypothesis structure
