@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 import datetime
 from math import log
+import resource
 from statistics import median
+import sys
+import time as wall_clock
 from types import MappingProxyType
 from ordered_set import OrderedSet
 from typing import Any, Iterable, Mapping, Protocol
@@ -139,6 +142,10 @@ class BirthTemplate:
 @dataclass(frozen=True)
 class ScanStats:
     timestamp: object
+    scan_wall_ms: float
+    maxrss_mb: float
+    node_count_total: int
+    leaf_instances_in_beam: int
     num_detections: int
     globals_in: int
     globals_expanded: int
@@ -388,6 +395,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         time: datetime.datetime,
         detections: Iterable[Detection],
     ) -> tuple[datetime.datetime, set[Track]]:
+        scan_wall_start_ns = wall_clock.perf_counter_ns()
         self._last_unused_detections = []
         globals_in = len(self.global_hypotheses)
         scan_index = (
@@ -434,9 +442,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         # Births: run initiator once on residual detections, then branch globals with/without births.
         birth_stats = self._branch_globals_with_births(ctx)
+        scan_wall_ms = (wall_clock.perf_counter_ns() - scan_wall_start_ns) / 1e6
+        maxrss_mb = self._get_process_maxrss_mb()
+        node_count_total = len(self._nodes_by_id)
+        leaf_instances_in_beam = sum(
+            len(gh.leaf_nodes_by_track_id) for gh in self.global_hypotheses
+        )
 
         self._run_scan_instrumentation(
             ctx=ctx,
+            scan_wall_ms=scan_wall_ms,
+            maxrss_mb=maxrss_mb,
+            node_count_total=node_count_total,
+            leaf_instances_in_beam=leaf_instances_in_beam,
             globals_in=globals_in,
             globals_expanded=globals_expanded,
             globals_after_unused=globals_after_unused,
@@ -548,6 +566,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         map_unused = [s.map_unused for s in stats]
         map_used = [s.map_used for s in stats]
         map_hit_rate = [s.map_mean_hit_rate for s in stats]
+        scan_wall_ms = [s.scan_wall_ms for s in stats]
+        maxrss_mb = [s.maxrss_mb for s in stats]
+        node_count_total = [s.node_count_total for s in stats]
+        leaf_instances_in_beam = [s.leaf_instances_in_beam for s in stats]
         nscan_tracks_in_scope = [s.nscan_tracks_in_scope for s in stats]
         nscan_tracks_committed = [s.nscan_tracks_committed for s in stats]
 
@@ -584,6 +606,21 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             f"expanded med={median(expanded):.1f} max={max(expanded)} "
             f"dedup med={median(deduped):.1f} max={max(deduped)} "
             f"beam med={median(beamed):.1f} max={max(beamed)}"
+        )
+        print(
+            "SUMMARY timing "
+            f"scan_wall_ms med={median(scan_wall_ms):.1f} "
+            f"mean={_mean(scan_wall_ms):.1f} "
+            f"max={max(scan_wall_ms):.1f}"
+        )
+        print(
+            "SUMMARY memory "
+            f"nodes_total med={median(node_count_total):.1f} "
+            f"max={max(node_count_total)} "
+            f"leaf_instances_beam med={median(leaf_instances_in_beam):.1f} "
+            f"max={max(leaf_instances_in_beam)} "
+            f"maxrss_mb final={maxrss_mb[-1]:.1f} "
+            f"peak={max(maxrss_mb):.1f}"
         )
         print(
             "SUMMARY beam "
@@ -665,10 +702,24 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         det_list.sort(key=self._det_sort_key)
         return det_list
 
+    @staticmethod
+    def _get_process_maxrss_mb() -> float:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        # ru_maxrss units differ by platform:
+        # - macOS: bytes
+        # - Linux: KiB
+        if sys.platform == "darwin":
+            return float(ru.ru_maxrss) / (1024.0 * 1024.0)
+        return float(ru.ru_maxrss) / 1024.0
+
     def _run_scan_instrumentation(
         self,
         *,
         ctx: ScanContext,
+        scan_wall_ms: float,
+        maxrss_mb: float,
+        node_count_total: int,
+        leaf_instances_in_beam: int,
         globals_in: int,
         globals_expanded: int,
         globals_after_unused: int,
@@ -682,6 +733,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._maybe_display_scan_debug_output(ctx)
         scan_stats = self._build_scan_stats(
             ctx=ctx,
+            scan_wall_ms=scan_wall_ms,
+            maxrss_mb=maxrss_mb,
+            node_count_total=node_count_total,
+            leaf_instances_in_beam=leaf_instances_in_beam,
             globals_in=globals_in,
             globals_expanded=globals_expanded,
             globals_after_unused=globals_after_unused,
@@ -741,6 +796,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self,
         *,
         ctx: ScanContext,
+        scan_wall_ms: float,
+        maxrss_mb: float,
+        node_count_total: int,
+        leaf_instances_in_beam: int,
         globals_in: int,
         globals_expanded: int,
         globals_after_unused: int,
@@ -756,6 +815,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         return ScanStats(
             timestamp=ctx.timestamp,
+            scan_wall_ms=float(scan_wall_ms),
+            maxrss_mb=float(maxrss_mb),
+            node_count_total=int(node_count_total),
+            leaf_instances_in_beam=int(leaf_instances_in_beam),
             num_detections=len(ctx.detections),
             globals_in=globals_in,
             globals_expanded=globals_expanded,
@@ -803,6 +866,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             f"after={scan_stats.globals_after_births} MAP tracks={scan_stats.map_tracks} "
             f"used={scan_stats.map_used} unused={scan_stats.map_unused} "
             f"hit_rate={scan_stats.map_mean_hit_rate:.2f}"
+        )
+        print(f"SCAN_TIMING t={timestamp} wall_ms={scan_stats.scan_wall_ms:.3f}")
+        print(
+            f"SCAN_MEMORY t={timestamp} "
+            f"nodes={scan_stats.node_count_total} "
+            f"leaf_inst={scan_stats.leaf_instances_in_beam} "
+            f"maxrss_mb={scan_stats.maxrss_mb:.1f}"
         )
         if nscan_snapshot.latest_committed_ancestor_by_track_id:
             committed_pairs = ", ".join(
