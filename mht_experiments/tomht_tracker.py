@@ -304,284 +304,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     _committed_boundary_by_track_id: dict[int, int]
     _committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
 
-    def _lineage_from_leaf_node(
-        self, leaf_node: TrackHypothesisNode
-    ) -> list[TrackHypothesisNode]:
-        lineage: list[TrackHypothesisNode] = []
-        node: TrackHypothesisNode | None = leaf_node
-        while node is not None:
-            lineage.append(node)
-            node = node.parent
-        lineage.reverse()
-        return lineage
-
-    def _ancestor_at_scan_boundary(
-        self,
-        leaf_node: TrackHypothesisNode,
-        boundary_scan_index: int,
-    ) -> TrackHypothesisNode | None:
-        """
-        Return this track's ancestor node exactly at `boundary_scan_index`.
-
-        Returns None when no exact-boundary ancestor exists, for example:
-        - boundary is before this track's birth/root scan, or
-        - ancestry has no node exactly at that scan index.
-        """
-        if boundary_scan_index < 0:
-            return None
-        node: TrackHypothesisNode | None = leaf_node
-        while node is not None and int(node.scan_index) > boundary_scan_index:
-            node = node.parent
-        if node is None:
-            return None
-        if int(node.scan_index) != boundary_scan_index:
-            return None
-        return node
-
-    def _compute_committed_track_ancestors_at_boundary(
-        self,
-        post_beam_globals: list[GlobalHypothesis],
-        boundary_scan_index: int,
-    ) -> tuple[dict[int, TrackHypothesisNode], int]:
-        """
-        Compute per-track ancestor-identity agreement at one N-scan boundary.
-
-        The agreement set is per-track and only uses globals that still contain
-        that track_id. Track absence in some globals is not disagreement.
-
-        Conservative choice: if any participating global has no exact-boundary
-        ancestor for a track (e.g. track born after boundary), that track is not
-        marked committed at this boundary.
-        """
-        if boundary_scan_index < 0 or not post_beam_globals:
-            return {}, 0
-
-        track_ids = sorted(
-            {
-                track_id
-                for gh in post_beam_globals
-                for track_id in gh.leaf_nodes_by_track_id.keys()
-            }
-        )
-
-        committed: dict[int, TrackHypothesisNode] = {}
-        tracks_in_scope = 0
-        for track_id in track_ids:
-            boundary_ancestors: list[TrackHypothesisNode] = []
-            missing_exact_boundary = False
-            participating_globals = 0
-
-            for gh in post_beam_globals:
-                leaf_node = gh.leaf_nodes_by_track_id.get(track_id)
-                if leaf_node is None:
-                    continue
-                participating_globals += 1
-                boundary_ancestor = self._ancestor_at_scan_boundary(
-                    leaf_node,
-                    boundary_scan_index,
-                )
-                if boundary_ancestor is None:
-                    missing_exact_boundary = True
-                    break
-                boundary_ancestors.append(boundary_ancestor)
-
-            if participating_globals == 0:
-                continue
-            tracks_in_scope += 1
-            if not boundary_ancestors:
-                continue
-            if missing_exact_boundary:
-                continue
-
-            first = boundary_ancestors[0]
-            if all(anc.node_id == first.node_id for anc in boundary_ancestors[1:]):
-                committed[track_id] = first
-        return committed, tracks_in_scope
-
-    def _update_n_scan_commitment(
-        self,
-        *,
-        scan_index: int,
-        post_beam_globals: list[GlobalHypothesis],
-    ) -> tuple[int, int, int]:
-        """
-        Update tracker-owned N-scan commitment state for this scan.
-
-        Runs after beam pruning and before births, using boundary b = k - N.
-        Physical cleanup/GC is intentionally deferred; this function only records
-        commitment agreement state.
-        """
-        boundary_scan_index = int(scan_index) - int(self.params.ns_scan_window)
-        self._last_nscan_boundary_scan_index = boundary_scan_index
-        self._last_nscan_committed_ancestor_by_track_id = {}
-        self._last_nscan_tracks_in_scope = 0
-
-        committed, tracks_in_scope = (
-            self._compute_committed_track_ancestors_at_boundary(
-                post_beam_globals,
-                boundary_scan_index,
-            )
-        )
-        self._last_nscan_tracks_in_scope = tracks_in_scope
-        self._last_nscan_committed_ancestor_by_track_id = committed
-
-        for track_id, ancestor in committed.items():
-            prev_boundary = self._committed_boundary_by_track_id.get(track_id)
-            if prev_boundary is None or boundary_scan_index > prev_boundary:
-                self._committed_boundary_by_track_id[track_id] = boundary_scan_index
-                self._committed_ancestor_by_track_id[track_id] = ancestor
-
-        return boundary_scan_index, tracks_in_scope, len(committed)
-
-    def get_n_scan_commitment_snapshot(self) -> NScanCommitmentSnapshot:
-        """Return a copy of current N-scan commitment state for debug/tests."""
-        return NScanCommitmentSnapshot(
-            boundary_scan_index=self._last_nscan_boundary_scan_index,
-            tracks_in_scope=int(self._last_nscan_tracks_in_scope),
-            latest_committed_ancestor_by_track_id=dict(
-                self._last_nscan_committed_ancestor_by_track_id
-            ),
-            committed_boundary_by_track_id=dict(self._committed_boundary_by_track_id),
-            committed_ancestor_by_track_id=dict(self._committed_ancestor_by_track_id),
-        )
-
-    def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
-        """Return a copy of the current MAP leaf-node view."""
-        if not self.global_hypotheses:
-            return None
-        best = self.global_hypotheses[0]
-        return MAPHypothesisSnapshot(
-            log_weight=float(best.log_weight),
-            leaf_nodes_by_track_id=MappingProxyType(dict(best.leaf_nodes_by_track_id)),
-        )
-
-    def get_map_output_tracks(self) -> set[Track]:
-        """Return reconstructed Track outputs for the current MAP leaf-node view."""
-        map_snapshot = self.get_map_hypothesis_snapshot()
-        if map_snapshot is None:
-            return set()
-        return {
-            self._reconstruct_track_from_leaf_node(leaf_node)
-            for leaf_node in map_snapshot.leaf_nodes_by_track_id.values()
-        }
-
-    def _allocate_node_id(self) -> int:
-        node_id = self._next_node_id
-        self._next_node_id += 1
-        return node_id
-
-    def _register_node(self, node: TrackHypothesisNode) -> TrackHypothesisNode:
-        self._nodes_by_id[node.node_id] = node
-        return node
-
-    def _create_track_hypothesis_node(
-        self,
-        *,
-        track_id: int,
-        parent: TrackHypothesisNode | None,
-        scan_index: int,
-        timestamp: object,
-        state: object,
-        state_kind: str,
-        used_det_key: int | None,
-        assoc_label: int,
-        log_delta: float,
-        age: int,
-        hits: int,
-        missed_count: int,
-        last_det_key: int | None,
-        last_det_hit: bool,
-        root_source: str,
-        birth_scan_index: int,
-        track_metadata: dict[str, object] | None = None,
-    ) -> TrackHypothesisNode:
-        if parent is not None and parent.track_id != track_id:
-            raise ValueError(
-                "TrackHypothesisNode parent.track_id must match child track_id."
-            )
-        if track_metadata is None:
-            track_metadata = (
-                dict(parent.track_metadata) if parent is not None else dict()
-            )
-        node = TrackHypothesisNode(
-            node_id=self._allocate_node_id(),
-            track_id=int(track_id),
-            parent=parent,
-            scan_index=int(scan_index),
-            timestamp=timestamp,
-            state=state,
-            state_kind=state_kind,
-            used_det_key=used_det_key,
-            assoc_label=int(assoc_label),
-            log_delta=float(log_delta),
-            age=int(age),
-            hits=int(hits),
-            missed_count=int(missed_count),
-            last_det_key=last_det_key,
-            last_det_hit=bool(last_det_hit),
-            root_source=root_source,
-            birth_scan_index=int(birth_scan_index),
-            track_metadata=dict(track_metadata),
-        )
-        return self._register_node(node)
-
-    def _create_root_node(
-        self,
-        *,
-        track_id: int,
-        scan_index: int,
-        timestamp: object,
-        state: object,
-        state_kind: str,
-        used_det_key: int | None,
-        assoc_label: int,
-        age: int,
-        hits: int,
-        root_source: str,
-        track_metadata: dict[str, object] | None = None,
-    ) -> TrackHypothesisNode:
-        return self._create_track_hypothesis_node(
-            track_id=track_id,
-            parent=None,
-            scan_index=scan_index,
-            timestamp=timestamp,
-            state=state,
-            state_kind=state_kind,
-            used_det_key=used_det_key,
-            assoc_label=assoc_label,
-            log_delta=0.0,
-            age=age,
-            hits=hits,
-            missed_count=0,
-            last_det_key=used_det_key,
-            last_det_hit=used_det_key is not None,
-            root_source=root_source,
-            birth_scan_index=scan_index,
-            track_metadata=track_metadata,
-        )
-
-    def _reconstruct_track_from_leaf_node(
-        self, leaf_node: TrackHypothesisNode
-    ) -> Track:
-        """
-        Transitional adapter boundary: reconstruct a Stone Soup Track from node ancestry.
-
-        Internal branch identity remains node-based; this view exists for compatibility
-        with APIs that currently expect Track instances.
-        """
-        lineage = self._lineage_from_leaf_node(leaf_node)
-        tr = Track([node.state for node in lineage])
-        tr.metadata.update(leaf_node.track_metadata)
-        tr.metadata["track_id"] = int(leaf_node.track_id)
-        tr.metadata["node_id"] = int(leaf_node.node_id)
-        tr.metadata["age"] = int(leaf_node.age)
-        tr.metadata["hits"] = int(leaf_node.hits)
-        tr.metadata["missed_count"] = int(leaf_node.missed_count)
-        tr.metadata["last_det_key"] = leaf_node.last_det_key
-        tr.metadata["last_det_hit"] = bool(leaf_node.last_det_hit)
-        tr.metadata["root_source"] = leaf_node.root_source
-        tr.metadata["birth_scan_index"] = int(leaf_node.birth_scan_index)
-        return tr
+    # Public API
 
     def __init__(
         self,
@@ -660,6 +383,221 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     @property
     def tracks(self) -> set[Track]:
         return self.get_map_output_tracks()
+
+    def update_tracker(
+        self,
+        time: datetime.datetime,
+        detections: Iterable[Detection],
+    ) -> tuple[datetime.datetime, set[Track]]:
+        globals_in = len(self.global_hypotheses)
+        scan_index = (
+            0 if self._last_scan_index is None else int(self._last_scan_index) + 1
+        )
+        det_list = self._sorted_detections(detections)
+        # Use id(det) because Stone Soup hypotheses keep the original Detection
+        # objects; hash/equality isn't defined on Detection, but identity is
+        # stable within a scan.
+        det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}
+        ctx = ScanContext(
+            scan_index=scan_index,
+            timestamp=time,
+            detections=det_list,
+            det_index_by_obj=det_index_by_obj,
+        )
+
+        # Expand globals with current batch of detections
+        expanded: list[GlobalHypothesis] = []
+        for gh in self.global_hypotheses:
+            expanded.extend(self._expand_global_hypothesis(gh, ctx))
+        globals_expanded = len(expanded)
+
+        # Apply unused detection penalty
+        expanded = [self._apply_unused_detection_penalty(gh, ctx) for gh in expanded]
+        globals_after_unused = len(expanded)
+
+        # Dedupe
+        expanded = self._dedupe_globals_by_leaf_identity(expanded)
+        globals_after_dedupe = len(expanded)
+
+        # Keep top-K globals (beam)
+        expanded.sort(key=lambda g: g.log_weight, reverse=True)
+        self.global_hypotheses = expanded[: self.params.max_global_hypotheses]
+        globals_after_beam = len(self.global_hypotheses)
+        (
+            nscan_boundary_scan_index,
+            nscan_tracks_in_scope,
+            nscan_tracks_committed,
+        ) = self._update_n_scan_commitment(
+            scan_index=scan_index,
+            post_beam_globals=self.global_hypotheses,
+        )
+
+        # Births: run initiator once on residual detections, then branch globals with/without births.
+        birth_stats = self._branch_globals_with_births(ctx)
+
+        if self.params.debug_display_detections:
+            print(f"\nDetections at timestamp {time}:")
+            for det in det_list:
+                print(f"  {det.state_vector}")
+
+        if self.params.debug_display_hypotheses:
+            print(f"\nGlobal hypotheses at timestamp {time}:")
+            self._display_global_hypotheses(det_list)
+
+        map_snapshot = self.get_map_hypothesis_snapshot()
+        map_tracks = 0
+        map_used = 0
+        map_unused = len(det_list)
+        map_miss_hist: dict[int, int] = {}
+        map_mean_hit_rate = 0.0
+        if map_snapshot is not None:
+            map_tracks = len(map_snapshot.leaf_nodes_by_track_id)
+            map_used = len(
+                self._used_det_keys_for_leaf_nodes(map_snapshot.leaf_nodes_by_track_id)
+            )
+            map_unused = len(det_list) - map_used
+
+            hit_rates: list[float] = []
+            for leaf_node in map_snapshot.leaf_nodes_by_track_id.values():
+                misses = int(leaf_node.missed_count)
+                map_miss_hist[misses] = map_miss_hist.get(misses, 0) + 1
+                age = int(leaf_node.age)
+                if age > 0:
+                    hits = int(leaf_node.hits)
+                    hit_rates.append(float(hits) / float(age))
+            if hit_rates:
+                map_mean_hit_rate = float(np.mean(hit_rates))
+
+        scan_stats = ScanStats(
+            timestamp=time,
+            num_detections=len(det_list),
+            globals_in=globals_in,
+            globals_expanded=globals_expanded,
+            globals_after_unused=globals_after_unused,
+            globals_after_dedupe=globals_after_dedupe,
+            globals_after_beam=globals_after_beam,
+            nscan_boundary_scan_index=nscan_boundary_scan_index,
+            nscan_tracks_in_scope=nscan_tracks_in_scope,
+            nscan_tracks_committed=nscan_tracks_committed,
+            globals_after_births=birth_stats.globals_after_births,
+            birth_candidates=birth_stats.residual_detections_considered,
+            birth_tracks_created=birth_stats.birth_tracks_created,
+            birth_tracks_kept=birth_stats.birth_tracks_kept,
+            birth_track_instances_in_beam=birth_stats.birth_track_instances_in_beam,
+            globals_with_birth=birth_stats.globals_with_birth,
+            map_tracks=map_tracks,
+            map_used=map_used,
+            map_unused=map_unused,
+            map_miss_hist=map_miss_hist,
+            map_mean_hit_rate=map_mean_hit_rate,
+        )
+        self.last_scan_stats = scan_stats
+        if self.params.collect_stats:
+            self._stats.append(scan_stats)
+
+        if self.params.debug_display_scan_stats:
+            nscan_snapshot = self.get_n_scan_commitment_snapshot()
+            print(
+                f"SCAN t={time} det={scan_stats.num_detections} "
+                f"globals in={scan_stats.globals_in} exp={scan_stats.globals_expanded} "
+                f"after_unused={scan_stats.globals_after_unused} dedup={scan_stats.globals_after_dedupe} "
+                f"beam={scan_stats.globals_after_beam} "
+                f"nscan boundary={scan_stats.nscan_boundary_scan_index} "
+                f"in_scope={scan_stats.nscan_tracks_in_scope} "
+                f"committed_now={scan_stats.nscan_tracks_committed} "
+                f"committed_total={len(nscan_snapshot.committed_boundary_by_track_id)} "
+                f"births cand={scan_stats.birth_candidates} "
+                f"tracks_created={scan_stats.birth_tracks_created} tracks_kept={scan_stats.birth_tracks_kept} "
+                f"beam_inst={scan_stats.birth_track_instances_in_beam} "
+                f"globals_with_birth={scan_stats.globals_with_birth} "
+                f"after={scan_stats.globals_after_births} MAP tracks={scan_stats.map_tracks} "
+                f"used={scan_stats.map_used} unused={scan_stats.map_unused} "
+                f"hit_rate={scan_stats.map_mean_hit_rate:.2f}"
+            )
+            if nscan_snapshot.latest_committed_ancestor_by_track_id:
+                committed_pairs = ", ".join(
+                    f"{track_id}->node{ancestor.node_id}@s{ancestor.scan_index}"
+                    for track_id, ancestor in sorted(
+                        nscan_snapshot.latest_committed_ancestor_by_track_id.items()
+                    )
+                )
+                print(
+                    "SCAN_NSCAN_COMMITTED "
+                    f"t={time} boundary={nscan_snapshot.boundary_scan_index} "
+                    f"{committed_pairs}"
+                )
+            if self.params.debug_display_map_miss_hist:
+                print(
+                    f"SCAN_MAP_MISS_HIST t={time} miss_hist={scan_stats.map_miss_hist}"
+                )
+
+        self._last_update_timestamp = time
+        self._last_scan_index = scan_index
+
+        # Output MAP global hypothesis
+        return time, self.get_map_output_tracks()
+
+    def add_external_starts(self, starts: Iterable[Track], timestamp: object) -> None:
+        """
+        Insert confirmed external starts into each current global hypothesis.
+
+        Duplicate-like inputs are not deduplicated here: each supplied start is
+        treated as a distinct confirmed track and receives a fresh tracker-owned
+        track_id.
+        """
+        self._validate_external_starts_timestamp(timestamp)
+        start_list = list(starts)
+        if not start_list or not self.global_hypotheses:
+            return
+
+        templates = [
+            self._make_external_start_template(start, timestamp) for start in start_list
+        ]
+
+        new_globals: list[GlobalHypothesis] = []
+        for gh in self.global_hypotheses:
+            leaf_nodes_by_track_id = dict(gh.leaf_nodes_by_track_id)
+            for template in templates:
+                leaf_nodes_by_track_id[template.track_id] = template
+            new_globals.append(
+                GlobalHypothesis(
+                    leaf_nodes_by_track_id=leaf_nodes_by_track_id,
+                    log_weight=gh.log_weight,
+                )
+            )
+        self.global_hypotheses = new_globals
+
+    def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
+        """Return a copy of the current MAP leaf-node view."""
+        if not self.global_hypotheses:
+            return None
+        best = self.global_hypotheses[0]
+        return MAPHypothesisSnapshot(
+            log_weight=float(best.log_weight),
+            leaf_nodes_by_track_id=MappingProxyType(dict(best.leaf_nodes_by_track_id)),
+        )
+
+    def get_map_output_tracks(self) -> set[Track]:
+        """Return reconstructed Track outputs for the current MAP leaf-node view."""
+        map_snapshot = self.get_map_hypothesis_snapshot()
+        if map_snapshot is None:
+            return set()
+        return {
+            self._reconstruct_track_from_leaf_node(leaf_node)
+            for leaf_node in map_snapshot.leaf_nodes_by_track_id.values()
+        }
+
+    def get_n_scan_commitment_snapshot(self) -> NScanCommitmentSnapshot:
+        """Return a copy of current N-scan commitment state for debug/tests."""
+        return NScanCommitmentSnapshot(
+            boundary_scan_index=self._last_nscan_boundary_scan_index,
+            tracks_in_scope=int(self._last_nscan_tracks_in_scope),
+            latest_committed_ancestor_by_track_id=dict(
+                self._last_nscan_committed_ancestor_by_track_id
+            ),
+            committed_boundary_by_track_id=dict(self._committed_boundary_by_track_id),
+            committed_ancestor_by_track_id=dict(self._committed_ancestor_by_track_id),
+        )
 
     def print_summary_stats(self) -> None:
         stats = self._stats
@@ -754,6 +692,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             f"miss_hist={miss_hist_str}"
         )
 
+    # Core Scan Pipeline Helpers
+
     @staticmethod
     def _det_sort_key(det: Detection) -> tuple:
         """Stable per-scan ordering key for detections."""
@@ -793,102 +733,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         det_list.sort(key=self._det_sort_key)
         return det_list
 
-    def _display_global_hypotheses(self, det_list: list[Detection]) -> None:
-        for gh in self.global_hypotheses[: self.params.debug_globals_max]:
-            used = len(self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id))
-            unused = len(det_list) - used
-            print(
-                f"logW={gh.log_weight:.3f}, "
-                f"tracks={len(gh.leaf_nodes_by_track_id)}, "
-                f"used={used}, unused={unused}, "
-                f"ids={sorted(gh.leaf_nodes_by_track_id.keys())}"
-            )
-
-            for tid, node in sorted(gh.leaf_nodes_by_track_id.items()):
-                last = getattr(node.state, "state_vector")
-                ldk = node.last_det_key
-                miss = int(node.missed_count)
-                dk = node.used_det_key
-                used_str = "MISS" if dk is None else "HIT"
-                age = int(node.age)
-                hits = int(node.hits)
-                parent_node_id = (
-                    None if node.parent is None else int(node.parent.node_id)
-                )
-                committed_boundary = self._committed_boundary_by_track_id.get(tid)
-                committed_node = self._committed_ancestor_by_track_id.get(tid)
-                if committed_boundary is None or committed_node is None:
-                    committed_str = "none"
-                else:
-                    committed_str = (
-                        f"b={committed_boundary}->node={committed_node.node_id}"
-                    )
-                print(
-                    f"  tid={tid}, leaf={node.node_id}, parent={parent_node_id}, "
-                    f"{used_str}, age={age}, hits={hits}, miss={miss}, ldk={ldk}, "
-                    f"root={node.root_source}, committed={committed_str}, "
-                    f"last={self._fmt_state_xyvxvy(last)}"
-                )
-
-    def _display_births(
-        self, born: list[Track], det_index_by_obj: dict[int, int]
-    ) -> None:
-        for tr in born[: self.params.debug_births_max]:
-            used = self._birth_used_key(tr, det_index_by_obj)
-            support, age, misses = self._birth_support_age_misses(tr)
-            covtr = self._birth_covar_trace(tr)
-            last = tr.states[-1].state_vector
-            print(
-                f"  used={used}, support={support}, age={age}, misses={misses}, covtr={covtr:.2g}, "
-                f"last={self._fmt_state_xyvxvy(last)}"
-            )
-
-    @staticmethod
-    def _fmt_state_xyvxvy(state_vector) -> str:
-        sv = np.asarray(state_vector, dtype=float)
-        x = float(sv[0, 0])
-        vx = float(sv[1, 0])
-        y = float(sv[2, 0])
-        vy = float(sv[3, 0])
-        return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
-
-    def _make_external_start_template(
-        self, start: Track, timestamp: object
-    ) -> TrackHypothesisNode:
-        if len(start) == 0:
-            raise ValueError(
-                "External starts must contain at least one state at the current timestamp."
-            )
-
-        start_timestamp = getattr(start.states[-1], "timestamp", None)
-        if start_timestamp != timestamp:
-            raise ValueError(
-                "External starts must already be initialised at the supplied "
-                f"timestamp. Expected {timestamp!r}, got {start_timestamp!r}."
-            )
-
-        track_id = self._next_track_id
-        self._next_track_id += 1
-
-        age = max(int(start.metadata.get("age", len(start))), 1)
-        hits = int(start.metadata.get("hits", age))
-        hits = min(max(hits, 1), age)
-        state = start.states[-1]
-        assert self._last_scan_index is not None
-        return self._create_root_node(
-            track_id=track_id,
-            scan_index=int(self._last_scan_index),
-            timestamp=getattr(state, "timestamp", timestamp),
-            state=state,
-            state_kind="external_start",
-            used_det_key=None,
-            assoc_label=ASSOC_PAD,
-            age=age,
-            hits=hits,
-            root_source="external_start",
-            track_metadata=dict(start.metadata),
-        )
-
     def _used_det_keys_for_leaf_nodes(
         self, leaf_nodes_by_track_id: Mapping[int, TrackHypothesisNode]
     ) -> set[int]:
@@ -900,62 +744,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     def _used_det_keys_in_global(self, gh: GlobalHypothesis) -> set[int]:
         return self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id)
-
-    def _residual_detections(
-        self,
-        globals: list[GlobalHypothesis],
-        detections: list[Detection],
-    ) -> list[Detection]:
-        k = max(1, min(self.params.births_k, len(globals)))
-        used: set[int] = set()
-        for gh in globals[:k]:
-            used |= self._used_det_keys_in_global(gh)
-
-        out = []
-        for i, d in enumerate(detections):
-            if i not in used:
-                out.append(d)
-        return out
-
-    def _apply_unused_detection_penalty(
-        self,
-        gh: GlobalHypothesis,
-        ctx: ScanContext,
-    ) -> GlobalHypothesis:
-        if not ctx.detections:
-            return gh
-        used = self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id)
-        delta = self.scoring_model.score_unused_detections(used_det_keys=used, ctx=ctx)
-        if delta == 0.0:
-            return gh
-        return GlobalHypothesis(
-            leaf_nodes_by_track_id=gh.leaf_nodes_by_track_id,
-            log_weight=gh.log_weight + delta,
-        )
-
-    def _birth_support_points(self, birth: Track) -> int:
-        holding = birth.metadata.get("holding_track", None)
-        hist = holding if isinstance(holding, Track) else birth
-        # updates_only semantics (you use updates_only=True in your initiator)
-        return sum(1 for s in hist.states if isinstance(s, Update))
-
-    def _birth_covar_trace(self, birth: Track) -> float:
-        st = birth.states[-1]
-        cov = getattr(st, "covar", None)
-        if cov is None:
-            return float("inf")
-        return float(np.trace(np.asarray(cov, dtype=float)))
-
-    def _birth_holding_track(self, birth: Track) -> Track:
-        holding = birth.metadata.get("holding_track", None)
-        return holding if isinstance(holding, Track) else birth
-
-    def _birth_support_age_misses(self, birth: Track) -> tuple[int, int, int]:
-        holding = self._birth_holding_track(birth)
-        age = len(holding)  # number of steps in holding life
-        support = self._birth_support_points(birth)  # update-count (hits)
-        misses = max(age - support, 0)
-        return support, age, misses
 
     def _candidate_from_hypothesis(
         self,
@@ -1118,6 +906,67 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         backtrack(0, set(), dict(), gh.log_weight)
         return new_globals
 
+    def _apply_unused_detection_penalty(
+        self,
+        gh: GlobalHypothesis,
+        ctx: ScanContext,
+    ) -> GlobalHypothesis:
+        if not ctx.detections:
+            return gh
+        used = self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id)
+        delta = self.scoring_model.score_unused_detections(used_det_keys=used, ctx=ctx)
+        if delta == 0.0:
+            return gh
+        return GlobalHypothesis(
+            leaf_nodes_by_track_id=gh.leaf_nodes_by_track_id,
+            log_weight=gh.log_weight + delta,
+        )
+
+    def _leaf_signature_for_global(
+        self, gh: GlobalHypothesis
+    ) -> tuple[tuple[int, int], ...]:
+        return tuple(
+            sorted(
+                (track_id, leaf_node.node_id)
+                for track_id, leaf_node in gh.leaf_nodes_by_track_id.items()
+            )
+        )
+
+    def _dedupe_globals_by_leaf_identity(
+        self, globals: list[GlobalHypothesis]
+    ) -> list[GlobalHypothesis]:
+        """
+        Keep best log_weight per structural leaf signature.
+
+        Two globals are duplicates only when they contain the same leaf node for
+        every active track_id.
+        """
+        best: dict[tuple[tuple[int, int], ...], GlobalHypothesis] = {}
+        for gh in globals:
+            sig = self._leaf_signature_for_global(gh)
+            prev = best.get(sig)
+            if prev is None or gh.log_weight > prev.log_weight:
+                best[sig] = gh
+        return list(best.values())
+
+    # Birth Handling Helpers
+
+    def _residual_detections(
+        self,
+        globals: list[GlobalHypothesis],
+        detections: list[Detection],
+    ) -> list[Detection]:
+        k = max(1, min(self.params.births_k, len(globals)))
+        used: set[int] = set()
+        for gh in globals[:k]:
+            used |= self._used_det_keys_in_global(gh)
+
+        out = []
+        for i, d in enumerate(detections):
+            if i not in used:
+                out.append(d)
+        return out
+
     def _birth_used_key(
         self, tr: Track, det_index_by_obj: dict[int, int]
     ) -> int | None:
@@ -1131,6 +980,30 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             return det_index_by_obj.get(id(meas))
         except Exception:
             return None
+
+    def _birth_support_points(self, birth: Track) -> int:
+        holding = birth.metadata.get("holding_track", None)
+        hist = holding if isinstance(holding, Track) else birth
+        # updates_only semantics (you use updates_only=True in your initiator)
+        return sum(1 for s in hist.states if isinstance(s, Update))
+
+    def _birth_covar_trace(self, birth: Track) -> float:
+        st = birth.states[-1]
+        cov = getattr(st, "covar", None)
+        if cov is None:
+            return float("inf")
+        return float(np.trace(np.asarray(cov, dtype=float)))
+
+    def _birth_holding_track(self, birth: Track) -> Track:
+        holding = birth.metadata.get("holding_track", None)
+        return holding if isinstance(holding, Track) else birth
+
+    def _birth_support_age_misses(self, birth: Track) -> tuple[int, int, int]:
+        holding = self._birth_holding_track(birth)
+        age = len(holding)  # number of steps in holding life
+        support = self._birth_support_points(birth)  # update-count (hits)
+        misses = max(age - support, 0)
+        return support, age, misses
 
     def _birth_is_sane(self, tr: Track) -> bool:
         st = tr.states[-1]
@@ -1410,32 +1283,293 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             globals_after_births=len(self.global_hypotheses),
         )
 
-    def _leaf_signature_for_global(
-        self, gh: GlobalHypothesis
-    ) -> tuple[tuple[int, int], ...]:
-        return tuple(
-            sorted(
-                (track_id, leaf_node.node_id)
-                for track_id, leaf_node in gh.leaf_nodes_by_track_id.items()
-            )
+    # N-Scan Commitment Helpers
+
+    def _ancestor_at_scan_boundary(
+        self,
+        leaf_node: TrackHypothesisNode,
+        boundary_scan_index: int,
+    ) -> TrackHypothesisNode | None:
+        """
+        Return this track's ancestor node exactly at `boundary_scan_index`.
+
+        Returns None when no exact-boundary ancestor exists, for example:
+        - boundary is before this track's birth/root scan, or
+        - ancestry has no node exactly at that scan index.
+        """
+        if boundary_scan_index < 0:
+            return None
+        node: TrackHypothesisNode | None = leaf_node
+        while node is not None and int(node.scan_index) > boundary_scan_index:
+            node = node.parent
+        if node is None:
+            return None
+        if int(node.scan_index) != boundary_scan_index:
+            return None
+        return node
+
+    def _compute_committed_track_ancestors_at_boundary(
+        self,
+        post_beam_globals: list[GlobalHypothesis],
+        boundary_scan_index: int,
+    ) -> tuple[dict[int, TrackHypothesisNode], int]:
+        """
+        Compute per-track ancestor-identity agreement at one N-scan boundary.
+
+        The agreement set is per-track and only uses globals that still contain
+        that track_id. Track absence in some globals is not disagreement.
+
+        Conservative choice: if any participating global has no exact-boundary
+        ancestor for a track (e.g. track born after boundary), that track is not
+        marked committed at this boundary.
+        """
+        if boundary_scan_index < 0 or not post_beam_globals:
+            return {}, 0
+
+        track_ids = sorted(
+            {
+                track_id
+                for gh in post_beam_globals
+                for track_id in gh.leaf_nodes_by_track_id.keys()
+            }
         )
 
-    def _dedupe_globals_by_leaf_identity(
-        self, globals: list[GlobalHypothesis]
-    ) -> list[GlobalHypothesis]:
-        """
-        Keep best log_weight per structural leaf signature.
+        committed: dict[int, TrackHypothesisNode] = {}
+        tracks_in_scope = 0
+        for track_id in track_ids:
+            boundary_ancestors: list[TrackHypothesisNode] = []
+            missing_exact_boundary = False
+            participating_globals = 0
 
-        Two globals are duplicates only when they contain the same leaf node for
-        every active track_id.
+            for gh in post_beam_globals:
+                leaf_node = gh.leaf_nodes_by_track_id.get(track_id)
+                if leaf_node is None:
+                    continue
+                participating_globals += 1
+                boundary_ancestor = self._ancestor_at_scan_boundary(
+                    leaf_node,
+                    boundary_scan_index,
+                )
+                if boundary_ancestor is None:
+                    missing_exact_boundary = True
+                    break
+                boundary_ancestors.append(boundary_ancestor)
+
+            if participating_globals == 0:
+                continue
+            tracks_in_scope += 1
+            if not boundary_ancestors:
+                continue
+            if missing_exact_boundary:
+                continue
+
+            first = boundary_ancestors[0]
+            if all(anc.node_id == first.node_id for anc in boundary_ancestors[1:]):
+                committed[track_id] = first
+        return committed, tracks_in_scope
+
+    def _update_n_scan_commitment(
+        self,
+        *,
+        scan_index: int,
+        post_beam_globals: list[GlobalHypothesis],
+    ) -> tuple[int, int, int]:
         """
-        best: dict[tuple[tuple[int, int], ...], GlobalHypothesis] = {}
-        for gh in globals:
-            sig = self._leaf_signature_for_global(gh)
-            prev = best.get(sig)
-            if prev is None or gh.log_weight > prev.log_weight:
-                best[sig] = gh
-        return list(best.values())
+        Update tracker-owned N-scan commitment state for this scan.
+
+        Runs after beam pruning and before births, using boundary b = k - N.
+        Physical cleanup/GC is intentionally deferred; this function only records
+        commitment agreement state.
+        """
+        boundary_scan_index = int(scan_index) - int(self.params.ns_scan_window)
+        self._last_nscan_boundary_scan_index = boundary_scan_index
+        self._last_nscan_committed_ancestor_by_track_id = {}
+        self._last_nscan_tracks_in_scope = 0
+
+        committed, tracks_in_scope = (
+            self._compute_committed_track_ancestors_at_boundary(
+                post_beam_globals,
+                boundary_scan_index,
+            )
+        )
+        self._last_nscan_tracks_in_scope = tracks_in_scope
+        self._last_nscan_committed_ancestor_by_track_id = committed
+
+        for track_id, ancestor in committed.items():
+            prev_boundary = self._committed_boundary_by_track_id.get(track_id)
+            if prev_boundary is None or boundary_scan_index > prev_boundary:
+                self._committed_boundary_by_track_id[track_id] = boundary_scan_index
+                self._committed_ancestor_by_track_id[track_id] = ancestor
+
+        return boundary_scan_index, tracks_in_scope, len(committed)
+
+    # Node/Track Lifecycle Helpers
+
+    def _allocate_node_id(self) -> int:
+        node_id = self._next_node_id
+        self._next_node_id += 1
+        return node_id
+
+    def _register_node(self, node: TrackHypothesisNode) -> TrackHypothesisNode:
+        self._nodes_by_id[node.node_id] = node
+        return node
+
+    def _create_track_hypothesis_node(
+        self,
+        *,
+        track_id: int,
+        parent: TrackHypothesisNode | None,
+        scan_index: int,
+        timestamp: object,
+        state: object,
+        state_kind: str,
+        used_det_key: int | None,
+        assoc_label: int,
+        log_delta: float,
+        age: int,
+        hits: int,
+        missed_count: int,
+        last_det_key: int | None,
+        last_det_hit: bool,
+        root_source: str,
+        birth_scan_index: int,
+        track_metadata: dict[str, object] | None = None,
+    ) -> TrackHypothesisNode:
+        if parent is not None and parent.track_id != track_id:
+            raise ValueError(
+                "TrackHypothesisNode parent.track_id must match child track_id."
+            )
+        if track_metadata is None:
+            track_metadata = (
+                dict(parent.track_metadata) if parent is not None else dict()
+            )
+        node = TrackHypothesisNode(
+            node_id=self._allocate_node_id(),
+            track_id=int(track_id),
+            parent=parent,
+            scan_index=int(scan_index),
+            timestamp=timestamp,
+            state=state,
+            state_kind=state_kind,
+            used_det_key=used_det_key,
+            assoc_label=int(assoc_label),
+            log_delta=float(log_delta),
+            age=int(age),
+            hits=int(hits),
+            missed_count=int(missed_count),
+            last_det_key=last_det_key,
+            last_det_hit=bool(last_det_hit),
+            root_source=root_source,
+            birth_scan_index=int(birth_scan_index),
+            track_metadata=dict(track_metadata),
+        )
+        return self._register_node(node)
+
+    def _create_root_node(
+        self,
+        *,
+        track_id: int,
+        scan_index: int,
+        timestamp: object,
+        state: object,
+        state_kind: str,
+        used_det_key: int | None,
+        assoc_label: int,
+        age: int,
+        hits: int,
+        root_source: str,
+        track_metadata: dict[str, object] | None = None,
+    ) -> TrackHypothesisNode:
+        return self._create_track_hypothesis_node(
+            track_id=track_id,
+            parent=None,
+            scan_index=scan_index,
+            timestamp=timestamp,
+            state=state,
+            state_kind=state_kind,
+            used_det_key=used_det_key,
+            assoc_label=assoc_label,
+            log_delta=0.0,
+            age=age,
+            hits=hits,
+            missed_count=0,
+            last_det_key=used_det_key,
+            last_det_hit=used_det_key is not None,
+            root_source=root_source,
+            birth_scan_index=scan_index,
+            track_metadata=track_metadata,
+        )
+
+    def _lineage_from_leaf_node(
+        self, leaf_node: TrackHypothesisNode
+    ) -> list[TrackHypothesisNode]:
+        lineage: list[TrackHypothesisNode] = []
+        node: TrackHypothesisNode | None = leaf_node
+        while node is not None:
+            lineage.append(node)
+            node = node.parent
+        lineage.reverse()
+        return lineage
+
+    def _reconstruct_track_from_leaf_node(
+        self, leaf_node: TrackHypothesisNode
+    ) -> Track:
+        """
+        Transitional adapter boundary: reconstruct a Stone Soup Track from node ancestry.
+
+        Internal branch identity remains node-based; this view exists for compatibility
+        with APIs that currently expect Track instances.
+        """
+        lineage = self._lineage_from_leaf_node(leaf_node)
+        tr = Track([node.state for node in lineage])
+        tr.metadata.update(leaf_node.track_metadata)
+        tr.metadata["track_id"] = int(leaf_node.track_id)
+        tr.metadata["node_id"] = int(leaf_node.node_id)
+        tr.metadata["age"] = int(leaf_node.age)
+        tr.metadata["hits"] = int(leaf_node.hits)
+        tr.metadata["missed_count"] = int(leaf_node.missed_count)
+        tr.metadata["last_det_key"] = leaf_node.last_det_key
+        tr.metadata["last_det_hit"] = bool(leaf_node.last_det_hit)
+        tr.metadata["root_source"] = leaf_node.root_source
+        tr.metadata["birth_scan_index"] = int(leaf_node.birth_scan_index)
+        return tr
+
+    def _make_external_start_template(
+        self, start: Track, timestamp: object
+    ) -> TrackHypothesisNode:
+        if len(start) == 0:
+            raise ValueError(
+                "External starts must contain at least one state at the current timestamp."
+            )
+
+        start_timestamp = getattr(start.states[-1], "timestamp", None)
+        if start_timestamp != timestamp:
+            raise ValueError(
+                "External starts must already be initialised at the supplied "
+                f"timestamp. Expected {timestamp!r}, got {start_timestamp!r}."
+            )
+
+        track_id = self._next_track_id
+        self._next_track_id += 1
+
+        age = max(int(start.metadata.get("age", len(start))), 1)
+        hits = int(start.metadata.get("hits", age))
+        hits = min(max(hits, 1), age)
+        state = start.states[-1]
+        assert self._last_scan_index is not None
+        return self._create_root_node(
+            track_id=track_id,
+            scan_index=int(self._last_scan_index),
+            timestamp=getattr(state, "timestamp", timestamp),
+            state=state,
+            state_kind="external_start",
+            used_det_key=None,
+            assoc_label=ASSOC_PAD,
+            age=age,
+            hits=hits,
+            root_source="external_start",
+            track_metadata=dict(start.metadata),
+        )
 
     def _validate_external_starts_timestamp(self, timestamp: object) -> None:
         if self._last_update_timestamp is None or self._last_scan_index is None:
@@ -1449,188 +1583,66 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 f"got {timestamp!r}."
             )
 
-    def add_external_starts(self, starts: Iterable[Track], timestamp: object) -> None:
-        """
-        Insert confirmed external starts into each current global hypothesis.
+    # Debug Display Helpers
 
-        Duplicate-like inputs are not deduplicated here: each supplied start is
-        treated as a distinct confirmed track and receives a fresh tracker-owned
-        track_id.
-        """
-        self._validate_external_starts_timestamp(timestamp)
-        start_list = list(starts)
-        if not start_list or not self.global_hypotheses:
-            return
-
-        templates = [
-            self._make_external_start_template(start, timestamp) for start in start_list
-        ]
-
-        new_globals: list[GlobalHypothesis] = []
-        for gh in self.global_hypotheses:
-            leaf_nodes_by_track_id = dict(gh.leaf_nodes_by_track_id)
-            for template in templates:
-                leaf_nodes_by_track_id[template.track_id] = template
-            new_globals.append(
-                GlobalHypothesis(
-                    leaf_nodes_by_track_id=leaf_nodes_by_track_id,
-                    log_weight=gh.log_weight,
-                )
-            )
-        self.global_hypotheses = new_globals
-
-    def update_tracker(
-        self,
-        time: datetime.datetime,
-        detections: Iterable[Detection],
-    ) -> tuple[datetime.datetime, set[Track]]:
-        globals_in = len(self.global_hypotheses)
-        scan_index = (
-            0 if self._last_scan_index is None else int(self._last_scan_index) + 1
-        )
-        det_list = self._sorted_detections(detections)
-        # Use id(det) because Stone Soup hypotheses keep the original Detection
-        # objects; hash/equality isn't defined on Detection, but identity is
-        # stable within a scan.
-        det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}
-        ctx = ScanContext(
-            scan_index=scan_index,
-            timestamp=time,
-            detections=det_list,
-            det_index_by_obj=det_index_by_obj,
-        )
-
-        # Expand globals with current batch of detections
-        expanded: list[GlobalHypothesis] = []
-        for gh in self.global_hypotheses:
-            expanded.extend(self._expand_global_hypothesis(gh, ctx))
-        globals_expanded = len(expanded)
-
-        # Apply unused detection penalty
-        expanded = [self._apply_unused_detection_penalty(gh, ctx) for gh in expanded]
-        globals_after_unused = len(expanded)
-
-        # Dedupe
-        expanded = self._dedupe_globals_by_leaf_identity(expanded)
-        globals_after_dedupe = len(expanded)
-
-        # Keep top-K globals (beam)
-        expanded.sort(key=lambda g: g.log_weight, reverse=True)
-        self.global_hypotheses = expanded[: self.params.max_global_hypotheses]
-        globals_after_beam = len(self.global_hypotheses)
-        (
-            nscan_boundary_scan_index,
-            nscan_tracks_in_scope,
-            nscan_tracks_committed,
-        ) = self._update_n_scan_commitment(
-            scan_index=scan_index,
-            post_beam_globals=self.global_hypotheses,
-        )
-
-        # Births: run initiator once on residual detections, then branch globals with/without births.
-        birth_stats = self._branch_globals_with_births(ctx)
-
-        if self.params.debug_display_detections:
-            print(f"\nDetections at timestamp {time}:")
-            for det in det_list:
-                print(f"  {det.state_vector}")
-
-        if self.params.debug_display_hypotheses:
-            print(f"\nGlobal hypotheses at timestamp {time}:")
-            self._display_global_hypotheses(det_list)
-
-        map_snapshot = self.get_map_hypothesis_snapshot()
-        map_tracks = 0
-        map_used = 0
-        map_unused = len(det_list)
-        map_miss_hist: dict[int, int] = {}
-        map_mean_hit_rate = 0.0
-        if map_snapshot is not None:
-            map_tracks = len(map_snapshot.leaf_nodes_by_track_id)
-            map_used = len(
-                self._used_det_keys_for_leaf_nodes(map_snapshot.leaf_nodes_by_track_id)
-            )
-            map_unused = len(det_list) - map_used
-
-            hit_rates: list[float] = []
-            for leaf_node in map_snapshot.leaf_nodes_by_track_id.values():
-                misses = int(leaf_node.missed_count)
-                map_miss_hist[misses] = map_miss_hist.get(misses, 0) + 1
-                age = int(leaf_node.age)
-                if age > 0:
-                    hits = int(leaf_node.hits)
-                    hit_rates.append(float(hits) / float(age))
-            if hit_rates:
-                map_mean_hit_rate = float(np.mean(hit_rates))
-
-        scan_stats = ScanStats(
-            timestamp=time,
-            num_detections=len(det_list),
-            globals_in=globals_in,
-            globals_expanded=globals_expanded,
-            globals_after_unused=globals_after_unused,
-            globals_after_dedupe=globals_after_dedupe,
-            globals_after_beam=globals_after_beam,
-            nscan_boundary_scan_index=nscan_boundary_scan_index,
-            nscan_tracks_in_scope=nscan_tracks_in_scope,
-            nscan_tracks_committed=nscan_tracks_committed,
-            globals_after_births=birth_stats.globals_after_births,
-            birth_candidates=birth_stats.residual_detections_considered,
-            birth_tracks_created=birth_stats.birth_tracks_created,
-            birth_tracks_kept=birth_stats.birth_tracks_kept,
-            birth_track_instances_in_beam=birth_stats.birth_track_instances_in_beam,
-            globals_with_birth=birth_stats.globals_with_birth,
-            map_tracks=map_tracks,
-            map_used=map_used,
-            map_unused=map_unused,
-            map_miss_hist=map_miss_hist,
-            map_mean_hit_rate=map_mean_hit_rate,
-        )
-        self.last_scan_stats = scan_stats
-        if self.params.collect_stats:
-            self._stats.append(scan_stats)
-
-        if self.params.debug_display_scan_stats:
-            nscan_snapshot = self.get_n_scan_commitment_snapshot()
+    def _display_global_hypotheses(self, det_list: list[Detection]) -> None:
+        for gh in self.global_hypotheses[: self.params.debug_globals_max]:
+            used = len(self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id))
+            unused = len(det_list) - used
             print(
-                f"SCAN t={time} det={scan_stats.num_detections} "
-                f"globals in={scan_stats.globals_in} exp={scan_stats.globals_expanded} "
-                f"after_unused={scan_stats.globals_after_unused} dedup={scan_stats.globals_after_dedupe} "
-                f"beam={scan_stats.globals_after_beam} "
-                f"nscan boundary={scan_stats.nscan_boundary_scan_index} "
-                f"in_scope={scan_stats.nscan_tracks_in_scope} "
-                f"committed_now={scan_stats.nscan_tracks_committed} "
-                f"committed_total={len(nscan_snapshot.committed_boundary_by_track_id)} "
-                f"births cand={scan_stats.birth_candidates} "
-                f"tracks_created={scan_stats.birth_tracks_created} tracks_kept={scan_stats.birth_tracks_kept} "
-                f"beam_inst={scan_stats.birth_track_instances_in_beam} "
-                f"globals_with_birth={scan_stats.globals_with_birth} "
-                f"after={scan_stats.globals_after_births} MAP tracks={scan_stats.map_tracks} "
-                f"used={scan_stats.map_used} unused={scan_stats.map_unused} "
-                f"hit_rate={scan_stats.map_mean_hit_rate:.2f}"
+                f"logW={gh.log_weight:.3f}, "
+                f"tracks={len(gh.leaf_nodes_by_track_id)}, "
+                f"used={used}, unused={unused}, "
+                f"ids={sorted(gh.leaf_nodes_by_track_id.keys())}"
             )
-            if nscan_snapshot.latest_committed_ancestor_by_track_id:
-                committed_pairs = ", ".join(
-                    f"{track_id}->node{ancestor.node_id}@s{ancestor.scan_index}"
-                    for track_id, ancestor in sorted(
-                        nscan_snapshot.latest_committed_ancestor_by_track_id.items()
+
+            for tid, node in sorted(gh.leaf_nodes_by_track_id.items()):
+                last = getattr(node.state, "state_vector")
+                ldk = node.last_det_key
+                miss = int(node.missed_count)
+                dk = node.used_det_key
+                used_str = "MISS" if dk is None else "HIT"
+                age = int(node.age)
+                hits = int(node.hits)
+                parent_node_id = (
+                    None if node.parent is None else int(node.parent.node_id)
+                )
+                committed_boundary = self._committed_boundary_by_track_id.get(tid)
+                committed_node = self._committed_ancestor_by_track_id.get(tid)
+                if committed_boundary is None or committed_node is None:
+                    committed_str = "none"
+                else:
+                    committed_str = (
+                        f"b={committed_boundary}->node={committed_node.node_id}"
                     )
-                )
                 print(
-                    "SCAN_NSCAN_COMMITTED "
-                    f"t={time} boundary={nscan_snapshot.boundary_scan_index} "
-                    f"{committed_pairs}"
-                )
-            if self.params.debug_display_map_miss_hist:
-                print(
-                    f"SCAN_MAP_MISS_HIST t={time} miss_hist={scan_stats.map_miss_hist}"
+                    f"  tid={tid}, leaf={node.node_id}, parent={parent_node_id}, "
+                    f"{used_str}, age={age}, hits={hits}, miss={miss}, ldk={ldk}, "
+                    f"root={node.root_source}, committed={committed_str}, "
+                    f"last={self._fmt_state_xyvxvy(last)}"
                 )
 
-        self._last_update_timestamp = time
-        self._last_scan_index = scan_index
+    def _display_births(
+        self, born: list[Track], det_index_by_obj: dict[int, int]
+    ) -> None:
+        for tr in born[: self.params.debug_births_max]:
+            used = self._birth_used_key(tr, det_index_by_obj)
+            support, age, misses = self._birth_support_age_misses(tr)
+            covtr = self._birth_covar_trace(tr)
+            last = tr.states[-1].state_vector
+            print(
+                f"  used={used}, support={support}, age={age}, misses={misses}, covtr={covtr:.2g}, "
+                f"last={self._fmt_state_xyvxvy(last)}"
+            )
 
-        # Output MAP global hypothesis
-        return time, self.get_map_output_tracks()
+    @staticmethod
+    def _fmt_state_xyvxvy(state_vector) -> str:
+        sv = np.asarray(state_vector, dtype=float)
+        x = float(sv[0, 0])
+        vx = float(sv[1, 0])
+        y = float(sv[2, 0])
+        vy = float(sv[3, 0])
+        return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
 
 
 def build_tomht_linear(
