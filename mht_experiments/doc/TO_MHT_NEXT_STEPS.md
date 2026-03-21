@@ -23,11 +23,18 @@ It should be allowed to accumulate practical notes, follow-up findings, and smal
 Primary goal:
 - make `TOMHTTracker` easier to use as a Stone Soup-style tracker without changing its current external behavior more than necessary.
 
-Current likely items:
-- add `(_TrackerMixInUpdate, Tracker)` inheritance if it remains straightforward,
-- add `update_tracker(time, detections)` that delegates to current scan logic,
-- add `tracks` property returning current MAP output,
-- review whether any small public inspection helpers should be exposed or documented more clearly.
+Status (2026-03-21):
+- this checklist item is now functionally complete in code.
+
+Implemented:
+- `(_TrackerMixInUpdate, Tracker)` inheritance is in place,
+- `update_tracker(time, detections)` delegates to the scan pipeline and returns `(time, tracks)`,
+- `tracks` property returns current MAP output tracks,
+- small public inspection helpers now exist (`get_map_hypothesis_snapshot()`, `get_map_output_tracks()`, `get_n_scan_commitment_snapshot()`, `get_unused_detections()`).
+
+Remaining scope for item 1:
+- keep this public API stable while doing items 2 and 3,
+- defer broader wording/style cleanup to item 4 (readability/documentation pass).
 
 ### 2. Hypothesiser / scoring dependency check
 

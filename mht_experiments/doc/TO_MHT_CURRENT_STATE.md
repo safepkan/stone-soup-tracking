@@ -9,6 +9,7 @@ It replaces the earlier pre-Phase-B description in which globals still stored co
 - 2026-03-21: `update_tracker()` was refactored so scan stats and debug output are handled by dedicated private helpers. The core scan pipeline path is now easier to read without instrumentation details inline.
 - 2026-03-21: `TOMHTTracker.get_unused_detections()` now exposes the residual detections from the most recent completed `update_tracker()`. Residuals are considered consumed when internal births are enabled (`initiator is not None`), so in that mode the method returns an empty list.
 - 2026-03-21: `TOMHTTracker.add_external_starts()` now follows the same argument style as `update_tracker()`: `add_external_starts(time, starts)` with `time: datetime.datetime`.
+- 2026-03-21: public API usage notes were tightened to make item-2/item-3 integration work less ambiguous.
 
 ## What is now structurally correct
 
@@ -89,6 +90,33 @@ This reduces the need for runner/test code to reach into private reconstruction 
 - it subclasses the tracker mixin/base interface,
 - supports `update_tracker(time,detections)` returning `(time,tracks)`,
 - supports iterator-driven progression when `detector` is set.
+
+### Public API quick reference (integration-facing)
+
+This is the intended public surface for current integration tasks:
+
+- `update_tracker(time,detections) -> (time,tracks)`:
+  - main per-scan entry point,
+  - consumes one timestamp plus an iterable of `Detection`,
+  - returns the same timestamp with current MAP-output tracks.
+- `tracks` property:
+  - current MAP-output tracks,
+  - equivalent in content to `get_map_output_tracks()`.
+- iterator mode (`for time, tracks in tracker`):
+  - supported when `detector` is set,
+  - each iteration delegates through the same `update_tracker(...)` path.
+- `add_external_starts(time,starts)`:
+  - for externally confirmed starts only,
+  - requires a completed `update_tracker()` first,
+  - `time` must match the most recent completed `update_tracker()` timestamp.
+- `get_unused_detections()`:
+  - returns residual detections from the most recent completed `update_tracker()`,
+  - raises if called before the first completed update,
+  - returns an empty list when internal births are enabled (`initiator is not None`), since residuals are treated as consumed by the birth path.
+- `get_map_hypothesis_snapshot()`:
+  - read-only node-native MAP leaf-node view for inspection/tests.
+- `get_n_scan_commitment_snapshot()`:
+  - read-only commitment-state snapshot for inspection/tests.
 
 ## What is still transitional or awkward
 
