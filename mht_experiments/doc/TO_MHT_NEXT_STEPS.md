@@ -85,7 +85,38 @@ Intended benefits:
 - surface timestamp / detection / updater / hypothesiser mismatches early,
 - build confidence in the tracker on data you control.
 
-This is expected to be driven mainly outside this document, with notes added here only when they affect design or priorities.
+Status (2026-03-21):
+- this checklist item is now functionally complete for the current phase,
+- keep adding concise operational notes here when new insights affect design, validation method, or priorities.
+
+Status notes (2026-03-21):
+- First end-to-end local replay with `python.pipeline.batch_mcap_replay` and `--tracker-type stonesoup-mht` is producing usable output on a ~1 minute gate-approach aircraft scenario (multiple discrete aircraft-part point targets).
+- Equality check method for replay runs:
+  - run the same input file twice,
+  - extract `/radar_matlab_replay/tracks-legacy` using `mcap cat --json --topics ...`,
+  - compare JSON streams.
+- Current replay equality result:
+  - raw `tracks-legacy` JSON differs because `data.processing_time_ms` is runtime-dependent,
+  - after ignoring `data.processing_time_ms`, extracted `tracks-legacy` JSON is identical across repeated runs.
+- Practical regression method (preferred for now):
+  - compare stdout instrumentation lines (`[Scoring]`, `Birth candidates`, `Births kept`, `Global hypotheses`, `logW=`, `SCAN`, `SCAN_NSCAN_COMMITTED`) between two runs.
+  - In the current test, this instrumentation stream matched exactly across two repeated replays.
+- Performance/stability observations:
+  - intermittent "hang" reports are currently treated as likely long per-scan compute spikes rather than confirmed deadlock (combinatorial expansion can become large on some scans),
+  - memory growth during run is expected with current implementation because node/history state is retained (node GC/compaction is still deferred); observed growth of a few hundred MB is consistent with this.
+- Near-term validation follow-up:
+  - when stalls are observed, collect per-scan wall-clock timing and correlate with `SCAN ... exp=...`, detection count, and birth activity to distinguish true hangs from expansion spikes.
+- Instrumentation update and first timing check (2026-03-21):
+  - added `SCAN_TIMING t=... wall_ms=...` per scan in TO-MHT debug instrumentation (kept existing `SCAN ...` line format unchanged for deterministic diffing),
+  - one replay run showed clear timing outliers late in the scenario (example max around scan 254, where expansion was also high),
+  - two-run comparison showed outlier *positions* are largely repeatable (top-10 overlap 8/10), while exact wall-ms values vary between runs as expected.
+- Lightweight memory instrumentation and first run (2026-03-21):
+  - added `SCAN_MEMORY t=... nodes=... leaf_inst=... maxrss_mb=...` per scan, plus `SUMMARY memory ...` aggregates,
+  - first full replay (`--max-cpis 400`) showed monotonic growth from about `202 MB` to `364 MB` max RSS and from `1` to about `56k` retained nodes,
+  - this supports treating node/history retention as a known scalability limit to address after initial integration.
+- Test command reference (kept for this phase while input file remains available):
+  - `cd ~/Git/l2-sp && source ./venv/bin/activate && python -m python.pipeline.batch_mcap_replay ~/Documents/MATLAB/cpi_replay_2025-12-10_173948.mcap --include-tracker --output-path /tmp --tracker-type stonesoup-mht --max-cpis 400`
+  - for repeatability checks, fix output folder/log names with `--folder-name` and redirect stdout/stderr to a log file.
 
 ### 4. Code-level readability / cleanup
 
