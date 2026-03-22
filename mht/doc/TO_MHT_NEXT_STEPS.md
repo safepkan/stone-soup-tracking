@@ -13,6 +13,9 @@ Phase B's main structural goals are now in code:
 
 The current priority is therefore practical integration and code/interface cleanup rather than another large architectural rewrite.
 
+Status note (2026-03-22):
+- legacy MFA bootstrap code was moved from `mht/mfa` to `archive/mfa` so inactive baseline/reference code is out of the active TO-MHT package path.
+
 ## Working checklist
 
 This document is now intended as a working checklist for the integration-readiness phase.

@@ -5,15 +5,15 @@ import sys
 from pathlib import Path
 
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from mht.tomht_runner import (
+from mht.runners.tomht_runner import (
     TOMHTOperatingMode,
     run_tomht,
 )
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run TO-MHT bearing/range scenario.")
+    parser = argparse.ArgumentParser(description="Run TO-MHT crossing scenario.")
     parser.add_argument(
         "--operating-mode",
         dest="operating_mode",
@@ -97,7 +97,7 @@ if __name__ == "__main__":
     args, _unknown = parser.parse_known_args()
 
     run_tomht(
-        "bearing_range",
+        "crossing",
         use_initiator=args.births,
         use_external_starts=args.external_starts,
         operating_mode=args.operating_mode,

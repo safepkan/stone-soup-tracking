@@ -25,10 +25,10 @@
 
 ## Scenarios / Smoke Tests
 
-- Two baseline scenarios: `run_tomht("crossing")` and `run_tomht("bearing_range")`; convenience scripts `mht/run_tomht_crossing.py` and `mht/run_tomht_bearing_range.py`.
+- Two baseline scenarios: `run_tomht("crossing")` and `run_tomht("bearing_range")`; convenience scripts `mht/runners/run_tomht_crossing.py` and `mht/runners/run_tomht_bearing_range.py`.
 - Runner auto-creates `/tmp/.cache` and `/tmp/mplconfig` (if not set) and sets `XDG_CACHE_HOME`/`MPLCONFIGDIR` to avoid font-cache warnings. Canonical single-scenario headless incantations:
-  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht/run_tomht_crossing.py`
-  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht/run_tomht_bearing_range.py`
+  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht/runners/run_tomht_crossing.py`
+  - `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht/runners/run_tomht_bearing_range.py`
   The runner detects non-interactive backends and skips `plt.show()`.
 - Control animation display: set `TOMHT_SHOW=1` to force showing even with non-interactive backends; set `TOMHT_NO_SHOW=1` to suppress entirely.
 - Expected behavior: scripts complete without exceptions; logs print global hypotheses over time and end-of-run `SUMMARY ...` aggregate ScanStats lines. Use output to spot regressions; at minimum ensure they don’t crash after code changes.

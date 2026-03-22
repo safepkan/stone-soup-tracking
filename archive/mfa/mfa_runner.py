@@ -10,12 +10,12 @@ from matplotlib import animation
 from stonesoup.plotter import Plotter
 from stonesoup.types.update import GaussianMixtureUpdate
 
-from mht.mfa.mfa_plotting import plot_mfa_component_tracks
-from mht.mfa.mfa_scenarios import (
+from archive.mfa.mfa_plotting import plot_mfa_component_tracks
+from archive.mfa.mfa_scenarios import (
     initial_mfa_tracks_for_bearing_range,
     initial_mfa_tracks_for_crossing,
 )
-from mht.mfa.mfa_tracker import (
+from archive.mfa.mfa_tracker import (
     build_mfa_components_linear,
     build_mfa_components_ukf,
 )

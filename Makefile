@@ -12,5 +12,5 @@ update_venv:
 
 .PHONY: smoke
 smoke:
-	MPLBACKEND=Agg TOMHT_NO_SHOW=1 ./venv/bin/python mht/run_tomht_crossing.py
-	MPLBACKEND=Agg TOMHT_NO_SHOW=1 ./venv/bin/python mht/run_tomht_bearing_range.py
+	MPLBACKEND=Agg TOMHT_NO_SHOW=1 ./venv/bin/python mht/runners/run_tomht_crossing.py
+	MPLBACKEND=Agg TOMHT_NO_SHOW=1 ./venv/bin/python mht/runners/run_tomht_bearing_range.py
