@@ -6,6 +6,7 @@ It replaces the earlier pre-Phase-B description in which globals still stored co
 
 ## Recent updates
 
+- 2026-03-22: added explicit TOMHT-facing helper `get_tomht_track_id(track)` in `mht/tomht_tracker.py` for extracting stable logical IDs from `TOMHTTracker` output tracks.
 - 2026-03-22: tracker-construction helpers `build_tomht_linear()` and `build_tomht_ukf()` were moved out of `mht/tomht_tracker.py` into `mht/helpers/tracker_builders.py`; `TOMHTTracker` now type-hints `initiator` as generic Stone Soup `Initiator` instead of `SimpleMeasurementInitiator`.
 - 2026-03-22: legacy MFA baseline scaffolding was moved from `mht/mfa` to `archive/mfa` to keep inactive/reference code out of the active TO-MHT package path.
 - 2026-03-21: `update_tracker()` was refactored so scan stats and debug output are handled by dedicated private helpers. The core scan pipeline path is now easier to read without instrumentation details inline.
@@ -119,6 +120,10 @@ This is the intended public surface for current integration tasks:
   - read-only node-native MAP leaf-node view for inspection/tests.
 - `get_n_scan_commitment_snapshot()`:
   - read-only commitment-state snapshot for inspection/tests.
+- `get_tomht_track_id(track)`:
+  - TOMHT-specific helper for stable logical track identity extraction from `TOMHTTracker`-produced tracks,
+  - reads `track.metadata["track_id"]`,
+  - not intended as a generic Stone Soup `Track` helper.
 
 ## What is still transitional or awkward
 

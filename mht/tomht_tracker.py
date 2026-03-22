@@ -1808,12 +1808,21 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
 
 
-def get_track_id(track: Track) -> int:
-    """Return the stable track ID for a TOMHTTracker-produced track.
+def get_tomht_track_id(track: Track) -> int:
+    """Return the stable TOMHT logical track ID from a TOMHT output track.
 
     TOMHTTracker assigns each logical track a stable integer ID that persists
-    across scans.  The Track objects returned by ``update_tracker()`` and the
+    across scans. The Track objects returned by ``update_tracker()`` and the
     ``tracks`` property are reconstructed each scan, so ``Track.id`` (a UUID)
-    is *not* stable.  Use this helper instead.
+    is not stable for TOMHT logical identity.
+
+    This helper is TOMHT-specific. It expects TOMHT metadata to be present on
+    the supplied ``Track``.
     """
-    return track.metadata["track_id"]
+    try:
+        return int(track.metadata["track_id"])
+    except KeyError as exc:
+        raise KeyError(
+            "Track metadata does not contain TOMHT 'track_id'. "
+            "Use this helper only with TOMHTTracker-produced tracks."
+        ) from exc
