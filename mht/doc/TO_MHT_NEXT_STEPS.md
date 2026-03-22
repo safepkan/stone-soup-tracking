@@ -15,6 +15,7 @@ The current priority is therefore practical integration and code/interface clean
 
 Status note (2026-03-22):
 - legacy MFA bootstrap code was moved from `mht/mfa` to `archive/mfa` so inactive baseline/reference code is out of the active TO-MHT package path.
+- TO-MHT tracker-construction helpers (`build_tomht_linear()` / `build_tomht_ukf()`) were moved from `mht/tomht_tracker.py` to `mht/helpers/tracker_builders.py`; `TOMHTTracker` now uses a generic Stone Soup `Initiator` type hint.
 
 ## Working checklist
 

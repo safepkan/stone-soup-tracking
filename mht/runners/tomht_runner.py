@@ -27,6 +27,10 @@ from matplotlib import animation  # noqa: E402
 
 from stonesoup.plotter import Plotter  # noqa: E402
 
+from mht.helpers.tracker_builders import (  # noqa: E402
+    build_tomht_linear,
+    build_tomht_ukf,
+)
 from mht.helpers.plotting import plot_tracks_stable_xy  # noqa: E402
 from mht.scenarios.bearing_range import (  # noqa: E402
     create_bearing_range_mht_example,
@@ -40,8 +44,6 @@ from mht.scenarios.crossing_targets import (  # noqa: E402
 )
 from mht.tomht_tracker import (  # noqa: E402
     TOMHTParams,
-    build_tomht_linear,
-    build_tomht_ukf,
 )
 
 

@@ -6,6 +6,7 @@ It replaces the earlier pre-Phase-B description in which globals still stored co
 
 ## Recent updates
 
+- 2026-03-22: tracker-construction helpers `build_tomht_linear()` and `build_tomht_ukf()` were moved out of `mht/tomht_tracker.py` into `mht/helpers/tracker_builders.py`; `TOMHTTracker` now type-hints `initiator` as generic Stone Soup `Initiator` instead of `SimpleMeasurementInitiator`.
 - 2026-03-22: legacy MFA baseline scaffolding was moved from `mht/mfa` to `archive/mfa` to keep inactive/reference code out of the active TO-MHT package path.
 - 2026-03-21: `update_tracker()` was refactored so scan stats and debug output are handled by dedicated private helpers. The core scan pipeline path is now easier to read without instrumentation details inline.
 - 2026-03-21: `TOMHTTracker.get_unused_detections()` now exposes the residual detections from the most recent completed `update_tracker()`. Residuals are considered consumed when internal births are enabled (`initiator is not None`), so in that mode the method returns an empty list.
