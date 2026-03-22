@@ -107,9 +107,10 @@ Status notes (2026-03-21):
   - In the current test, this instrumentation stream matched exactly across two repeated replays.
 - Performance/stability observations:
   - intermittent "hang" reports are currently treated as likely long per-scan compute spikes rather than confirmed deadlock (combinatorial expansion can become large on some scans),
+  - after multiple additional tracker replays (2026-03-22), no stalls/hangs were observed; treat this as monitor-only for now and do not prioritise extra stall-specific work unless it recurs.
   - memory growth during run is expected with current implementation because node/history state is retained (node GC/compaction is still deferred); observed growth of a few hundred MB is consistent with this.
 - Near-term validation follow-up:
-  - when stalls are observed, collect per-scan wall-clock timing and correlate with `SCAN ... exp=...`, detection count, and birth activity to distinguish true hangs from expansion spikes.
+  - if stalls are observed again, collect per-scan wall-clock timing and correlate with `SCAN ... exp=...`, detection count, and birth activity to distinguish true hangs from expansion spikes.
 - Instrumentation update and first timing check (2026-03-21):
   - added `SCAN_TIMING t=... wall_ms=...` per scan in TO-MHT debug instrumentation (kept existing `SCAN ...` line format unchanged for deterministic diffing),
   - one replay run showed clear timing outliers late in the scenario (example max around scan 254, where expansion was also high),
