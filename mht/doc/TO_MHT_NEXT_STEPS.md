@@ -17,6 +17,10 @@ Status note (2026-03-22):
 - legacy MFA bootstrap code was moved from `mht/mfa` to `archive/mfa` so inactive baseline/reference code is out of the active TO-MHT package path.
 - TO-MHT tracker-construction helpers (`build_tomht_linear()` / `build_tomht_ukf()`) were moved from `mht/tomht_tracker.py` to `mht/helpers/tracker_builders.py`; `TOMHTTracker` now uses a generic Stone Soup `Initiator` type hint.
 
+Status note (2026-03-23):
+- as a low-risk readability/modularization step, core passive data-structure dataclasses were extracted from `mht/tomht_tracker.py` into `mht/tomht_model.py` (`TrackHypothesisNode`, `GlobalHypothesis`, `ChildCandidate`, `MAPHypothesisSnapshot`, `NScanCommitmentSnapshot`).
+- `ScanContext` and `ScanStats` intentionally remain in `mht/tomht_tracker.py` for now.
+
 ## Working checklist
 
 This document is now intended as a working checklist for the integration-readiness phase.

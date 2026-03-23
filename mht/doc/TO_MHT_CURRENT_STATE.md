@@ -6,6 +6,7 @@ It replaces the earlier pre-Phase-B description in which globals still stored co
 
 ## Recent updates
 
+- 2026-03-23: extracted core passive data-structure dataclasses (`TrackHypothesisNode`, `GlobalHypothesis`, `ChildCandidate`, `MAPHypothesisSnapshot`, `NScanCommitmentSnapshot`) from `mht/tomht_tracker.py` into `mht/tomht_model.py`; `ScanContext` and `ScanStats` remain in `mht/tomht_tracker.py`.
 - 2026-03-23: removed `TrackHypothesisNode.track_metadata`; opaque metadata bags are no longer propagated through node ancestry, and reconstructed `Track.metadata` now contains explicit TOMHT-owned keys only.
 - 2026-03-23: removed legacy `TOMHTParams.assoc_history_len`; `ns_scan_window` is now the only N-scan window parameter.
 - 2026-03-22: added explicit TOMHT-facing helper `get_tomht_track_id(track)` in `mht/tomht_tracker.py` for extracting stable logical IDs from `TOMHTTracker` output tracks.
