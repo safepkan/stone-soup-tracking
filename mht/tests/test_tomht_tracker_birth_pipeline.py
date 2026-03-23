@@ -14,7 +14,6 @@ from stonesoup.types.track import Track
 from stonesoup.updater.base import Updater
 
 from mht.tomht_tracker import (
-    ASSOC_PAD,
     GlobalHypothesis,
     ScanContext,
     TOMHTParams,
@@ -120,7 +119,9 @@ def _seed_existing_tracks(tracker: TOMHTTracker, tracks: list[Track]) -> None:
             state=state,
             state_kind="seed_existing",
             used_det_key=int(last_det_key) if last_det_key is not None else None,
-            assoc_label=(ASSOC_PAD if last_det_key is None else int(last_det_key)),
+            assoc_label=(
+                TOMHTTracker.ASSOC_PAD if last_det_key is None else int(last_det_key)
+            ),
             log_delta=0.0,
             age=int(track.metadata.get("age", len(track))),
             hits=int(track.metadata.get("hits", 0)),

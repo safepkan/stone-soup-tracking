@@ -64,10 +64,6 @@ from mht.tomht_stats import (
     print_summary_stats as print_summary_stats_report,
 )
 
-ASSOC_PAD = -1
-ASSOC_MISS = -2
-
-
 # ============================================================================
 # Tracker-Local Support Structures / Params
 # ============================================================================
@@ -153,6 +149,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     API boundary remains Stone Soup-native; internal hypothesis evolution is
     node-based.
     """
+
+    ASSOC_PAD = -1
+    ASSOC_MISS = -2
 
     hypothesiser: PDAHypothesiser = Property(
         doc="Hypothesiser used to branch per-track hypotheses."
@@ -557,7 +556,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         if not hypothesis:
             state = getattr(hypothesis, "prediction")
             used_det_key = None
-            assoc_label = ASSOC_MISS
+            assoc_label = TOMHTTracker.ASSOC_MISS
             state_kind = "prediction"
             missed_count = int(leaf_node.missed_count) + 1
             last_det_key = leaf_node.last_det_key
@@ -1044,7 +1043,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 state=state,
                 state_kind="birth",
                 used_det_key=used_key,
-                assoc_label=ASSOC_PAD if used_key is None else int(used_key),
+                assoc_label=(
+                    TOMHTTracker.ASSOC_PAD if used_key is None else int(used_key)
+                ),
                 age=1,
                 hits=1 if used_key is not None else 0,
                 root_source="internal_birth",
@@ -1356,7 +1357,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             state=state,
             state_kind="external_start",
             used_det_key=None,
-            assoc_label=ASSOC_PAD,
+            assoc_label=TOMHTTracker.ASSOC_PAD,
             age=age,
             hits=hits,
             root_source="external_start",

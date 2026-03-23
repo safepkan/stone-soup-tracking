@@ -10,7 +10,6 @@ from stonesoup.types.state import GaussianState
 from stonesoup.updater.base import Updater
 
 from mht.tomht_tracker import (
-    ASSOC_PAD,
     GlobalHypothesis,
     TOMHTParams,
     TOMHTTracker,
@@ -83,7 +82,7 @@ class TOMHTTrackerNScanCommitmentTest(unittest.TestCase):
             state=self._state(scan_index),
             state_kind="test",
             used_det_key=None,
-            assoc_label=ASSOC_PAD,
+            assoc_label=TOMHTTracker.ASSOC_PAD,
             log_delta=0.0,
             age=age,
             hits=hits,
