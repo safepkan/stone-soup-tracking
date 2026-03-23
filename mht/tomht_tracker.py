@@ -760,13 +760,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # =========================================================================
     # Dedupe / Beam Helpers
     # =========================================================================
-    # Unused-detection scoring plus structural global dedupe.
+    # Sequence here: score expanded globals for unused detections, collapse
+    # exact structural duplicates, then beam pruning runs in update_tracker().
 
     def _apply_unused_detection_penalty(
         self,
         gh: GlobalHypothesis,
         ctx: ScanContext,
     ) -> GlobalHypothesis:
+        """Apply the scoring-model term for detections unused by this global.
+
+        Runs after continuation expansion and before dedupe/beam pruning.
+        """
         if not ctx.detections:
             return gh
         used = self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id)
@@ -781,6 +786,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _leaf_signature_for_global(
         self, gh: GlobalHypothesis
     ) -> tuple[tuple[int, int], ...]:
+        """Return this global's structural dedupe signature.
+
+        Signature = active leaf-node identity per track_id.
+        """
         return tuple(
             sorted(
                 (track_id, leaf_node.node_id)
