@@ -61,6 +61,7 @@ from mht.tomht_output import reconstruct_track_from_leaf_node
 from mht.tomht_stats import (
     BirthStats,
     ScanStats,
+    print_scan_stats as print_scan_stats_report,
     print_summary_stats as print_summary_stats_report,
 )
 
@@ -1627,46 +1628,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         if not self.params.debug_display_scan_stats:
             return
         nscan_snapshot = self.get_n_scan_commitment_snapshot()
-        print(
-            f"SCAN t={timestamp} det={scan_stats.num_detections} "
-            f"globals in={scan_stats.globals_in} exp={scan_stats.globals_expanded} "
-            f"after_unused={scan_stats.globals_after_unused} dedup={scan_stats.globals_after_dedupe} "
-            f"beam={scan_stats.globals_after_beam} "
-            f"nscan boundary={scan_stats.nscan_boundary_scan_index} "
-            f"in_scope={scan_stats.nscan_tracks_in_scope} "
-            f"committed_now={scan_stats.nscan_tracks_committed} "
-            f"committed_total={len(nscan_snapshot.committed_boundary_by_track_id)} "
-            f"births cand={scan_stats.birth_candidates} "
-            f"tracks_created={scan_stats.birth_tracks_created} tracks_kept={scan_stats.birth_tracks_kept} "
-            f"beam_inst={scan_stats.birth_track_instances_in_beam} "
-            f"globals_with_birth={scan_stats.globals_with_birth} "
-            f"after={scan_stats.globals_after_births} MAP tracks={scan_stats.map_tracks} "
-            f"used={scan_stats.map_used} unused={scan_stats.map_unused} "
-            f"hit_rate={scan_stats.map_mean_hit_rate:.2f}"
+        print_scan_stats_report(
+            timestamp=timestamp,
+            scan_stats=scan_stats,
+            nscan_snapshot=nscan_snapshot,
+            debug_display_map_miss_hist=self.params.debug_display_map_miss_hist,
         )
-        print(f"SCAN_TIMING t={timestamp} wall_ms={scan_stats.scan_wall_ms:.3f}")
-        print(
-            f"SCAN_MEMORY t={timestamp} "
-            f"nodes={scan_stats.node_count_total} "
-            f"leaf_inst={scan_stats.leaf_instances_in_beam} "
-            f"maxrss_mb={scan_stats.maxrss_mb:.1f}"
-        )
-        if nscan_snapshot.latest_committed_ancestor_by_track_id:
-            committed_pairs = ", ".join(
-                f"{track_id}->node{ancestor.node_id}@s{ancestor.scan_index}"
-                for track_id, ancestor in sorted(
-                    nscan_snapshot.latest_committed_ancestor_by_track_id.items()
-                )
-            )
-            print(
-                "SCAN_NSCAN_COMMITTED "
-                f"t={timestamp} boundary={nscan_snapshot.boundary_scan_index} "
-                f"{committed_pairs}"
-            )
-        if self.params.debug_display_map_miss_hist:
-            print(
-                f"SCAN_MAP_MISS_HIST t={timestamp} miss_hist={scan_stats.map_miss_hist}"
-            )
 
     # Debug renderers for ad-hoc scan inspection.
 
