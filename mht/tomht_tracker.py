@@ -92,17 +92,38 @@ class TOMHTParams:
 
 @dataclass(frozen=True)
 class TrackHypothesisNode:
-    """One per-track hypothesis node at one scan step.
+    """One node in one logical track's same-track hypothesis ancestry chain.
 
-    Field groups are intentional:
-    - Core structural fields:
-      identity, ancestry, and per-step hypothesis payload.
-    - Cached operational fields:
-      frequently-read counters/keys used in tracker logic.
-    - Compatibility residue:
-      metadata carried to reconstruct Stone Soup Track views.
-    - Instrumentation/provenance fields:
-      source/debug context that helps inspection and handoff.
+    Parent links are same-track only. A global hypothesis chooses one active leaf
+    per ``track_id``; identity and ancestry come from node linkage, not caches.
+
+    Core structural fields (core hypothesis identity/ancestry/payload):
+    - ``node_id``: Unique node identity used for structural references/deduping.
+    - ``track_id``: Stable logical track identity this node belongs to.
+    - ``parent``: Previous node for the same ``track_id``; ``None`` at roots.
+    - ``scan_index``: Scan index where this node's step was created.
+    - ``timestamp``: Scan timestamp for this node's step.
+    - ``state``: Per-step state payload used for reconstruction/update flow.
+    - ``state_kind``: Step kind tag (for example ``"update"``, ``"prediction"``).
+    - ``used_det_key``: Concrete detection index used for exclusivity/scoring;
+      ``None`` for miss/no-detection steps.
+    - ``assoc_label``: Per-step association label/structural marker (index or
+      sentinels such as miss/pad for root-like cases).
+    - ``log_delta``: Per-step log-score increment relative to ``parent``.
+
+    Cached operational/convenience fields (tracker-logic support, not identity):
+    - ``age``: Total step count accumulated along this track chain.
+    - ``hits``: Total detection-hit count accumulated along this chain.
+    - ``missed_count``: Current consecutive-miss streak for miss-limit logic.
+    - ``last_det_key``: Most recent detection index seen on this chain.
+    - ``last_det_hit``: Whether the most recent step was a hit.
+
+    Instrumentation/provenance fields (debug and inspection context):
+    - ``root_source``: Origin label (for example internal birth vs external start).
+    - ``birth_scan_index``: Scan index where this logical track chain started.
+
+    Compatibility residue (adapter boundary support, not core TO-MHT structure):
+    - ``track_metadata``: Metadata carried for reconstructed Stone Soup ``Track``s.
     """
 
     # Core structural identity + ancestry + per-step payload.
@@ -134,7 +155,17 @@ class TrackHypothesisNode:
 
 @dataclass(frozen=True)
 class GlobalHypothesis:
-    """One global hypothesis = one leaf per track_id + cumulative log weight."""
+    """One joint hypothesis over currently active logical tracks.
+
+    In this implementation, one global means one active leaf node per logical
+    ``track_id`` plus a cumulative score/weight.
+
+    Fields:
+    - ``leaf_nodes_by_track_id``: ``{track_id: leaf_node}`` map selecting the
+      active leaf for each track in this global. Shared ancestry is carried by
+      each leaf node's same-track ``parent`` chain.
+    - ``log_weight``: Cumulative log score for this joint assignment.
+    """
 
     leaf_nodes_by_track_id: dict[int, TrackHypothesisNode]
     log_weight: float
@@ -468,14 +499,15 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         ``add_external_starts(time,starts)`` after this method for the same
         ``time``.
 
-        Pipeline (in order):
+        Pipeline order:
         1. Sort detections deterministically for stable indexing.
-        2. Expand each global via per-track child-node candidates.
+        2. Expand globals via per-track child-node candidates.
         3. Apply unused-detection score term.
         4. Dedupe globals by structural leaf-node identity.
         5. Beam prune to top-K globals.
-        6. Update ancestor-based N-scan commitment state (pre-birth boundary).
-        7. Optionally branch with internal births from residual detections.
+        6. Update ancestor-based N-scan commitment (pre-birth boundary).
+        7. Optionally apply internal births from residual detections.
+        8. Return current MAP output tracks.
         """
         scan_wall_start_ns = wall_clock.perf_counter_ns()
         self._last_unused_detections = []
@@ -494,6 +526,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             detections=det_list,
             det_index_by_obj=det_index_by_obj,
         )
+
+        # Scan pipeline order (same as docstring): sort detections -> expand ->
+        # unused-score -> dedupe -> beam -> N-scan commitment -> births -> MAP output.
 
         # Expand globals with current batch of detections
         expanded: list[GlobalHypothesis] = []
@@ -562,7 +597,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         Intended call pattern:
         1. Run ``update_tracker(time,detections)`` for timestamp ``time``.
         2. Call ``add_external_starts(time,starts)`` with confirmed starts at that
-           same ``time``.
+           same ``time``; starts are inserted into the current post-update globals.
+        Timestamp/order enforcement is handled by
+        ``_validate_external_starts_timestamp(...)``.
 
         Duplicate-like inputs are not deduplicated here: each supplied start is
         treated as a distinct confirmed track and receives a fresh tracker-owned
