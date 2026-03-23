@@ -1,21 +1,30 @@
-"""TO-MHT tracker with node-native branching and Stone Soup adapter boundaries.
+"""Track-oriented MHT with node-based internals and Stone Soup-facing APIs.
 
-Public API (integration-facing):
-- ``update_tracker(time,detections)`` runs one scan and returns ``(time, tracks)``.
-- ``tracks`` returns reconstructed MAP ``Track`` outputs.
-- ``add_external_starts(time,starts)`` injects confirmed external starts.
-- Snapshot helpers expose read-only MAP and N-scan commitment state.
+Typical usage pattern:
+```python
+tracker = TOMHTTracker(hypothesiser,updater,initiator=initiator,params=params)
+t,map_tracks = tracker.update_tracker(time,detections)
+tracker.add_external_starts(t,confirmed_starts_at_t)  # optional, same timestamp
+map_tracks = tracker.tracks  # or use ``map_tracks`` from update_tracker()
+```
 
-Internal architecture:
-- Each global hypothesis stores ``track_id -> leaf TrackHypothesisNode``.
-- Per-track branching is done by creating child nodes from each leaf.
-- N-scan commitment is ancestor-identity agreement at boundary ``b = k - N``.
+Core control APIs:
+- ``update_tracker(time,detections)``: process one scan and return MAP output.
+- ``tracks``: current MAP output as Stone Soup ``Track`` objects.
+- ``add_external_starts(time,starts)``: inject confirmed external starts after the
+  same-timestamp ``update_tracker()`` call.
 
-Compatibility boundaries:
-- Stone Soup ``Track`` objects are reconstructed from node ancestry where external
-  APIs still require them (hypothesiser/updater/output).
-- ``TrackHypothesisNode.track_metadata`` is intentionally retained compatibility
-  residue; it is not core TO-MHT structure.
+Read-only inspection helpers (not required for normal operation):
+- ``get_map_hypothesis_snapshot()``
+- ``get_map_output_tracks()``
+- ``get_n_scan_commitment_snapshot()``
+
+Boundary model:
+- External interface stays Stone Soup-native (detections/tracks/hypothesiser/updater).
+- Internal branch structure is node-native (``track_id -> leaf node`` per global).
+- N-scan commitment is maintained by ancestor agreement at boundary ``b = k - N``.
+- Stone Soup ``Track`` objects remain the compatibility boundary for output and
+  integration-facing interfaces.
 """
 
 from dataclasses import dataclass
@@ -317,18 +326,28 @@ class BetaRatioScoringModel:
 
 
 class TOMHTTracker(_TrackerMixInUpdate, Tracker):
-    """
-    Track-Oriented MHT with node-native branching and K-best beam pruning.
+    """Public TO-MHT tracker contract with Stone Soup boundary objects.
 
-    Internal truth is node-based:
-    - each GlobalHypothesis stores ``track_id -> leaf TrackHypothesisNode``,
-    - globals share ancestry by node identity (not copied Track history),
-    - N-scan commitment is ancestor-based at ``b = k - N``.
+    Core operational APIs:
+    - ``update_tracker(time,detections)``: main per-scan update; returns
+      ``(time, map_tracks)``.
+    - ``tracks``: current MAP output tracks.
+    - ``add_external_starts(time,starts)``: inject externally confirmed starts
+      for the most recently processed timestamp (call after that update).
 
-    Stone Soup boundaries are intentional:
-    - hypothesiser/updater currently consume reconstructed Track views,
-    - public MAP outputs are reconstructed Track views,
-    - these compatibility views do not change node-native branch identity.
+    Read-only inspection/debug APIs:
+    - ``get_map_hypothesis_snapshot()``: node-native MAP leaf snapshot.
+    - ``get_map_output_tracks()``: reconstructed MAP output ``Track`` objects.
+    - ``get_n_scan_commitment_snapshot()``: current ancestor-identity N-scan
+      commitment bookkeeping.
+
+    Internal model:
+    - ``TrackHypothesisNode`` is the branching unit.
+    - each global stores one current leaf node per logical ``track_id``.
+    - commitment is maintained by ancestor agreement after beam pruning.
+
+    API boundary remains Stone Soup-native; internal hypothesis evolution is
+    node-based.
     """
 
     hypothesiser: PDAHypothesiser = Property(
@@ -430,7 +449,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     @property
     def tracks(self) -> set[Track]:
-        """Return current MAP output as reconstructed Stone Soup Track objects."""
+        """Current MAP output as Stone Soup ``Track`` objects.
+
+        Equivalent content to ``get_map_output_tracks()``.
+        """
         return self.get_map_output_tracks()
 
     def update_tracker(
@@ -438,7 +460,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         time: datetime.datetime,
         detections: Iterable[Detection],
     ) -> tuple[datetime.datetime, set[Track]]:
-        """Run one full TO-MHT scan update and return ``(time, MAP tracks)``.
+        """Run the main one-scan update and return ``(time, MAP tracks)``.
+
+        This is the primary operational entry point. The returned tracks are the
+        current MAP output as reconstructed Stone Soup ``Track`` objects.
+        If externally confirmed starts exist at this timestamp, call
+        ``add_external_starts(time,starts)`` after this method for the same
+        ``time``.
 
         Pipeline (in order):
         1. Sort detections deterministically for stable indexing.
@@ -529,8 +557,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def add_external_starts(
         self, time: datetime.datetime, starts: Iterable[Track]
     ) -> None:
-        """
-        Insert confirmed external starts into each current global hypothesis.
+        """Inject externally confirmed starts for the latest processed timestamp.
+
+        Intended call pattern:
+        1. Run ``update_tracker(time,detections)`` for timestamp ``time``.
+        2. Call ``add_external_starts(time,starts)`` with confirmed starts at that
+           same ``time``.
 
         Duplicate-like inputs are not deduplicated here: each supplied start is
         treated as a distinct confirmed track and receives a fresh tracker-owned
@@ -572,7 +604,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         return list(self._last_unused_detections)
 
     def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
-        """Return a read-only copy of current MAP ``track_id -> leaf node``."""
+        """Return read-only node-native MAP state for inspection/debug only."""
         if not self.global_hypotheses:
             return None
         best = self.global_hypotheses[0]
@@ -582,7 +614,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     def get_map_output_tracks(self) -> set[Track]:
-        """Return MAP outputs as reconstructed Track compatibility views."""
+        """Return current MAP outputs as Stone Soup ``Track`` objects."""
         map_snapshot = self.get_map_hypothesis_snapshot()
         if map_snapshot is None:
             return set()
@@ -592,7 +624,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         }
 
     def get_n_scan_commitment_snapshot(self) -> NScanCommitmentSnapshot:
-        """Return read-only ancestor-identity N-scan commitment state."""
+        """Return read-only N-scan commitment bookkeeping (inspection/debug)."""
         return NScanCommitmentSnapshot(
             boundary_scan_index=self._last_nscan_boundary_scan_index,
             tracks_in_scope=int(self._last_nscan_tracks_in_scope),
