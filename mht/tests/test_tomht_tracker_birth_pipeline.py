@@ -116,7 +116,7 @@ def _seed_existing_tracks(tracker: TOMHTTracker, tracks: list[Track]) -> None:
             track_id=track_id,
             parent=None,
             scan_index=0,
-            timestamp=getattr(state, "timestamp", None),
+            timestamp=cast(datetime.datetime, getattr(state, "timestamp", None)),
             state=state,
             state_kind="seed_existing",
             used_det_key=int(last_det_key) if last_det_key is not None else None,

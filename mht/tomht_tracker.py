@@ -44,6 +44,7 @@ from stonesoup.base import Property
 from stonesoup.hypothesiser.probability import PDAHypothesiser
 from stonesoup.initiator.base import Initiator
 from stonesoup.types.detection import MissedDetection
+from stonesoup.types.state import State
 from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.types.detection import Detection
 from stonesoup.types.track import Track
@@ -103,7 +104,7 @@ class TrackHypothesisNode:
     - ``parent``: Previous node for the same ``track_id``; ``None`` at roots.
     - ``scan_index``: Scan index where this node's step was created.
     - ``timestamp``: Scan timestamp for this node's step.
-    - ``state``: Per-step state payload used for reconstruction/update flow.
+    - ``state``: Per-step Stone Soup ``State`` payload used for reconstruction/update flow.
     - ``state_kind``: Step kind tag (for example ``"update"``, ``"prediction"``).
     - ``used_det_key``: Concrete detection index used for exclusivity/scoring;
       ``None`` for miss/no-detection steps.
@@ -131,8 +132,8 @@ class TrackHypothesisNode:
     track_id: int
     parent: "TrackHypothesisNode | None"
     scan_index: int
-    timestamp: object
-    state: object
+    timestamp: datetime.datetime
+    state: State
     state_kind: str
     used_det_key: int | None
     assoc_label: int
@@ -184,7 +185,7 @@ class ScanContext:
     """Per-scan context passed into scoring models."""
 
     scan_index: int
-    timestamp: object
+    timestamp: datetime.datetime
     detections: list[Detection]
     det_index_by_obj: dict[int, int]
 
@@ -210,7 +211,7 @@ class BirthTemplate:
 
 @dataclass(frozen=True)
 class ScanStats:
-    timestamp: object
+    timestamp: datetime.datetime
     scan_wall_ms: float
     maxrss_mb: float
     node_count_total: int
@@ -968,7 +969,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _maybe_display_scan_stats(
         self,
         *,
-        timestamp: object,
+        timestamp: datetime.datetime,
         scan_stats: ScanStats,
     ) -> None:
         if not self.params.debug_display_scan_stats:
@@ -1316,7 +1317,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         return True
 
     def _generate_birth_candidates(
-        self, residual: list[Detection], timestamp: object
+        self, residual: list[Detection], timestamp: datetime.datetime
     ) -> list[Track]:
         assert self.initiator is not None
         return (
@@ -1359,7 +1360,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         born_scored: list[tuple[tuple[int, int, int, float, int], Track]],
         *,
         det_index_by_obj: dict[int, int],
-        timestamp: object,
+        timestamp: datetime.datetime,
     ) -> list[Track]:
         born = [tr for _, tr in born_scored]
         if self.params.debug_display_births:
@@ -1712,8 +1713,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         track_id: int,
         parent: TrackHypothesisNode | None,
         scan_index: int,
-        timestamp: object,
-        state: object,
+        timestamp: datetime.datetime,
+        state: State,
         state_kind: str,
         used_det_key: int | None,
         assoc_label: int,
@@ -1767,8 +1768,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         *,
         track_id: int,
         scan_index: int,
-        timestamp: object,
-        state: object,
+        timestamp: datetime.datetime,
+        state: State,
         state_kind: str,
         used_det_key: int | None,
         assoc_label: int,

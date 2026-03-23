@@ -79,7 +79,7 @@ class TOMHTTrackerNScanCommitmentTest(unittest.TestCase):
             track_id=track_id,
             parent=parent,
             scan_index=scan_index,
-            timestamp=self._state(scan_index).timestamp,
+            timestamp=cast(datetime.datetime, self._state(scan_index).timestamp),
             state=self._state(scan_index),
             state_kind="test",
             used_det_key=None,
