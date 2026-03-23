@@ -553,6 +553,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         ctx: ScanContext,
         log_delta: float,
     ) -> ChildCandidate:
+        """Map one Stone Soup hypothesis to one node-native child candidate.
+
+        Miss and hit paths are handled explicitly: miss uses the hypothesis
+        prediction and increments the miss streak; hit runs updater/update,
+        binds a detection key, and resets the miss streak. Cached maintenance
+        fields are updated when creating the child node.
+        """
         if not hypothesis:
             state = getattr(hypothesis, "prediction")
             used_det_key = None
@@ -598,8 +605,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         leaf_node: TrackHypothesisNode,
         ctx: ScanContext,
     ) -> list[ChildCandidate]:
-        # Compatibility boundary: hypothesiser/updater still consume Track views.
-        # Branch identity remains node-based in TrackHypothesisNode ancestry.
+        """Build retained local continuation candidates for one track leaf.
+
+        This helper is the continuation boundary adapter: it reconstructs a
+        temporary ``Track`` for hypothesiser/updater compatibility, scores and
+        prunes local hypotheses to the per-track limit (keeping one miss if
+        present), then translates retained hypotheses back to node-native
+        ``ChildCandidate`` objects.
+        """
         track = reconstruct_track_from_leaf_node(leaf_node)
         multi = self.hypothesiser.hypothesise(track, ctx.detections, ctx.timestamp)
         singles = list(multi)
@@ -653,24 +666,25 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     # Joint global expansion under exclusivity constraints.
 
-    def _expand_global_hypothesis(
+    def _assemble_joint_globals(
         self,
-        gh: GlobalHypothesis,
-        ctx: ScanContext,
+        *,
+        track_ids: list[int],
+        per_track_candidates: list[list[ChildCandidate]],
+        base_log_weight: float,
     ) -> list[GlobalHypothesis]:
-        track_ids = sorted(gh.leaf_nodes_by_track_id.keys())
+        """Combine local candidates into exclusivity-valid joint globals.
 
-        per_track_candidates: list[list[ChildCandidate]] = []
-        for tid in track_ids:
-            per_track_candidates.append(
-                self._candidates_for_track_leaf(gh.leaf_nodes_by_track_id[tid], ctx)
-            )
-
+        Backtracks over per-track ``ChildCandidate`` lists, enforces
+        one-detection-per-global exclusivity across tracks, drops only tracks
+        whose child ``missed_count`` exceeds ``max_missed`` (branch continues),
+        and accumulates the resulting global log weights.
+        """
         new_globals: list[GlobalHypothesis] = []
 
-        def backtrack(
+        def _backtrack(
             i: int,
-            used: set[int],
+            used_det_keys: set[int],
             acc_leaf_nodes: dict[int, TrackHypothesisNode],
             acc_log: float,
         ) -> None:
@@ -689,25 +703,59 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                     raise RuntimeError(
                         "ChildCandidate track_id mismatch during global expansion."
                     )
-                if cand.used_det_key is not None and cand.used_det_key in used:
+                if cand.used_det_key is not None and cand.used_det_key in used_det_keys:
                     continue
 
                 child = cand.child_node
                 missed = int(child.missed_count)
                 if missed > self.params.max_missed:
-                    backtrack(i + 1, used, acc_leaf_nodes, acc_log + cand.log_delta)
+                    # Drop only this logical track from the branch and
+                    # continue combining remaining tracks.
+                    _backtrack(
+                        i + 1,
+                        used_det_keys,
+                        acc_leaf_nodes,
+                        acc_log + cand.log_delta,
+                    )
                     continue
 
                 if cand.used_det_key is not None:
-                    used.add(cand.used_det_key)
+                    used_det_keys.add(cand.used_det_key)
                 acc_leaf_nodes[tid] = child
-                backtrack(i + 1, used, acc_leaf_nodes, acc_log + cand.log_delta)
+                _backtrack(
+                    i + 1, used_det_keys, acc_leaf_nodes, acc_log + cand.log_delta
+                )
                 acc_leaf_nodes.pop(tid, None)
                 if cand.used_det_key is not None:
-                    used.remove(cand.used_det_key)
+                    used_det_keys.remove(cand.used_det_key)
 
-        backtrack(0, set(), dict(), gh.log_weight)
+        _backtrack(0, set(), dict(), base_log_weight)
         return new_globals
+
+    def _expand_global_hypothesis(
+        self,
+        gh: GlobalHypothesis,
+        ctx: ScanContext,
+    ) -> list[GlobalHypothesis]:
+        """Expand one global by combining per-track local candidates.
+
+        This gathers retained local candidates for each track in ``gh``, then
+        assembles exclusivity-valid joint globals while preserving the existing
+        drop semantics for tracks that exceed ``max_missed``.
+        """
+        track_ids = sorted(gh.leaf_nodes_by_track_id.keys())
+
+        per_track_candidates: list[list[ChildCandidate]] = []
+        for tid in track_ids:
+            per_track_candidates.append(
+                self._candidates_for_track_leaf(gh.leaf_nodes_by_track_id[tid], ctx)
+            )
+
+        return self._assemble_joint_globals(
+            track_ids=track_ids,
+            per_track_candidates=per_track_candidates,
+            base_log_weight=gh.log_weight,
+        )
 
     # =========================================================================
     # Dedupe / Beam Helpers
