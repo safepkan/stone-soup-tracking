@@ -1,3 +1,23 @@
+"""TO-MHT tracker with node-native branching and Stone Soup adapter boundaries.
+
+Public API (integration-facing):
+- ``update_tracker(time,detections)`` runs one scan and returns ``(time, tracks)``.
+- ``tracks`` returns reconstructed MAP ``Track`` outputs.
+- ``add_external_starts(time,starts)`` injects confirmed external starts.
+- Snapshot helpers expose read-only MAP and N-scan commitment state.
+
+Internal architecture:
+- Each global hypothesis stores ``track_id -> leaf TrackHypothesisNode``.
+- Per-track branching is done by creating child nodes from each leaf.
+- N-scan commitment is ancestor-identity agreement at boundary ``b = k - N``.
+
+Compatibility boundaries:
+- Stone Soup ``Track`` objects are reconstructed from node ancestry where external
+  APIs still require them (hypothesiser/updater/output).
+- ``TrackHypothesisNode.track_metadata`` is intentionally retained compatibility
+  residue; it is not core TO-MHT structure.
+"""
+
 from dataclasses import dataclass
 import datetime
 from math import log
@@ -25,6 +45,9 @@ ASSOC_PAD = -1
 ASSOC_MISS = -2
 
 
+# Core Data Structures
+
+
 @dataclass(frozen=True)
 class TOMHTParams:
     max_global_hypotheses: int = 20
@@ -33,9 +56,8 @@ class TOMHTParams:
     log_epsilon: float = 1e-12
     scoring_mode: str = "beta_ratio"  # Only beta_ratio is supported.
 
-    # Legacy compatibility knob. assoc_history metadata is no longer projected.
-    assoc_history_len: int = 3
-    ns_scan_window: int = 0  # default set in __post_init__
+    # Sole N-scan configuration knob.
+    ns_scan_window: int = 3
 
     prob_gate: float = 0.99
 
@@ -58,16 +80,23 @@ class TOMHTParams:
     debug_globals_max: int = 5
     collect_stats: bool = True
 
-    def __post_init__(self) -> None:
-        # Keep legacy behavior: default N-scan window from assoc_history_len.
-        if self.ns_scan_window <= 0:
-            object.__setattr__(self, "ns_scan_window", self.assoc_history_len)
-
 
 @dataclass(frozen=True)
 class TrackHypothesisNode:
-    """One explicit hypothesis node for one logical track at one scan step."""
+    """One per-track hypothesis node at one scan step.
 
+    Field groups are intentional:
+    - Core structural fields:
+      identity, ancestry, and per-step hypothesis payload.
+    - Cached operational fields:
+      frequently-read counters/keys used in tracker logic.
+    - Compatibility residue:
+      metadata carried to reconstruct Stone Soup Track views.
+    - Instrumentation/provenance fields:
+      source/debug context that helps inspection and handoff.
+    """
+
+    # Core structural identity + ancestry + per-step payload.
     node_id: int
     track_id: int
     parent: "TrackHypothesisNode | None"
@@ -78,13 +107,19 @@ class TrackHypothesisNode:
     used_det_key: int | None
     assoc_label: int
     log_delta: float
+
+    # Cached operational/convenience metadata for common tracker logic.
     age: int
     hits: int
     missed_count: int
     last_det_key: int | None
     last_det_hit: bool
+
+    # Instrumentation/provenance fields (useful in debug output and snapshots).
     root_source: str
     birth_scan_index: int
+
+    # Compatibility residue for Track reconstruction adapters.
     track_metadata: dict[str, object]
 
 
@@ -283,11 +318,17 @@ class BetaRatioScoringModel:
 
 class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     """
-    Track-Oriented MHT with K-best global hypotheses (beam search).
+    Track-Oriented MHT with node-native branching and K-best beam pruning.
 
-    - Maintains a list of GlobalHypothesis objects of size <= K.
-    - Each scan: branch each track (per global hyp), then form consistent globals
-      (one child per track_id, no shared detections).
+    Internal truth is node-based:
+    - each GlobalHypothesis stores ``track_id -> leaf TrackHypothesisNode``,
+    - globals share ancestry by node identity (not copied Track history),
+    - N-scan commitment is ancestor-based at ``b = k - N``.
+
+    Stone Soup boundaries are intentional:
+    - hypothesiser/updater currently consume reconstructed Track views,
+    - public MAP outputs are reconstructed Track views,
+    - these compatibility views do not change node-native branch identity.
     """
 
     hypothesiser: PDAHypothesiser = Property(
@@ -303,7 +344,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     _committed_boundary_by_track_id: dict[int, int]
     _committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
 
-    # Public API
+    # Tracker Class / Public API
 
     def __init__(
         self,
@@ -315,6 +356,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         params: TOMHTParams = TOMHTParams(),
         scoring_model: ScoringModel | None = None,
     ) -> None:
+        """Construct the tracker with Stone Soup components and TO-MHT params.
+
+        Runtime note: type hints name ``PDAHypothesiser``, but the runtime
+        contract used by this tracker is narrower duck-typing around
+        ``hypothesise(...)`` outputs and per-hypothesis fields.
+        """
         super().__init__(hypothesiser, updater)
         self.detector = detector
         self.params = params
@@ -377,11 +424,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self.reset_stats()
 
     def reset_stats(self) -> None:
+        """Clear collected ScanStats and the last per-scan snapshot."""
         self._stats = []
         self.last_scan_stats = None
 
     @property
     def tracks(self) -> set[Track]:
+        """Return current MAP output as reconstructed Stone Soup Track objects."""
         return self.get_map_output_tracks()
 
     def update_tracker(
@@ -389,6 +438,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         time: datetime.datetime,
         detections: Iterable[Detection],
     ) -> tuple[datetime.datetime, set[Track]]:
+        """Run one full TO-MHT scan update and return ``(time, MAP tracks)``.
+
+        Pipeline (in order):
+        1. Sort detections deterministically for stable indexing.
+        2. Expand each global via per-track child-node candidates.
+        3. Apply unused-detection score term.
+        4. Dedupe globals by structural leaf-node identity.
+        5. Beam prune to top-K globals.
+        6. Update ancestor-based N-scan commitment state (pre-birth boundary).
+        7. Optionally branch with internal births from residual detections.
+        """
         scan_wall_start_ns = wall_clock.perf_counter_ns()
         self._last_unused_detections = []
         globals_in = len(self.global_hypotheses)
@@ -512,7 +572,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         return list(self._last_unused_detections)
 
     def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
-        """Return a copy of the current MAP leaf-node view."""
+        """Return a read-only copy of current MAP ``track_id -> leaf node``."""
         if not self.global_hypotheses:
             return None
         best = self.global_hypotheses[0]
@@ -522,7 +582,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     def get_map_output_tracks(self) -> set[Track]:
-        """Return reconstructed Track outputs for the current MAP leaf-node view."""
+        """Return MAP outputs as reconstructed Track compatibility views."""
         map_snapshot = self.get_map_hypothesis_snapshot()
         if map_snapshot is None:
             return set()
@@ -532,7 +592,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         }
 
     def get_n_scan_commitment_snapshot(self) -> NScanCommitmentSnapshot:
-        """Return a copy of current N-scan commitment state for debug/tests."""
+        """Return read-only ancestor-identity N-scan commitment state."""
         return NScanCommitmentSnapshot(
             boundary_scan_index=self._last_nscan_boundary_scan_index,
             tracks_in_scope=int(self._last_nscan_tracks_in_scope),
@@ -544,6 +604,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     def print_summary_stats(self) -> None:
+        """Print aggregate instrumentation summaries from collected ScanStats."""
         stats = self._stats
         if not stats:
             print("SUMMARY scans=0 (no collected ScanStats)")
@@ -655,7 +716,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             f"miss_hist={miss_hist_str}"
         )
 
-    # Core Scan Pipeline Helpers
+    # Scan Pipeline Helpers
 
     @staticmethod
     def _det_sort_key(det: Detection) -> tuple:
@@ -897,6 +958,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _used_det_keys_in_global(self, gh: GlobalHypothesis) -> set[int]:
         return self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id)
 
+    # Branching / Expansion Helpers
+
     def _candidate_from_hypothesis(
         self,
         *,
@@ -950,7 +1013,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         leaf_node: TrackHypothesisNode,
         ctx: ScanContext,
     ) -> list[ChildCandidate]:
-        # Transitional adapter: hypothesiser/updater still run on Track views.
+        # Compatibility boundary: hypothesiser/updater still consume Track views.
+        # Branch identity remains node-based in TrackHypothesisNode ancestry.
         track = self._reconstruct_track_from_leaf_node(leaf_node)
         multi = self.hypothesiser.hypothesise(track, ctx.detections, ctx.timestamp)
         singles = list(multi)
@@ -1101,7 +1165,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 best[sig] = gh
         return list(best.values())
 
-    # Birth Handling Helpers
+    # Births / External Starts Helpers
 
     def _residual_detections(
         self,
@@ -1562,7 +1626,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         return boundary_scan_index, tracks_in_scope, len(committed)
 
-    # Node/Track Lifecycle Helpers
+    # Node Lifecycle Helpers
 
     def _allocate_node_id(self) -> int:
         node_id = self._next_node_id
@@ -1594,6 +1658,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         birth_scan_index: int,
         track_metadata: dict[str, object] | None = None,
     ) -> TrackHypothesisNode:
+        """Create and register one node.
+
+        ``track_metadata`` is compatibility residue for reconstructed Track views.
+        Core branching logic does not depend on metadata contents.
+        """
         if parent is not None and parent.track_id != track_id:
             raise ValueError(
                 "TrackHypothesisNode parent.track_id must match child track_id."
@@ -1670,17 +1739,20 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         lineage.reverse()
         return lineage
 
+    # Compatibility Adapter Helpers
+
     def _reconstruct_track_from_leaf_node(
         self, leaf_node: TrackHypothesisNode
     ) -> Track:
         """
-        Transitional adapter boundary: reconstruct a Stone Soup Track from node ancestry.
+        Reconstruct a Stone Soup Track compatibility view from node ancestry.
 
-        Internal branch identity remains node-based; this view exists for compatibility
-        with APIs that currently expect Track instances.
+        Internal branch identity stays node-based (leaf node IDs + parent links).
+        This adapter exists for APIs that currently expect Track instances.
         """
         lineage = self._lineage_from_leaf_node(leaf_node)
         tr = Track([node.state for node in lineage])
+        # Compatibility residue projection for consumers expecting Track.metadata.
         tr.metadata.update(leaf_node.track_metadata)
         tr.metadata["track_id"] = int(leaf_node.track_id)
         tr.metadata["node_id"] = int(leaf_node.node_id)
@@ -1696,6 +1768,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _make_external_start_template(
         self, start: Track, time: datetime.datetime
     ) -> TrackHypothesisNode:
+        """Convert one confirmed external start Track into a root node template."""
         if len(start) == 0:
             raise ValueError(
                 "External starts must contain at least one state at the current timestamp."
@@ -1731,6 +1804,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     def _validate_external_starts_timestamp(self, time: datetime.datetime) -> None:
+        """Validate add_external_starts(...) call ordering and timestamp match."""
         if not isinstance(time, datetime.datetime):
             raise TypeError(
                 "add_external_starts() time must be a datetime.datetime instance."
@@ -1746,7 +1820,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 f"got {time!r}."
             )
 
-    # Debug Display Helpers
+    # Diagnostics / Debug Helpers
 
     def _display_global_hypotheses(self, det_list: list[Detection]) -> None:
         for gh in self.global_hypotheses[: self.params.debug_globals_max]:

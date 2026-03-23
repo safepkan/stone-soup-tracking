@@ -130,7 +130,7 @@ Primary goal:
 
 Likely items:
 - tighten docstrings and comments around the node model, MAP views, and N-scan commitment timing,
-- clarify compatibility boundaries (reconstructed `Track` views, `track_metadata`, legacy parameter/defaulting behavior),
+- clarify compatibility boundaries (reconstructed `Track` views, `track_metadata`, `ns_scan_window` behavior),
 - simplify or rename helpers where that materially improves readability,
 - keep cleanup disciplined and presentation-driven rather than open-ended.
 

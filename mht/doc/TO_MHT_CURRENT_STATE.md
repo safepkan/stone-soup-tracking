@@ -6,6 +6,7 @@ It replaces the earlier pre-Phase-B description in which globals still stored co
 
 ## Recent updates
 
+- 2026-03-23: removed legacy `TOMHTParams.assoc_history_len`; `ns_scan_window` is now the only N-scan window parameter.
 - 2026-03-22: added explicit TOMHT-facing helper `get_tomht_track_id(track)` in `mht/tomht_tracker.py` for extracting stable logical IDs from `TOMHTTracker` output tracks.
 - 2026-03-22: tracker-construction helpers `build_tomht_linear()` and `build_tomht_ukf()` were moved out of `mht/tomht_tracker.py` into `mht/helpers/tracker_builders.py`; `TOMHTTracker` now type-hints `initiator` as generic Stone Soup `Initiator` instead of `SimpleMeasurementInitiator`.
 - 2026-03-22: legacy MFA baseline scaffolding was moved from `mht/mfa` to `archive/mfa` to keep inactive/reference code out of the active TO-MHT package path.
@@ -164,11 +165,10 @@ The tracker does not yet maintain a separate committed-history store, committed-
 
 Committed branch decisions are now explicit, but committed output materialisation is still a later-phase design question.
 
-### Some compatibility knobs remain
+### N-scan window configuration is now single-knob
 
-`assoc_history` metadata projection has been removed, but `assoc_history_len` still exists in `TOMHTParams` as a legacy compatibility/defaulting knob for `ns_scan_window` when `ns_scan_window <= 0`.
-
-This is not harmful, but it is a leftover compatibility feature rather than a clean long-term concept.
+`TOMHTParams.ns_scan_window` is now the sole N-scan window parameter.
+Its default is `3`.
 
 ### Performance has not been the focus yet
 
@@ -216,7 +216,6 @@ To be explicit about the remaining shortcomings:
 - `track_metadata` is still propagated on nodes,
 - node lifecycle / GC is not yet designed or implemented,
 - committed-history output/materialisation does not exist,
-- the `assoc_history_len` parameter is still a legacy compatibility relic,
 - performance/efficiency has not yet been revisited after the structural refactor.
 
 None of these invalidate the Phase B result, but they are the main remaining sources of technical awkwardness.
