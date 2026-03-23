@@ -6,6 +6,7 @@ It replaces the earlier pre-Phase-B description in which globals still stored co
 
 ## Recent updates
 
+- 2026-03-23: extracted Stone Soup output/adapter helpers from `mht/tomht_tracker.py` into `mht/tomht_output.py` (`lineage_from_leaf_node`, explicit output metadata projection, and `Track` reconstruction from a leaf node). `TOMHTTracker` keeps the same public APIs and calls these helpers at the output/hypothesiser boundary.
 - 2026-03-23: extracted core passive data-structure dataclasses (`TrackHypothesisNode`, `GlobalHypothesis`, `ChildCandidate`, `MAPHypothesisSnapshot`, `NScanCommitmentSnapshot`) from `mht/tomht_tracker.py` into `mht/tomht_model.py`; `ScanContext` and `ScanStats` remain in `mht/tomht_tracker.py`.
 - 2026-03-23: removed `TrackHypothesisNode.track_metadata`; opaque metadata bags are no longer propagated through node ancestry, and reconstructed `Track.metadata` now contains explicit TOMHT-owned keys only.
 - 2026-03-23: removed legacy `TOMHTParams.assoc_history_len`; `ns_scan_window` is now the only N-scan window parameter.

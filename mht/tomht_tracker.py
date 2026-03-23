@@ -58,6 +58,7 @@ from mht.tomht_model import (
     NScanCommitmentSnapshot,
     TrackHypothesisNode,
 )
+from mht.tomht_output import reconstruct_track_from_leaf_node
 
 ASSOC_PAD = -1
 ASSOC_MISS = -2
@@ -566,7 +567,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         if map_snapshot is None:
             return set()
         return {
-            self._reconstruct_track_from_leaf_node(leaf_node)
+            reconstruct_track_from_leaf_node(leaf_node)
             for leaf_node in map_snapshot.leaf_nodes_by_track_id.values()
         }
 
@@ -994,7 +995,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> list[ChildCandidate]:
         # Compatibility boundary: hypothesiser/updater still consume Track views.
         # Branch identity remains node-based in TrackHypothesisNode ancestry.
-        track = self._reconstruct_track_from_leaf_node(leaf_node)
+        track = reconstruct_track_from_leaf_node(leaf_node)
         multi = self.hypothesiser.hypothesise(track, ctx.detections, ctx.timestamp)
         singles = list(multi)
 
@@ -1693,71 +1694,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             root_source=root_source,
             birth_scan_index=scan_index,
         )
-
-    def _lineage_from_leaf_node(
-        self, leaf_node: TrackHypothesisNode
-    ) -> list[TrackHypothesisNode]:
-        lineage: list[TrackHypothesisNode] = []
-        node: TrackHypothesisNode | None = leaf_node
-        while node is not None:
-            lineage.append(node)
-            node = node.parent
-        lineage.reverse()
-        return lineage
-
-    # Compatibility Adapter Helpers
-
-    @staticmethod
-    def _output_track_metadata_from_leaf_node(
-        leaf_node: TrackHypothesisNode,
-    ) -> dict[str, object]:
-        """
-        Build the explicit TOMHT-owned metadata projection for a reconstructed output
-        Track.
-
-        This helper defines the metadata contract for Track objects returned from the
-        tracker. The metadata is derived from the current leaf node and is intended
-        for lightweight observability, debugging, and downstream inspection of the
-        MAP output.
-
-        Important:
-        - This is an explicit projection from the internal node state.
-        - Arbitrary metadata from input birth tracks or external-start tracks is
-        intentionally not propagated.
-        - ``track_id`` is the stable logical-track identifier exposed on output
-        tracks.
-        - The remaining keys are diagnostic/inspection fields describing the current
-        leaf node and its cached maintenance/provenance state.
-
-        Keeping this projection explicit makes the Stone Soup boundary easier to
-        reason about and avoids carrying opaque metadata through the internal
-        node-based hypothesis structure.
-        """
-        return {
-            "track_id": int(leaf_node.track_id),
-            "node_id": int(leaf_node.node_id),
-            "age": int(leaf_node.age),
-            "hits": int(leaf_node.hits),
-            "missed_count": int(leaf_node.missed_count),
-            "last_det_key": leaf_node.last_det_key,
-            "last_det_hit": bool(leaf_node.last_det_hit),
-            "root_source": leaf_node.root_source,
-            "birth_scan_index": int(leaf_node.birth_scan_index),
-        }
-
-    def _reconstruct_track_from_leaf_node(
-        self, leaf_node: TrackHypothesisNode
-    ) -> Track:
-        """
-        Reconstruct a Stone Soup Track compatibility view from node ancestry.
-
-        Internal branch identity stays node-based (leaf node IDs + parent links).
-        This adapter exists for APIs that currently expect Track instances.
-        """
-        lineage = self._lineage_from_leaf_node(leaf_node)
-        tr = Track([node.state for node in lineage])
-        tr.metadata.update(self._output_track_metadata_from_leaf_node(leaf_node))
-        return tr
 
     def _make_external_start_template(
         self, start: Track, time: datetime.datetime
