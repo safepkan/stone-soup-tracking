@@ -913,8 +913,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         Update tracker-owned N-scan commitment state for this scan.
 
         Runs after beam pruning and before births, using boundary b = k - N.
+
         Physical cleanup/GC is intentionally deferred; this function only records
-        commitment agreement state.
+        commitment agreement state. In the current implementation, committed ancestry is
+        not physically pruned or compacted here: active leaf nodes still retain parent
+        links to older history, and commitment only changes what is considered resolved,
+        not what remains stored in memory.
         """
         boundary_scan_index = int(scan_index) - int(self.params.ns_scan_window)
         self._last_nscan_boundary_scan_index = boundary_scan_index

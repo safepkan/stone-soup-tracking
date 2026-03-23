@@ -163,6 +163,8 @@ In particular, the current implementation does **not** yet:
 - compact committed prefixes,
 - or use commitment state to shrink memory structurally.
 
+In practice, active leaf nodes still retain parent links to older ancestry; commitment state affects what is considered logically resolved, but does not yet reclaim or compact that history.
+
 This was an intentional Phase B non-goal.
 
 ### Committed-history materialisation is still deferred
