@@ -491,6 +491,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         This is the primary operational entry point. The returned tracks are the
         current MAP output as reconstructed Stone Soup ``Track`` objects.
+        MAP here means maximum a posteriori, i.e. the highest-weight current
+        global hypothesis.
         If externally confirmed starts exist at this timestamp, call
         ``add_external_starts(time,starts)`` after this method for the same
         ``time``.
@@ -505,6 +507,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         7. Optionally apply internal births from residual detections.
         8. Return current MAP output tracks.
         """
+        # Setup / preparation.
         scan_wall_start_ns = wall_clock.perf_counter_ns()
         self._last_unused_detections = []
         globals_in = len(self.global_hypotheses)
@@ -523,8 +526,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             det_index_by_obj=det_index_by_obj,
         )
 
-        # Scan pipeline order (same as docstring): sort detections -> expand ->
-        # unused-score -> dedupe -> beam -> N-scan commitment -> births -> MAP output.
+        # Core scan pipeline:
+        # sort detections -> expand -> unused-score -> dedupe -> beam ->
+        # N-scan commitment -> bounded birth phase -> MAP output.
 
         # Expand globals with current batch of detections
         expanded: list[GlobalHypothesis] = []
@@ -553,8 +557,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             post_beam_globals=self.global_hypotheses,
         )
 
-        # Births: run initiator once on residual detections, then branch globals with/without births.
+        # Births run as a separate bounded phase after continuation/beam/N-scan:
+        # residual detections are processed once, with per-scan birth limits and
+        # post-branch beam truncation enforced in the birth path.
         birth_stats = self._branch_globals_with_births(ctx)
+
+        # Post-pipeline bookkeeping and instrumentation.
         scan_wall_ms = (wall_clock.perf_counter_ns() - scan_wall_start_ns) / 1e6
         maxrss_mb = self._get_process_maxrss_mb()
         node_count_total = len(self._nodes_by_id)
@@ -582,8 +590,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._last_update_timestamp = time
         self._last_scan_index = scan_index
 
-        # Output MAP global hypothesis
-        return time, self.get_map_output_tracks()
+        # Explicit MAP output step (maximum a posteriori / highest-weight global).
+        map_output_tracks = self.get_map_output_tracks()
+        return time, map_output_tracks
 
     def add_external_starts(
         self, time: datetime.datetime, starts: Iterable[Track]
