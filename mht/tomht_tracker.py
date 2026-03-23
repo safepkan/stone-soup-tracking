@@ -64,7 +64,9 @@ ASSOC_PAD = -1
 ASSOC_MISS = -2
 
 
-# Core Data Structures
+# ============================================================================
+# Tracker-Local Support Structures / Params
+# ============================================================================
 
 
 @dataclass(frozen=True)
@@ -156,6 +158,11 @@ class ScanStats:
     map_unused: int
     map_miss_hist: dict[int, int]
     map_mean_hit_rate: float
+
+
+# ============================================================================
+# Scoring Model Contract / Default
+# ============================================================================
 
 
 class ScoringModel(Protocol):
@@ -258,6 +265,11 @@ class BetaRatioScoringModel:
         return -self.birth_log_penalty
 
 
+# ============================================================================
+# Tracker Implementation
+# ============================================================================
+
+
 class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     """Public TO-MHT tracker contract with Stone Soup boundary objects.
 
@@ -296,7 +308,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     _committed_boundary_by_track_id: dict[int, int]
     _committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
 
-    # Tracker Class / Public API
+    # =========================================================================
+    # Public API
+    # =========================================================================
+    #
+    # Class roadmap:
+    # 1) Public API + top-level scan pipeline.
+    # 2) Scan pipeline support (ordering, stats, instrumentation).
+    # 3) Continuation/expansion and dedupe/beam/N-scan helpers.
+    # 4) Internal birth helpers.
+    # 5) Node lifecycle and external-start helpers.
+    # 6) Diagnostics/debug helpers.
 
     def __init__(
         self,
@@ -696,7 +718,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             f"miss_hist={miss_hist_str}"
         )
 
-    # Scan Pipeline Helpers
+    # =========================================================================
+    # Scan Pipeline Support
+    # =========================================================================
+    # Detection ordering plus per-scan stats/instrumentation emission.
 
     @staticmethod
     def _det_sort_key(det: Detection) -> tuple:
@@ -926,6 +951,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 f"SCAN_MAP_MISS_HIST t={timestamp} miss_hist={scan_stats.map_miss_hist}"
             )
 
+    # Shared detection-usage utilities.
+
     def _used_det_keys_for_leaf_nodes(
         self, leaf_nodes_by_track_id: Mapping[int, TrackHypothesisNode]
     ) -> set[int]:
@@ -938,7 +965,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _used_det_keys_in_global(self, gh: GlobalHypothesis) -> set[int]:
         return self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id)
 
-    # Branching / Expansion Helpers
+    # =========================================================================
+    # Continuation / Expansion Helpers
+    # =========================================================================
+    # Local per-track continuation candidate generation.
 
     def _candidate_from_hypothesis(
         self,
@@ -1046,6 +1076,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         candidates.sort(key=lambda c: c.log_delta, reverse=True)
         return candidates
 
+    # Joint global expansion under exclusivity constraints.
+
     def _expand_global_hypothesis(
         self,
         gh: GlobalHypothesis,
@@ -1102,6 +1134,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         backtrack(0, set(), dict(), gh.log_weight)
         return new_globals
 
+    # Dedupe / beam / unused-detection score helpers.
+
     def _apply_unused_detection_penalty(
         self,
         gh: GlobalHypothesis,
@@ -1145,7 +1179,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 best[sig] = gh
         return list(best.values())
 
-    # Births / External Starts Helpers
+    # =========================================================================
+    # Internal Birth Helpers
+    # =========================================================================
+    # Internal birth branching from residual detections.
 
     def _residual_detections(
         self,
@@ -1353,6 +1390,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             if template.used_det_key is None or template.used_det_key not in used_in_gh
         ]
 
+    # Branching globals with compatible birth templates.
+
     def _branch_global_with_birth_templates(
         self,
         gh: GlobalHypothesis,
@@ -1430,6 +1469,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         return birth_track_instances_in_beam, globals_with_birth
 
+    # Birth phase entrypoint (invoked once per scan after beam/N-scan).
+
     def _branch_globals_with_births(
         self,
         ctx: ScanContext,
@@ -1485,7 +1526,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             globals_after_births=len(self.global_hypotheses),
         )
 
+    # =========================================================================
     # N-Scan Commitment Helpers
+    # =========================================================================
+    # Ancestor-based commitment at boundary b = k - N.
+    # Pipeline note: update_tracker() applies this before the birth phase.
 
     def _ancestor_at_scan_boundary(
         self,
@@ -1605,7 +1650,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         return boundary_scan_index, tracks_in_scope, len(committed)
 
+    # =========================================================================
     # Node Lifecycle Helpers
+    # =========================================================================
 
     def _allocate_node_id(self) -> int:
         node_id = self._next_node_id
@@ -1695,6 +1742,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             birth_scan_index=scan_index,
         )
 
+    # =========================================================================
+    # External-Start Helpers
+    # =========================================================================
+
     def _make_external_start_template(
         self, start: Track, time: datetime.datetime
     ) -> TrackHypothesisNode:
@@ -1749,7 +1800,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 f"got {time!r}."
             )
 
+    # =========================================================================
     # Diagnostics / Debug Helpers
+    # =========================================================================
 
     def _display_global_hypotheses(self, det_list: list[Detection]) -> None:
         for gh in self.global_hypotheses[: self.params.debug_globals_max]:
@@ -1809,6 +1862,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         y = float(sv[2, 0])
         vy = float(sv[3, 0])
         return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
+
+
+# ============================================================================
+# Public TOMHT Utility
+# ============================================================================
 
 
 def get_tomht_track_id(track: Track) -> int:
