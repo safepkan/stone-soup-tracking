@@ -123,8 +123,6 @@ class TrackHypothesisNode:
     - ``root_source``: Origin label (for example internal birth vs external start).
     - ``birth_scan_index``: Scan index where this logical track chain started.
 
-    Compatibility residue (adapter boundary support, not core TO-MHT structure):
-    - ``track_metadata``: Metadata carried for reconstructed Stone Soup ``Track``s.
     """
 
     # Core structural identity + ancestry + per-step payload.
@@ -149,9 +147,6 @@ class TrackHypothesisNode:
     # Instrumentation/provenance fields (useful in debug output and snapshots).
     root_source: str
     birth_scan_index: int
-
-    # Compatibility residue for Track reconstruction adapters.
-    track_metadata: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -1398,7 +1393,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 age=1,
                 hits=1 if used_key is not None else 0,
                 root_source="internal_birth",
-                track_metadata=dict(tr.metadata),
             )
             birth_templates.append(
                 BirthTemplate(
@@ -1726,20 +1720,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         last_det_hit: bool,
         root_source: str,
         birth_scan_index: int,
-        track_metadata: dict[str, object] | None = None,
     ) -> TrackHypothesisNode:
-        """Create and register one node.
-
-        ``track_metadata`` is compatibility residue for reconstructed Track views.
-        Core branching logic does not depend on metadata contents.
-        """
+        """Create and register one node."""
         if parent is not None and parent.track_id != track_id:
             raise ValueError(
                 "TrackHypothesisNode parent.track_id must match child track_id."
-            )
-        if track_metadata is None:
-            track_metadata = (
-                dict(parent.track_metadata) if parent is not None else dict()
             )
         node = TrackHypothesisNode(
             node_id=self._allocate_node_id(),
@@ -1759,7 +1744,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             last_det_hit=bool(last_det_hit),
             root_source=root_source,
             birth_scan_index=int(birth_scan_index),
-            track_metadata=dict(track_metadata),
         )
         return self._register_node(node)
 
@@ -1776,7 +1760,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         age: int,
         hits: int,
         root_source: str,
-        track_metadata: dict[str, object] | None = None,
     ) -> TrackHypothesisNode:
         return self._create_track_hypothesis_node(
             track_id=track_id,
@@ -1795,7 +1778,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             last_det_hit=used_det_key is not None,
             root_source=root_source,
             birth_scan_index=scan_index,
-            track_metadata=track_metadata,
         )
 
     def _lineage_from_leaf_node(
@@ -1811,6 +1793,44 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     # Compatibility Adapter Helpers
 
+    @staticmethod
+    def _output_track_metadata_from_leaf_node(
+        leaf_node: TrackHypothesisNode,
+    ) -> dict[str, object]:
+        """
+        Build the explicit TOMHT-owned metadata projection for a reconstructed output
+        Track.
+
+        This helper defines the metadata contract for Track objects returned from the
+        tracker. The metadata is derived from the current leaf node and is intended
+        for lightweight observability, debugging, and downstream inspection of the
+        MAP output.
+
+        Important:
+        - This is an explicit projection from the internal node state.
+        - Arbitrary metadata from input birth tracks or external-start tracks is
+        intentionally not propagated.
+        - ``track_id`` is the stable logical-track identifier exposed on output
+        tracks.
+        - The remaining keys are diagnostic/inspection fields describing the current
+        leaf node and its cached maintenance/provenance state.
+
+        Keeping this projection explicit makes the Stone Soup boundary easier to
+        reason about and avoids carrying opaque metadata through the internal
+        node-based hypothesis structure.
+        """
+        return {
+            "track_id": int(leaf_node.track_id),
+            "node_id": int(leaf_node.node_id),
+            "age": int(leaf_node.age),
+            "hits": int(leaf_node.hits),
+            "missed_count": int(leaf_node.missed_count),
+            "last_det_key": leaf_node.last_det_key,
+            "last_det_hit": bool(leaf_node.last_det_hit),
+            "root_source": leaf_node.root_source,
+            "birth_scan_index": int(leaf_node.birth_scan_index),
+        }
+
     def _reconstruct_track_from_leaf_node(
         self, leaf_node: TrackHypothesisNode
     ) -> Track:
@@ -1822,17 +1842,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         """
         lineage = self._lineage_from_leaf_node(leaf_node)
         tr = Track([node.state for node in lineage])
-        # Compatibility residue projection for consumers expecting Track.metadata.
-        tr.metadata.update(leaf_node.track_metadata)
-        tr.metadata["track_id"] = int(leaf_node.track_id)
-        tr.metadata["node_id"] = int(leaf_node.node_id)
-        tr.metadata["age"] = int(leaf_node.age)
-        tr.metadata["hits"] = int(leaf_node.hits)
-        tr.metadata["missed_count"] = int(leaf_node.missed_count)
-        tr.metadata["last_det_key"] = leaf_node.last_det_key
-        tr.metadata["last_det_hit"] = bool(leaf_node.last_det_hit)
-        tr.metadata["root_source"] = leaf_node.root_source
-        tr.metadata["birth_scan_index"] = int(leaf_node.birth_scan_index)
+        tr.metadata.update(self._output_track_metadata_from_leaf_node(leaf_node))
         return tr
 
     def _make_external_start_template(
@@ -1870,7 +1880,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             age=age,
             hits=hits,
             root_source="external_start",
-            track_metadata=dict(start.metadata),
         )
 
     def _validate_external_starts_timestamp(self, time: datetime.datetime) -> None:

@@ -92,7 +92,6 @@ class TOMHTTrackerNScanCommitmentTest(unittest.TestCase):
             last_det_hit=False,
             root_source="test",
             birth_scan_index=birth_scan_index,
-            track_metadata={},
         )
 
     def test_commit_when_surviving_globals_agree_on_boundary_ancestor(self) -> None:

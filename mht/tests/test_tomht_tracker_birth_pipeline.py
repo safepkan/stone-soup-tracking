@@ -129,7 +129,6 @@ def _seed_existing_tracks(tracker: TOMHTTracker, tracks: list[Track]) -> None:
             last_det_hit=bool(track.metadata.get("last_det_hit", False)),
             root_source="seed_existing",
             birth_scan_index=0,
-            track_metadata=dict(track.metadata),
         )
         nodes_by_track_id[track_id] = node
     tracker.global_hypotheses = [
@@ -139,6 +138,22 @@ def _seed_existing_tracks(tracker: TOMHTTracker, tracks: list[Track]) -> None:
         )
     ]
     tracker._next_track_id = (max(nodes_by_track_id) + 1) if nodes_by_track_id else 0
+
+
+def _birth_labels_in_beam(
+    tracker: TOMHTTracker,
+    *,
+    label_by_birth_state_id: dict[int, str],
+) -> set[str]:
+    labels: set[str] = set()
+    for gh in tracker.global_hypotheses:
+        for node in gh.leaf_nodes_by_track_id.values():
+            if node.root_source != "internal_birth":
+                continue
+            label = label_by_birth_state_id.get(id(node.state))
+            if label is not None:
+                labels.add(label)
+    return labels
 
 
 class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
@@ -157,6 +172,11 @@ class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
         rank_a.metadata["used"] = 0
         rank_b.metadata["used"] = 1
         rank_c.metadata["used"] = 0
+        label_by_birth_state_id = {
+            id(rank_a.states[-1]): "A",
+            id(rank_b.states[-1]): "B",
+            id(rank_c.states[-1]): "C",
+        }
 
         tracker = _build_tracker(
             initiator=_MultiBirthInitiator([rank_c, rank_b, rank_a]),
@@ -191,11 +211,10 @@ class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
         ):
             stats = tracker._branch_globals_with_births(ctx)
 
-        labels_in_beam = {
-            node.track_metadata.get("label")
-            for gh in tracker.global_hypotheses
-            for node in gh.leaf_nodes_by_track_id.values()
-        }
+        labels_in_beam = _birth_labels_in_beam(
+            tracker,
+            label_by_birth_state_id=label_by_birth_state_id,
+        )
         self.assertEqual({"A", "B"}, labels_in_beam)
         self.assertNotIn("C", labels_in_beam)
         self.assertEqual(3, len(tracker.global_hypotheses))
@@ -215,6 +234,10 @@ class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
         birth_ok.metadata["cov"] = 1.0
         birth_conflict.metadata["used"] = 0
         birth_ok.metadata["used"] = 1
+        label_by_birth_state_id = {
+            id(birth_conflict.states[-1]): "CONFLICTS",
+            id(birth_ok.states[-1]): "OK",
+        }
 
         tracker = _build_tracker(
             initiator=_MultiBirthInitiator([birth_conflict, birth_ok]),
@@ -258,12 +281,10 @@ class TOMHTTrackerBirthPipelineTest(unittest.TestCase):
             [0.0, -1.0],
             [gh.log_weight for gh in tracker.global_hypotheses],
         )
-        labels_in_beam = {
-            node.track_metadata.get("label")
-            for gh in tracker.global_hypotheses
-            for node in gh.leaf_nodes_by_track_id.values()
-            if node.track_metadata.get("label") is not None
-        }
+        labels_in_beam = _birth_labels_in_beam(
+            tracker,
+            label_by_birth_state_id=label_by_birth_state_id,
+        )
         self.assertEqual({"OK"}, labels_in_beam)
         self.assertNotIn("CONFLICTS", labels_in_beam)
         self.assertEqual(2, stats.birth_tracks_created)

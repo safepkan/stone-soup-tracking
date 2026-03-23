@@ -6,6 +6,7 @@ It replaces the earlier pre-Phase-B description in which globals still stored co
 
 ## Recent updates
 
+- 2026-03-23: removed `TrackHypothesisNode.track_metadata`; opaque metadata bags are no longer propagated through node ancestry, and reconstructed `Track.metadata` now contains explicit TOMHT-owned keys only.
 - 2026-03-23: removed legacy `TOMHTParams.assoc_history_len`; `ns_scan_window` is now the only N-scan window parameter.
 - 2026-03-22: added explicit TOMHT-facing helper `get_tomht_track_id(track)` in `mht/tomht_tracker.py` for extracting stable logical IDs from `TOMHTTracker` output tracks.
 - 2026-03-22: tracker-construction helpers `build_tomht_linear()` and `build_tomht_ukf()` were moved out of `mht/tomht_tracker.py` into `mht/helpers/tracker_builders.py`; `TOMHTTracker` now type-hints `initiator` as generic Stone Soup `Initiator` instead of `SimpleMeasurementInitiator`.
@@ -140,13 +141,10 @@ The tracker still reconstructs temporary Stone Soup `Track` objects from leaf-no
 
 This is acceptable for now, but it is still a compatibility boundary rather than the ideal end-state.
 
-### `track_metadata` is still carried on nodes
+### Reconstructed `Track.metadata` is now explicit
 
-`TrackHypothesisNode` still carries a `track_metadata` dict, and reconstructed `Track.metadata` is still partly projected from it.
-
-This is now mostly a compatibility residue rather than a core architectural concept.
-
-It does not block the current structure from being a real node-based TO-MHT, but it is one of the clearest remaining pieces of “old world” flavor in the implementation.
+`TrackHypothesisNode` no longer carries an opaque metadata bag.
+Reconstructed compatibility `Track` outputs now project explicit TOMHT-owned metadata keys only (for example `track_id`, node/counter/debug fields), instead of carrying through arbitrary input metadata.
 
 ### Physical node cleanup / GC is still deferred
 
@@ -213,7 +211,6 @@ That remains important because the new structure is more correct, but it also ne
 To be explicit about the remaining shortcomings:
 
 - reconstructed `Track` views are still used at several compatibility boundaries,
-- `track_metadata` is still propagated on nodes,
 - node lifecycle / GC is not yet designed or implemented,
 - committed-history output/materialisation does not exist,
 - performance/efficiency has not yet been revisited after the structural refactor.

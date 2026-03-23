@@ -179,12 +179,11 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             mutable_view[0] = cast(TrackHypothesisNode, object())
 
-    def test_internal_birth_inserted_track_metadata_uses_shared_conventions(
+    def test_internal_birth_inserted_node_uses_shared_conventions(
         self,
     ) -> None:
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
         birth_track = _external_start(timestamp)
-        birth_track.metadata["source"] = "initiator"
         tracker = _build_tracker(
             initiator=cast(
                 SimpleMeasurementInitiator,
@@ -214,7 +213,6 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
             last_det_hit=False,
             root_source="internal_birth",
         )
-        self.assertEqual("initiator", inserted_node.track_metadata["source"])
 
     def test_add_external_starts_rejects_call_before_update_tracker(self) -> None:
         tracker = _build_tracker()
@@ -330,7 +328,9 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         self.assertEqual(before_next_track_id, tracker._next_track_id)
         self.assertEqual(before_globals, after_globals)
 
-    def test_inserted_external_start_metadata_is_initialised(self) -> None:
+    def test_inserted_external_start_node_and_output_metadata_are_initialised(
+        self,
+    ) -> None:
         tracker = _build_tracker()
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
         external_start = _external_start(timestamp)
@@ -353,7 +353,48 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
             last_det_hit=False,
             root_source="external_start",
         )
-        self.assertEqual("upstream", inserted_node.track_metadata["source"])
+
+        output_tracks = tracker.get_map_output_tracks()
+        self.assertEqual(1, len(output_tracks))
+        output_track = next(iter(output_tracks))
+        self.assertEqual(inserted_node.track_id, output_track.metadata["track_id"])
+        self.assertEqual(inserted_node.node_id, output_track.metadata["node_id"])
+        self.assertEqual(
+            inserted_node.root_source, output_track.metadata["root_source"]
+        )
+        self.assertNotIn("source", output_track.metadata)
+
+    def test_arbitrary_input_metadata_is_not_propagated_to_output_tracks(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+
+        # Internal-birth path.
+        birth_track = _external_start(timestamp)
+        birth_track.metadata["opaque_birth_tag"] = "discard-me"
+        birth_tracker = _build_tracker(
+            initiator=cast(
+                SimpleMeasurementInitiator,
+                _SingleBirthInitiator(birth_track),
+            )
+        )
+        detection = Detection(np.array([[1.0], [2.0]]), timestamp=timestamp)
+        ctx = ScanContext(
+            scan_index=0,
+            timestamp=timestamp,
+            detections=[detection],
+            det_index_by_obj={id(detection): 0},
+        )
+        birth_tracker._branch_globals_with_births(ctx)
+        birth_output = next(iter(birth_tracker.get_map_output_tracks()))
+        self.assertNotIn("opaque_birth_tag", birth_output.metadata)
+
+        # External-start path.
+        external_tracker = _build_tracker()
+        external_start = _external_start(timestamp)
+        external_start.metadata["opaque_external_tag"] = "discard-me-too"
+        external_tracker.update_tracker(timestamp, [])
+        external_tracker.add_external_starts(timestamp, [external_start])
+        external_output = next(iter(external_tracker.get_map_output_tracks()))
+        self.assertNotIn("opaque_external_tag", external_output.metadata)
 
     def test_add_external_starts_repeated_insertion_creates_distinct_tracks(
         self,
