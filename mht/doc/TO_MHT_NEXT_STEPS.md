@@ -18,9 +18,11 @@ Status note (2026-03-22):
 - TO-MHT tracker-construction helpers (`build_tomht_linear()` / `build_tomht_ukf()`) were moved from `mht/tomht_tracker.py` to `mht/helpers/tracker_builders.py`; `TOMHTTracker` now uses a generic Stone Soup `Initiator` type hint.
 
 Status note (2026-03-23):
+- follow-up low-risk readability/modularization pass completed: passive scan stats/reporting pieces (`ScanStats`, `BirthStats`, aggregate summary printing) moved from `mht/tomht_tracker.py` into `mht/tomht_stats.py`, while scan-time instrumentation plumbing remains in `TOMHTTracker`.
+- class-level helper sections in `mht/tomht_tracker.py` were conservatively reordered to better match runtime/conceptual flow (notably N-scan helpers now appear before birth helpers).
 - low-risk in-file navigation/readability pass completed in `mht/tomht_tracker.py`: stronger section banners, compact class roadmap comment, and helper-cluster role headers; no behavior or algorithm changes.
 - as a low-risk readability/modularization step, core passive data-structure dataclasses were extracted from `mht/tomht_tracker.py` into `mht/tomht_model.py` (`TrackHypothesisNode`, `GlobalHypothesis`, `ChildCandidate`, `MAPHypothesisSnapshot`, `NScanCommitmentSnapshot`).
-- `ScanContext` and `ScanStats` intentionally remain in `mht/tomht_tracker.py` for now.
+- `ScanContext` intentionally remains in `mht/tomht_tracker.py`; passive `ScanStats`/`BirthStats` and aggregate summary reporting now live in `mht/tomht_stats.py`.
 - as a small boundary split, Stone Soup output/adapter helpers were extracted from `mht/tomht_tracker.py` into `mht/tomht_output.py` (lineage extraction, explicit output metadata projection, and `Track` reconstruction from a leaf node).
 
 ## Working checklist
