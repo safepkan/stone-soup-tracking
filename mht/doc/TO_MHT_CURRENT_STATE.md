@@ -6,6 +6,7 @@ It replaces the earlier pre-Phase-B description in which globals still stored co
 
 ## Recent updates
 
+- 2026-03-23: completed one more low-risk readability split: moved scoring contract/default (`ScoringModel`, `BetaRatioScoringModel`) from `mht/tomht_tracker.py` into new `mht/tomht_scoring.py`; `TOMHTTracker` still owns scoring-mode parameter wiring/default construction in `__init__`, and scoring behavior is unchanged.
 - 2026-03-23: completed a small stats/reporting split follow-up: moved per-scan stats block rendering/printing from `mht/tomht_tracker.py` into `mht/tomht_stats.py` (`print_scan_stats(...)`), while `TOMHTTracker` still builds `ScanStats` and controls when scan stats are displayed.
 - 2026-03-23: follow-up low-risk readability/modularization pass: moved passive scan stats/reporting pieces (`ScanStats`, `BirthStats`, aggregate `print_summary_stats` logic) from `mht/tomht_tracker.py` into new `mht/tomht_stats.py`, and did a conservative class-section reorder so major helper groups read closer to runtime flow (notably N-scan helpers now appear before birth helpers).
 - 2026-03-23: performed a low-risk in-file navigation/readability pass in `mht/tomht_tracker.py` (heavier section banners, compact class roadmap comment, and helper-cluster role headers) with no algorithmic or behavioral changes.

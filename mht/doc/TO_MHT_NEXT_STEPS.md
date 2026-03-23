@@ -18,6 +18,7 @@ Status note (2026-03-22):
 - TO-MHT tracker-construction helpers (`build_tomht_linear()` / `build_tomht_ukf()`) were moved from `mht/tomht_tracker.py` to `mht/helpers/tracker_builders.py`; `TOMHTTracker` now uses a generic Stone Soup `Initiator` type hint.
 
 Status note (2026-03-23):
+- completed one more low-risk readability/modularization split: extracted scoring contract/default (`ScoringModel`, `BetaRatioScoringModel`) from `mht/tomht_tracker.py` into new `mht/tomht_scoring.py`; tracker-side scoring-mode/default construction in `TOMHTTracker.__init__` stayed in place and behavior was unchanged.
 - completed one more narrow split in scan instrumentation/reporting: per-scan stats block rendering/printing moved from `mht/tomht_tracker.py` into `mht/tomht_stats.py` (`print_scan_stats(...)`); tracker-side scan pipeline and display decision flow remain in `TOMHTTracker`.
 - follow-up low-risk readability/modularization pass completed: passive scan stats/reporting pieces (`ScanStats`, `BirthStats`, aggregate summary printing) moved from `mht/tomht_tracker.py` into `mht/tomht_stats.py`, while scan-time instrumentation plumbing remains in `TOMHTTracker`.
 - class-level helper sections in `mht/tomht_tracker.py` were conservatively reordered to better match runtime/conceptual flow (notably N-scan helpers now appear before birth helpers).
