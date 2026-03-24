@@ -211,6 +211,72 @@ class TOMHTTrackerNScanCommitmentTest(unittest.TestCase):
         snapshot = tracker.get_n_scan_commitment_snapshot()
         self.assertNotIn(track_id, snapshot.latest_committed_ancestor_by_track_id)
 
+    def test_cleanup_reclaims_nodes_not_reachable_from_active_or_committed_refs(
+        self,
+    ) -> None:
+        tracker = self._build_tracker(ns_scan_window=2)
+
+        active_track_id = 7
+        active_root = self._make_node(
+            tracker, track_id=active_track_id, scan_index=0, parent=None
+        )
+        active_mid = self._make_node(
+            tracker, track_id=active_track_id, scan_index=1, parent=active_root
+        )
+        active_leaf = self._make_node(
+            tracker, track_id=active_track_id, scan_index=2, parent=active_mid
+        )
+
+        orphan_track_id = 99
+        orphan_root = self._make_node(
+            tracker, track_id=orphan_track_id, scan_index=0, parent=None
+        )
+        orphan_leaf = self._make_node(
+            tracker, track_id=orphan_track_id, scan_index=1, parent=orphan_root
+        )
+
+        tracker.global_hypotheses = [
+            GlobalHypothesis({active_track_id: active_leaf}, log_weight=0.0)
+        ]
+        tracker._cleanup_committed_ancestry()
+
+        retained_ids = set(tracker._nodes_by_id.keys())
+        self.assertIn(active_root.node_id, retained_ids)
+        self.assertIn(active_mid.node_id, retained_ids)
+        self.assertIn(active_leaf.node_id, retained_ids)
+        self.assertNotIn(orphan_root.node_id, retained_ids)
+        self.assertNotIn(orphan_leaf.node_id, retained_ids)
+
+    def test_cleanup_retains_nodes_referenced_by_commitment_bookkeeping(self) -> None:
+        tracker = self._build_tracker(ns_scan_window=2)
+
+        active_track_id = 3
+        active_root = self._make_node(
+            tracker, track_id=active_track_id, scan_index=0, parent=None
+        )
+        active_leaf = self._make_node(
+            tracker, track_id=active_track_id, scan_index=1, parent=active_root
+        )
+        tracker.global_hypotheses = [
+            GlobalHypothesis({active_track_id: active_leaf}, log_weight=0.0)
+        ]
+
+        committed_track_id = 44
+        committed_root = self._make_node(
+            tracker, track_id=committed_track_id, scan_index=0, parent=None
+        )
+        committed_node = self._make_node(
+            tracker, track_id=committed_track_id, scan_index=1, parent=committed_root
+        )
+        tracker._committed_boundary_by_track_id[committed_track_id] = 1
+        tracker._committed_ancestor_by_track_id[committed_track_id] = committed_node
+
+        tracker._cleanup_committed_ancestry()
+
+        retained_ids = set(tracker._nodes_by_id.keys())
+        self.assertIn(committed_node.node_id, retained_ids)
+        self.assertIn(committed_root.node_id, retained_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

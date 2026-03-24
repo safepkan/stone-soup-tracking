@@ -6,6 +6,7 @@ It replaces the earlier pre-Phase-B description in which globals still stored co
 
 ## Recent updates
 
+- 2026-03-24: added a narrow post-commit ancestry cleanup pass in `mht/tomht_tracker.py` (`_cleanup_committed_ancestry()`), called immediately after `_update_n_scan_commitment(...)`. Commitment semantics are unchanged; cleanup is intentionally separate and conservative (reclaims only node ancestry unreachable from active leaves and commitment-bookkeeping references).
 - 2026-03-24: focused readability/documentation pass on `TOMHTParams` in `mht/tomht_tracker.py`: expanded class docstring with stable-vs-heuristic guidance, added explicit parameter-group headers (core beam/scoring/N-scan/internal-birth guards/debug), and clarified comments for less-obvious knobs (`prob_gate`, `births_k`, `unused_det_log_penalty`, `birth_log_penalty`) with no behavior/default changes.
 - 2026-03-24: small readability/modularization cleanup in scoring setup: moved default scoring-model construction from hypothesiser attributes and BetaRatio sanity/warning diagnostics out of `TOMHTTracker.__init__` into `mht/tomht_scoring.py` helpers; tracker behavior and scoring semantics are unchanged.
 - 2026-03-24: second readability/navigation pass in the internal birth block in `mht/tomht_tracker.py`: moved the birth-phase sequence note into `_branch_globals_with_births(...)` docstring and added lightweight subgroup headers for residual/proposal, ranking/selection, and template/branching helper clusters; no behavior or birth semantics changed.
@@ -158,18 +159,21 @@ This is acceptable for now, but it is still a compatibility boundary rather than
 `TrackHypothesisNode` no longer carries an opaque metadata bag.
 Reconstructed compatibility `Track` outputs now project explicit TOMHT-owned metadata keys only (for example `track_id`, node/counter/debug fields), instead of carrying through arbitrary input metadata.
 
-### Physical node cleanup / GC is still deferred
+### Physical node cleanup is now narrow and conservative
 
-Commitment semantics are now explicit, but physical node lifecycle cleanup is still deferred.
+Commitment semantics are still explicit and separate from memory policy, and a first narrow cleanup pass now runs after each N-scan commitment update.
 
-In particular, the current implementation does **not** yet:
-- garbage-collect unreachable/orphaned ancestry aggressively,
-- compact committed prefixes,
-- or use commitment state to shrink memory structurally.
+Current cleanup behavior:
+- keeps active leaf ancestry intact (no active-chain truncation),
+- keeps explicitly referenced commitment bookkeeping nodes,
+- removes node-registry entries that are no longer reachable from those retained references.
 
-In practice, active leaf nodes still retain parent links to older ancestry; commitment state affects what is considered logically resolved, but does not yet reclaim or compact that history.
+Still deferred:
+- committed-prefix compaction,
+- committed-history materialisation,
+- broader node-lifecycle redesign beyond conservative reachability cleanup.
 
-This was an intentional Phase B non-goal.
+So memory pressure from unreachable branch history is reduced, while logical commitment behavior and active-leaf semantics remain unchanged.
 
 ### Committed-history materialisation is still deferred
 
@@ -225,7 +229,7 @@ That remains important because the new structure is more correct, but it also ne
 To be explicit about the remaining shortcomings:
 
 - reconstructed `Track` views are still used at several compatibility boundaries,
-- node lifecycle / GC is not yet designed or implemented,
+- node lifecycle policy is still only partially implemented (currently conservative post-commit reachability cleanup only),
 - committed-history output/materialisation does not exist,
 - performance/efficiency has not yet been revisited after the structural refactor.
 

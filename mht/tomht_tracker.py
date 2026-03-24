@@ -376,6 +376,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             scan_index=scan_index,
             post_beam_globals=self.global_hypotheses,
         )
+        # Keep logical commitment and physical cleanup intentionally separate:
+        # commitment computes/records agreement; cleanup only reclaims ancestry
+        # that is no longer reachable from active leaves or commitment refs.
+        self._cleanup_committed_ancestry()
 
         # Births run as a separate bounded phase after continuation/beam/N-scan:
         # residual detections are processed once, with per-scan birth limits and
@@ -950,11 +954,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         Runs after beam pruning and before births, using boundary b = k - N.
 
-        Physical cleanup/GC is intentionally deferred; this function only records
-        commitment agreement state. In the current implementation, committed ancestry is
-        not physically pruned or compacted here: active leaf nodes still retain parent
-        links to older history, and commitment only changes what is considered resolved,
-        not what remains stored in memory.
+        This method is semantic/bookkeeping only: it records commitment
+        agreement state and does not perform ancestry retention decisions.
+        Physical ancestry cleanup is handled by a separate post-commit step in
+        ``update_tracker()``.
         """
         boundary_scan_index = int(scan_index) - int(self.params.ns_scan_window)
         self._last_nscan_boundary_scan_index = boundary_scan_index
@@ -977,6 +980,56 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 self._committed_ancestor_by_track_id[track_id] = ancestor
 
         return boundary_scan_index, tracks_in_scope, len(committed)
+
+    def _reachable_node_ids_from_seeds(
+        self, seeds: Iterable[TrackHypothesisNode]
+    ) -> set[int]:
+        """Return node IDs reachable via parent links from the supplied seeds."""
+        reachable: set[int] = set()
+        stack = list(seeds)
+        while stack:
+            node = stack.pop()
+            node_id = int(node.node_id)
+            if node_id in reachable:
+                continue
+            reachable.add(node_id)
+            if node.parent is not None:
+                stack.append(node.parent)
+        return reachable
+
+    def _cleanup_committed_ancestry(self) -> None:
+        """
+        Conservatively reclaim unreachable node history after commitment update.
+
+        This runs after logical N-scan commitment bookkeeping has been computed.
+        Semantics are unchanged:
+        - active leaves and their full currently linked ancestry are retained,
+        - explicit commitment bookkeeping node references are retained,
+        - only nodes no longer reachable from those retained references are
+          removed from the node registry.
+        """
+        if not self._nodes_by_id:
+            return
+
+        seeds: list[TrackHypothesisNode] = []
+        for gh in self.global_hypotheses:
+            seeds.extend(gh.leaf_nodes_by_track_id.values())
+        seeds.extend(self._last_nscan_committed_ancestor_by_track_id.values())
+        seeds.extend(self._committed_ancestor_by_track_id.values())
+
+        if not seeds:
+            self._nodes_by_id.clear()
+            return
+
+        retained_node_ids = self._reachable_node_ids_from_seeds(seeds)
+        if len(retained_node_ids) == len(self._nodes_by_id):
+            return
+
+        self._nodes_by_id = {
+            node_id: node
+            for node_id, node in self._nodes_by_id.items()
+            if node_id in retained_node_ids
+        }
 
     # =========================================================================
     # Internal Birth Helpers

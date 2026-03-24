@@ -30,6 +30,7 @@ Status note (2026-03-23):
 - as a small boundary split, Stone Soup output/adapter helpers were extracted from `mht/tomht_tracker.py` into `mht/tomht_output.py` (lineage extraction, explicit output metadata projection, and `Track` reconstruction from a leaf node).
 
 Status note (2026-03-24):
+- added a narrow post-commit ancestry cleanup step in `mht/tomht_tracker.py` (`_cleanup_committed_ancestry()`), invoked immediately after `_update_n_scan_commitment(...)`; commitment semantics remain unchanged and cleanup is intentionally conservative/reachability-based.
 - completed a focused readability/documentation pass on `TOMHTParams` in `mht/tomht_tracker.py`: expanded class docstring with stable-vs-heuristic guidance, made parameter-group intent explicit (beam/scoring/N-scan/internal-birth guards/debug), and clarified comments for less-obvious knobs (`prob_gate`, `births_k`, `unused_det_log_penalty`, `birth_log_penalty`) with unchanged behavior/defaults.
 - completed a small readability/modularization cleanup in scoring setup: moved default scoring-model construction from hypothesiser attributes and BetaRatio sanity/warning diagnostics out of `TOMHTTracker.__init__` into helper functions in `mht/tomht_scoring.py`; behavior and scoring semantics are unchanged.
 - completed a second small readability/navigation pass in the internal-birth section of `mht/tomht_tracker.py`: moved the birth-phase sequence note into `_branch_globals_with_births(...)` docstring and added lightweight subgroup dividers for residual/proposal, ranking/selection, and template/branching clusters; behavior stayed unchanged.
@@ -126,7 +127,7 @@ Status notes (2026-03-21):
 - Performance/stability observations:
   - intermittent "hang" reports are currently treated as likely long per-scan compute spikes rather than confirmed deadlock (combinatorial expansion can become large on some scans),
   - after multiple additional tracker replays (2026-03-22), no stalls/hangs were observed; treat this as monitor-only for now and do not prioritise extra stall-specific work unless it recurs.
-  - memory growth during run is expected with current implementation because node/history state is retained (node GC/compaction is still deferred); observed growth of a few hundred MB is consistent with this.
+  - memory growth during run is still expected overall, but the new conservative post-commit reachability cleanup should reduce retained unreachable branch history versus earlier fully-monotonic node retention.
 - Near-term validation follow-up:
   - if stalls are observed again, collect per-scan wall-clock timing and correlate with `SCAN ... exp=...`, detection count, and birth activity to distinguish true hangs from expansion spikes.
 - Instrumentation update and first timing check (2026-03-21):
@@ -137,6 +138,12 @@ Status notes (2026-03-21):
   - added `SCAN_MEMORY t=... nodes=... leaf_inst=... maxrss_mb=...` per scan, plus `SUMMARY memory ...` aggregates,
   - first full replay (`--max-cpis 400`) showed monotonic growth from about `202 MB` to `364 MB` max RSS and from `1` to about `56k` retained nodes,
   - this supports treating node/history retention as a known scalability limit to address after initial integration.
+- Replay memory follow-up after conservative post-commit cleanup (2026-03-24):
+  - reran replay with `--max-cpis 400` using the current tracker (`tomht_replay_postcleanup_2026-03-24`),
+  - observed `SCAN_MEMORY` over 302 scans: `nodes` started at `1`, peaked at `4285`, and ended at `1119` (mean about `1371`),
+  - node count is no longer monotonic in this run (`84` downward steps; largest single drop `1048`), which is consistent with unreachable-ancestry reclamation,
+  - `maxrss_mb` high-water mark moved from about `202 MB` to `272 MB` (peak `272 MB`); this is substantially below the earlier `364 MB` replay note.
+  - In summary: Conservative post-commit ancestry cleanup successfully changed node retention from monotonic growth to bounded/reclaiming behavior, with a substantial replay-memory improvement, while preserving logical outputs.
 - Test command reference (kept for this phase while input file remains available):
   - `cd ~/Git/l2-sp && source ./venv/bin/activate && python -m python.pipeline.batch_mcap_replay ~/Documents/MATLAB/cpi_replay_2025-12-10_173948.mcap --include-tracker --output-path /tmp --tracker-type stonesoup-mht --max-cpis 400`
   - for repeatability checks, fix output folder/log names with `--folder-name` and redirect stdout/stderr to a log file.
@@ -196,5 +203,5 @@ These remain real topics, but are not the primary focus of the current phase unl
 - principled existence modelling,
 - deeper internal-birth cleanup,
 - committed-history materialisation,
-- node garbage collection / ancestry compaction,
+- broader node garbage collection / ancestry compaction (beyond the current conservative post-commit reachability cleanup),
 - performance optimisation.
