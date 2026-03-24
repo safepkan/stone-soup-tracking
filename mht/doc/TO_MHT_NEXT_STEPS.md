@@ -146,11 +146,16 @@ Status notes (2026-03-21):
 Primary goal:
 - make the implementation easier to review, explain, and present.
 
-Likely items:
-- tighten docstrings and comments around the node model, MAP views, and N-scan commitment timing,
-- clarify compatibility boundaries (reconstructed `Track` views, explicit output metadata projection, `ns_scan_window` behavior),
-- simplify or rename helpers where that materially improves readability,
-- keep cleanup disciplined and presentation-driven rather than open-ended.
+Status (2026-03-24):
+- this checklist item is now functionally complete for the current phase.
+
+Implemented:
+- tightened tracker-side documentation and readability in `mht/tomht_tracker.py` (helper role docstrings, section navigation, and clearer parameter intent/comments in `TOMHTParams`),
+- split passive model/scoring/stats/output helpers into focused modules (`mht/tomht_model.py`, `mht/tomht_scoring.py`, `mht/tomht_stats.py`, `mht/tomht_output.py`) without changing behavior,
+- clarified compatibility boundaries around output reconstruction/metadata projection and made scoring setup/diagnostics easier to review.
+
+Remaining scope for item 4:
+- continue small readability touch-ups opportunistically, but treat this item as complete unless a concrete integration or workshop need reopens it.
 
 ### 5. Export / packaging / handoff flow
 
