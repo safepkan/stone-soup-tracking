@@ -431,15 +431,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
         return list(self._last_unused_detections)
 
-    def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
-        """Return read-only node-native MAP state for inspection/debug only."""
-        if not self.global_hypotheses:
-            return None
-        best = self.global_hypotheses[0]
-        return MAPHypothesisSnapshot(
-            log_weight=float(best.log_weight),
-            leaf_nodes_by_track_id=MappingProxyType(dict(best.leaf_nodes_by_track_id)),
-        )
+    # --- Read-only inspection / reporting helpers ---
 
     def get_map_output_tracks(self) -> set[Track]:
         """Return current MAP outputs as Stone Soup ``Track`` objects."""
@@ -450,6 +442,16 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             reconstruct_track_from_leaf_node(leaf_node)
             for leaf_node in map_snapshot.leaf_nodes_by_track_id.values()
         }
+
+    def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
+        """Return read-only node-native MAP state for inspection/debug only."""
+        if not self.global_hypotheses:
+            return None
+        best = self.global_hypotheses[0]
+        return MAPHypothesisSnapshot(
+            log_weight=float(best.log_weight),
+            leaf_nodes_by_track_id=MappingProxyType(dict(best.leaf_nodes_by_track_id)),
+        )
 
     def get_n_scan_commitment_snapshot(self) -> NScanCommitmentSnapshot:
         """Return read-only N-scan commitment bookkeeping (inspection/debug)."""
@@ -952,7 +954,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # - Birth ranking and kept-candidate selection.
     # - Birth template preparation and global branching.
 
+    # -------------------------------------------------------------------------
     # Residual detections and raw birth proposals.
+    # -------------------------------------------------------------------------
 
     def _residual_detections(
         self,
@@ -1001,7 +1005,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         holding = birth.metadata.get("holding_track", None)
         return holding if isinstance(holding, Track) else birth
 
+    # -------------------------------------------------------------------------
     # Birth ranking and kept-candidate selection.
+    # -------------------------------------------------------------------------
 
     def _birth_support_age_misses(self, birth: Track) -> tuple[int, int, int]:
         holding = self._birth_holding_track(birth)
@@ -1097,7 +1103,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             self._display_births(born, det_index_by_obj)
         return born
 
+    # -------------------------------------------------------------------------
     # Birth template preparation and global branching.
+    # -------------------------------------------------------------------------
 
     def _prepare_birth_templates(
         self,
@@ -1252,6 +1260,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         return birth_track_instances_in_beam, globals_with_birth
 
+    # -------------------------------------------------------------------------
+    # Birth phase entrypoint.
+    # -------------------------------------------------------------------------
+
     def _branch_globals_with_births(
         self,
         ctx: ScanContext,
@@ -1279,14 +1291,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 globals_after_births=len(self.global_hypotheses),
             )
 
+        # ---------------------------------------------------------------------
         # Residual detections and raw birth proposals.
+        # ---------------------------------------------------------------------
         residual = self._residual_detections(self.global_hypotheses, ctx.detections)
         self._last_unused_detections = []
         residual_detections_considered = len(residual)
         born = self._generate_birth_candidates(residual, ctx.timestamp)
         birth_tracks_created = len(born)
 
+        # ---------------------------------------------------------------------
         # Birth ranking and kept-candidate selection.
+        # ---------------------------------------------------------------------
         born = self._filter_birth_candidates(born)
         born_scored = self._score_and_rank_birth_candidates(born, ctx.det_index_by_obj)
         born = self._select_kept_birth_candidates(
@@ -1296,7 +1312,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         birth_tracks_kept = len(born)
 
+        # ---------------------------------------------------------------------
         # Birth template preparation and global branching.
+        # ---------------------------------------------------------------------
         birth_track_ids: set[int] = set()
         if born:
             # Allocate stable IDs once for these births (shared across variants)
