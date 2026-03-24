@@ -109,3 +109,50 @@ class BetaRatioScoringModel:
         self, *, birth_track: Track, used_det_key: int | None, ctx: "ScanContext"
     ) -> float:
         return -self.birth_log_penalty
+
+
+def make_default_scoring_model(
+    *,
+    hypothesiser: object,
+    scoring_mode: str,
+    log_epsilon: float,
+    prob_gate: float,
+    unused_det_log_penalty: float,
+    birth_log_penalty: float,
+) -> ScoringModel:
+    """Build the tracker's default scoring model from hypothesiser parameters."""
+    if scoring_mode == "beta_ratio":
+        # Try to read clutter density attribute name used by different hyp types.
+        clutter = getattr(hypothesiser, "clutter_density", None)
+        if clutter is None:
+            clutter = getattr(hypothesiser, "clutter_spatial_density", 0.0)
+        prob_detect = getattr(hypothesiser, "prob_detect", 0.9)
+        hyp_prob_gate = getattr(hypothesiser, "prob_gate", prob_gate)
+        return BetaRatioScoringModel(
+            prob_detect=float(prob_detect),
+            prob_gate=float(hyp_prob_gate),
+            clutter_density=float(clutter) if clutter is not None else 0.0,
+            log_epsilon=log_epsilon,
+            fallback_unused_det_log_penalty=unused_det_log_penalty,
+            birth_log_penalty=birth_log_penalty,
+        )
+    raise ValueError(
+        f"Unsupported scoring_mode='{scoring_mode}'. "
+        "Only 'beta_ratio' is available now."
+    )
+
+
+def maybe_log_scoring_diagnostics(scoring_model: ScoringModel) -> None:
+    """Emit optional scoring diagnostics for known scoring-model implementations."""
+    if isinstance(scoring_model, BetaRatioScoringModel):
+        clutter = scoring_model.clutter_density
+        per_unused = scoring_model._per_unused_log_delta()
+        if per_unused > 0.0:
+            print(
+                "[WARN] per_unused_delta is positive; unused detections are rewarded. "
+                "Check clutter_density units/config."
+            )
+        print(
+            f"[Scoring] beta_ratio: clutter_density={clutter}, "
+            f"per_unused_delta={per_unused:+.3f}"
+        )

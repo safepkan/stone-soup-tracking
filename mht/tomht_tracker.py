@@ -56,7 +56,11 @@ from mht.tomht_model import (
     TrackHypothesisNode,
 )
 from mht.tomht_output import reconstruct_track_from_leaf_node
-from mht.tomht_scoring import BetaRatioScoringModel, ScoringModel
+from mht.tomht_scoring import (
+    ScoringModel,
+    make_default_scoring_model,
+    maybe_log_scoring_diagnostics,
+)
 from mht.tomht_stats import (
     BirthStats,
     ScanStats,
@@ -199,40 +203,16 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self.params = params
         self.initiator = initiator
         if scoring_model is None:
-            if params.scoring_mode == "beta_ratio":
-                # Try to read clutter density attribute name used by different hyp types.
-                clutter = getattr(hypothesiser, "clutter_density", None)
-                if clutter is None:
-                    clutter = getattr(hypothesiser, "clutter_spatial_density", 0.0)
-                prob_detect = getattr(hypothesiser, "prob_detect", 0.9)
-                prob_gate = getattr(hypothesiser, "prob_gate", params.prob_gate)
-                scoring_model = BetaRatioScoringModel(
-                    prob_detect=float(prob_detect),
-                    prob_gate=float(prob_gate),
-                    clutter_density=float(clutter) if clutter is not None else 0.0,
-                    log_epsilon=params.log_epsilon,
-                    fallback_unused_det_log_penalty=params.unused_det_log_penalty,
-                    birth_log_penalty=params.birth_log_penalty,
-                )
-            else:
-                raise ValueError(
-                    f"Unsupported scoring_mode='{params.scoring_mode}'. "
-                    "Only 'beta_ratio' is available now."
-                )
-        self.scoring_model = scoring_model
-        # Optional sanity log for clutter term.
-        if isinstance(self.scoring_model, BetaRatioScoringModel):
-            clutter = self.scoring_model.clutter_density
-            per_unused = self.scoring_model._per_unused_log_delta()
-            if per_unused > 0.0:
-                print(
-                    "[WARN] per_unused_delta is positive; unused detections are rewarded. "
-                    "Check clutter_density units/config."
-                )
-            print(
-                f"[Scoring] beta_ratio: clutter_density={clutter}, "
-                f"per_unused_delta={per_unused:+.3f}"
+            scoring_model = make_default_scoring_model(
+                hypothesiser=hypothesiser,
+                scoring_mode=params.scoring_mode,
+                log_epsilon=params.log_epsilon,
+                prob_gate=params.prob_gate,
+                unused_det_log_penalty=params.unused_det_log_penalty,
+                birth_log_penalty=params.birth_log_penalty,
             )
+        self.scoring_model = scoring_model
+        maybe_log_scoring_diagnostics(self.scoring_model)
 
         self._next_track_id = 0
         self._next_node_id = 0
