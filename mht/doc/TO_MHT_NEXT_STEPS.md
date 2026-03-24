@@ -29,6 +29,10 @@ Status note (2026-03-23):
 - `ScanContext` intentionally remains in `mht/tomht_tracker.py`; passive `ScanStats`/`BirthStats` and aggregate summary reporting now live in `mht/tomht_stats.py`.
 - as a small boundary split, Stone Soup output/adapter helpers were extracted from `mht/tomht_tracker.py` into `mht/tomht_output.py` (lineage extraction, explicit output metadata projection, and `Track` reconstruction from a leaf node).
 
+Status note (2026-03-24):
+- completed a second small readability/navigation pass in the internal-birth section of `mht/tomht_tracker.py`: moved the birth-phase sequence note into `_branch_globals_with_births(...)` docstring and added lightweight subgroup dividers for residual/proposal, ranking/selection, and template/branching clusters; behavior stayed unchanged.
+- completed a first readability/structure pass over the internal-birth block in `mht/tomht_tracker.py`: added compact role docstrings to the main birth helpers and rewrote `_branch_globals_with_births(...)` with early guards (`initiator is None`, empty globals) so the primary birth flow is linear and easier to review, with no behavior/semantics changes.
+
 ## Working checklist
 
 This document is now intended as a working checklist for the integration-readiness phase.

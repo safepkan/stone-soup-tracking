@@ -946,6 +946,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # Internal Birth Helpers
     # =========================================================================
     # Internal birth branching from residual detections.
+    #
+    # Subgroups:
+    # - Residual detections and raw birth proposals.
+    # - Birth ranking and kept-candidate selection.
+    # - Birth template preparation and global branching.
+
+    # Residual detections and raw birth proposals.
 
     def _residual_detections(
         self,
@@ -994,6 +1001,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         holding = birth.metadata.get("holding_track", None)
         return holding if isinstance(holding, Track) else birth
 
+    # Birth ranking and kept-candidate selection.
+
     def _birth_support_age_misses(self, birth: Track) -> tuple[int, int, int]:
         holding = self._birth_holding_track(birth)
         age = len(holding)  # number of steps in holding life
@@ -1029,6 +1038,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _generate_birth_candidates(
         self, residual: list[Detection], timestamp: datetime.datetime
     ) -> list[Track]:
+        """Ask the initiator for raw birth proposals from residual detections."""
         assert self.initiator is not None
         return (
             list(self.initiator.initiate(OrderedSet(residual), timestamp))
@@ -1037,6 +1047,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     def _filter_birth_candidates(self, born: list[Track]) -> list[Track]:
+        """Drop initiated tracks that fail basic numeric/state sanity checks."""
         return [tr for tr in born if self._birth_is_sane(tr)]
 
     def _birth_ranking_key(
@@ -1059,6 +1070,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _score_and_rank_birth_candidates(
         self, born: list[Track], det_index_by_obj: dict[int, int]
     ) -> list[tuple[tuple[int, int, int, float, int], Track]]:
+        """Compute deterministic ranking keys and return candidates sorted best-first."""
         born_scored = [
             (self._birth_ranking_key(tr, det_index_by_obj), tr) for tr in born
         ]
@@ -1072,6 +1084,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         det_index_by_obj: dict[int, int],
         timestamp: datetime.datetime,
     ) -> list[Track]:
+        """Apply per-scan birth cap after ranking; emit debug listing pre/post cap."""
         born = [tr for _, tr in born_scored]
         if self.params.debug_display_births:
             print(f"\nBirth candidates at {timestamp} (pre-limit): {len(born_scored)}")
@@ -1084,12 +1097,15 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             self._display_births(born, det_index_by_obj)
         return born
 
+    # Birth template preparation and global branching.
+
     def _prepare_birth_templates(
         self,
         born: list[Track],
         det_index_by_obj: dict[int, int],
         ctx: ScanContext,
     ) -> tuple[list[BirthTemplate], set[int]]:
+        """Assign stable track IDs and root nodes for each kept birth candidate."""
         birth_templates: list[BirthTemplate] = []
         birth_track_ids: set[int] = set()
         for tr in born:
@@ -1163,6 +1179,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         compatible: list[BirthTemplate],
         ctx: ScanContext,
     ) -> list[GlobalHypothesis]:
+        """Branch one global with zero/one/(optional)two compatible birth templates."""
         branched: list[GlobalHypothesis] = []
 
         # If there are no tracks yet, don't keep the empty hypothesis once we have births to add.
@@ -1202,6 +1219,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         birth_templates: list[BirthTemplate],
         ctx: ScanContext,
     ) -> None:
+        """Apply birth-template branching across all globals, then post-birth beam limit."""
         new_globals: list[GlobalHypothesis] = []
         for gh in self.global_hypotheses:
             compatible = self._compatible_birth_templates_for_global(
@@ -1234,59 +1252,71 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         return birth_track_instances_in_beam, globals_with_birth
 
-    # Birth phase entrypoint (invoked once per scan after beam/N-scan).
-
     def _branch_globals_with_births(
         self,
         ctx: ScanContext,
     ) -> BirthStats:
+        """Run full internal births and return per-scan birth stats.
+
+        Birth-phase flow:
+        residual detections -> initiate -> sanity-filter -> rank/limit ->
+        template roots -> branch globals -> post-birth beam/stats.
+        """
         globals_before_births = len(self.global_hypotheses)
-        residual = self._residual_detections(self.global_hypotheses, ctx.detections)
-        if self.initiator is not None and self.global_hypotheses:
-            self._last_unused_detections = []
-            residual_detections_considered = len(residual)
-            born = self._generate_birth_candidates(residual, ctx.timestamp)
-            birth_tracks_created = len(born)
 
-            born = self._filter_birth_candidates(born)
-            born_scored = self._score_and_rank_birth_candidates(
-                born, ctx.det_index_by_obj
-            )
-            born = self._select_kept_birth_candidates(
-                born_scored,
-                det_index_by_obj=ctx.det_index_by_obj,
-                timestamp=ctx.timestamp,
-            )
-            birth_tracks_kept = len(born)
-
-            birth_track_ids: set[int] = set()
-            if born:
-                # Allocate stable IDs once for these births (shared across variants)
-                birth_templates, birth_track_ids = self._prepare_birth_templates(
-                    born,
-                    ctx.det_index_by_obj,
-                    ctx,
-                )
-                self._branch_globals_with_birth_templates(birth_templates, ctx)
-
-            birth_track_instances_in_beam, globals_with_birth = self._birth_beam_stats(
-                birth_track_ids
-            )
-
+        if self.initiator is None:
+            residual = self._residual_detections(self.global_hypotheses, ctx.detections)
+            self._last_unused_detections = residual
             return BirthStats(
-                residual_detections_considered=residual_detections_considered,
-                birth_tracks_created=birth_tracks_created,
-                birth_tracks_kept=birth_tracks_kept,
-                birth_track_instances_in_beam=birth_track_instances_in_beam,
-                globals_with_birth=globals_with_birth,
                 globals_before_births=globals_before_births,
                 globals_after_births=len(self.global_hypotheses),
             )
-        if self.initiator is None:
-            self._last_unused_detections = residual
-        else:
+
+        if not self.global_hypotheses:
             self._last_unused_detections = []
+            return BirthStats(
+                globals_before_births=globals_before_births,
+                globals_after_births=len(self.global_hypotheses),
+            )
+
+        # Residual detections and raw birth proposals.
+        residual = self._residual_detections(self.global_hypotheses, ctx.detections)
+        self._last_unused_detections = []
+        residual_detections_considered = len(residual)
+        born = self._generate_birth_candidates(residual, ctx.timestamp)
+        birth_tracks_created = len(born)
+
+        # Birth ranking and kept-candidate selection.
+        born = self._filter_birth_candidates(born)
+        born_scored = self._score_and_rank_birth_candidates(born, ctx.det_index_by_obj)
+        born = self._select_kept_birth_candidates(
+            born_scored,
+            det_index_by_obj=ctx.det_index_by_obj,
+            timestamp=ctx.timestamp,
+        )
+        birth_tracks_kept = len(born)
+
+        # Birth template preparation and global branching.
+        birth_track_ids: set[int] = set()
+        if born:
+            # Allocate stable IDs once for these births (shared across variants)
+            birth_templates, birth_track_ids = self._prepare_birth_templates(
+                born,
+                ctx.det_index_by_obj,
+                ctx,
+            )
+            self._branch_globals_with_birth_templates(birth_templates, ctx)
+
+        birth_track_instances_in_beam, globals_with_birth = self._birth_beam_stats(
+            birth_track_ids
+        )
+
         return BirthStats(
+            residual_detections_considered=residual_detections_considered,
+            birth_tracks_created=birth_tracks_created,
+            birth_tracks_kept=birth_tracks_kept,
+            birth_track_instances_in_beam=birth_track_instances_in_beam,
+            globals_with_birth=globals_with_birth,
             globals_before_births=globals_before_births,
             globals_after_births=len(self.global_hypotheses),
         )
