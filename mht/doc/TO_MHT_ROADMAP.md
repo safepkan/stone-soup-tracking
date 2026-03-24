@@ -91,7 +91,8 @@ These are real topics, but are not currently phase-defining:
 - more explicit committed-track materialisation once true N-scan exists,
 - node lifecycle / ancestry cleanup and garbage collection built on the explicit commitment machinery,
 - performance / memory optimisation once the explicit node structure is in place,
-- expanded scenario coverage and more principled regression harnesses.
+- expanded scenario coverage and more principled regression harnesses,
+- track lifecycle / deletion policy cleanup, including possible Stone Soup Deleter integration.
 
 ## Near-term priority summary
 

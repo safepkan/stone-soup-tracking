@@ -75,34 +75,86 @@ from mht.tomht_stats import (
 
 @dataclass(frozen=True)
 class TOMHTParams:
+    """Flat tracker-configuration block for TO-MHT runtime controls.
+
+    Keep this as a single immutable parameter object passed at tracker
+    construction. Most users should tune these first:
+    ``max_global_hypotheses``, ``max_children_per_track``, ``max_missed``,
+    and ``ns_scan_window``.
+
+    Stable operational controls:
+    - beam/hypothesis growth and miss tolerance,
+    - N-scan commitment window size.
+
+    Current-policy / heuristic controls:
+    - internal-birth ranking and penalties
+      (``max_births_per_scan``, ``births_k``, ``birth_log_penalty``,
+      ``unused_det_log_penalty``),
+    - scoring defaults that depend on hypothesiser-provided values.
+
+    Debug/instrumentation flags are visibility knobs and are not intended to
+    change tracker semantics.
+    """
+
+    # Core hypothesis-management / beam control (stable operational knobs):
+
+    # Beam width: keep at most this many scored globals each scan.
     max_global_hypotheses: int = 20
+    # Per active leaf, keep up to this many local child candidates.
     max_children_per_track: int = 5
+    # Per-leaf miss budget. If exceeded, that track hypothesis is dropped from
+    # the resulting global during continuation expansion.
     max_missed: int = 5
+
+    # Scoring / numerical behavior:
+
+    # Only beta_ratio is currently supported.
+    scoring_mode: str = "beta_ratio"
+    # Numeric floor for log-domain probability math.
     log_epsilon: float = 1e-12
-    scoring_mode: str = "beta_ratio"  # Only beta_ratio is supported.
-
-    # Sole N-scan configuration knob.
-    ns_scan_window: int = 3
-
+    # Fallback P_G for default scoring if hypothesiser has no prob_gate.
     prob_gate: float = 0.99
 
+    # N-scan commitment:
+
+    # Sole commitment-window knob: boundary is b = k - N.
+    ns_scan_window: int = 3
+
+    # Internal birth policy (current heuristic policy controls):
+
+    # Keep at most this many internal births per scan.
     max_births_per_scan: int = 2
-    birth_log_penalty: float = (
-        8.0  # subtract this from log-weight per birth (i.e. add -8.0)
-    )
-    births_k: int = 5  # how many top globals are used to define "residual"
+    # Fixed per-birth log penalty; higher means more conservative births.
+    birth_log_penalty: float = 8.0
+    # Residuals come from detections unused by the top-k globals only.
+    births_k: int = 5
+    # Fallback per-unused-detection clutter penalty if no clutter density.
     unused_det_log_penalty: float = 0.2
 
-    birth_max_abs_pos: float = 1e5  # safety: reject absurd positions
-    birth_max_covar_trace: float = 1e12  # safety: reject absurd uncertainty
+    # Birth sanity guards:
 
+    # Safety: reject absurd positions.
+    birth_max_abs_pos: float = 1e5
+    # Safety: reject absurd uncertainty.
+    birth_max_covar_trace: float = 1e12
+
+    # Debug / instrumentation (visibility only; no branch/scoring semantics):
+
+    # Display detections in debug output.
     debug_display_detections: bool = False
+    # Display per-scan stats in debug output.
     debug_display_scan_stats: bool = True
+    # Display hypotheses in debug output.
     debug_display_hypotheses: bool = True
+    # Display internal births in debug output.
     debug_display_births: bool = True
+    # Display MAP miss history in debug output.
     debug_display_map_miss_hist: bool = False
+    # Maximum births shown in debug output.
     debug_births_max: int = 5
+    # Maximum globals shown in debug output.
     debug_globals_max: int = 5
+    # Enable ScanStats collection for per-scan summaries.
     collect_stats: bool = True
 
 
@@ -118,6 +170,8 @@ class ScanContext:
 
 @dataclass(frozen=True)
 class BirthTemplate:
+    """Birth template for an internal track start."""
+
     track_id: int
     leaf_node: TrackHypothesisNode
     template_track: Track

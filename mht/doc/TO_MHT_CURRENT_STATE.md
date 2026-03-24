@@ -6,6 +6,7 @@ It replaces the earlier pre-Phase-B description in which globals still stored co
 
 ## Recent updates
 
+- 2026-03-24: focused readability/documentation pass on `TOMHTParams` in `mht/tomht_tracker.py`: expanded class docstring with stable-vs-heuristic guidance, added explicit parameter-group headers (core beam/scoring/N-scan/internal-birth guards/debug), and clarified comments for less-obvious knobs (`prob_gate`, `births_k`, `unused_det_log_penalty`, `birth_log_penalty`) with no behavior/default changes.
 - 2026-03-24: small readability/modularization cleanup in scoring setup: moved default scoring-model construction from hypothesiser attributes and BetaRatio sanity/warning diagnostics out of `TOMHTTracker.__init__` into `mht/tomht_scoring.py` helpers; tracker behavior and scoring semantics are unchanged.
 - 2026-03-24: second readability/navigation pass in the internal birth block in `mht/tomht_tracker.py`: moved the birth-phase sequence note into `_branch_globals_with_births(...)` docstring and added lightweight subgroup headers for residual/proposal, ranking/selection, and template/branching helper clusters; no behavior or birth semantics changed.
 - 2026-03-24: first readability/structure pass over internal birth processing in `mht/tomht_tracker.py`: added compact role-focused docstrings for the main birth pipeline helpers and rewrote `_branch_globals_with_births(...)` with explicit early guards for `initiator is None` and empty-global cases so the normal birth path reads linearly; behavior and birth semantics were unchanged.
