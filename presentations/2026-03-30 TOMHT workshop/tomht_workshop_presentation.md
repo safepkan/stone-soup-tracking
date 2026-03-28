@@ -8,20 +8,17 @@ title: TOMHT for ISAC Workshop
 # TOMHT for ISAC - workshop 2026-03-30
 
 Patrik Andersson
-SafeRadar
+SafeRadar Research AB
 
 
 ---
 
 # Outline of this session
 
-- TO-MHT background
-- TO-MHT implementation in this project
-  - Public API
-  - Implementation
-    - Core data structures and algorithms
-    - Current state vs where we're heading
-- ISAC integration
+- TO-MHT vs "simple" trackers (e.g., GNN) 
+- TO-MHT data structures and update flow in general
+- Our implementation
+- Integration
 
 ---
 
@@ -29,40 +26,31 @@ SafeRadar
 
 - Trackers need to explain the world in terms of associations:
   - Which detections originate from which target?
-  - Which detections are clutter?
+  - Which detections are clutter / false alarms?
 - Simple trackers like GNN keep one current explanation of the world
 - MHT keeps multiple plausible explanations alive over time
 - This is useful when ambiguity cannot be resolved immediately
-  - Dense scenarios, high clutter, ...
-- The price is more complexity
+  - Dense scenarios, high clutter, large measurement errors, ...
+- The price is more complexity and computational load
   - More state, more branching, more need for pruning/commitment, ...
 
 ---
 
-# What this implementation is
+# Design goals for our implementation
 
-- TODO: Rewrite
-- A Stone Soup-facing tracker
-- Internally structured as a track-oriented MHT
-- Global hypotheses reference per-track leaf nodes
-- N-scan commitment is explicit and ancestor-based
-- MAP tracks are exposed at the API boundary
-- Supports externally confirmed track starts
-
----
-
-# What it is not trying to solve yet
-
-- TODO: Rewrite
-- Final multi-sensor miss/termination policy
-- Full lifecycle/deletion redesign
-- Committed-history materialisation/output store
-- Deep performance optimization
-- Final ISAC-specific scoring policy
+- Proper TO-MHT implementation
+- Stone Soup based
+  - Use standard Stone Soup APIs, without special hacks or assumptions
+  - Should allow integration in any Stone Soup compliant environment
+- Support ISAC use case
+- Code should be easy to read and work with
+- Prioritize clean architecture and code over raw performance
+  - Algorithmic optimizations to keep branching under control still essential
+  - Some code-level optimization to remove obvious inefficiencies 
 
 ---
 
-# Public usage pattern for a "simple" Stone Soup tracker
+# Public usage pattern for a simple Stone Soup tracker
 
 ```python
 hypothesiser = PDAHypothesiser(predictor, updater, ...)
@@ -82,8 +70,8 @@ for (time, detections) in source:
 or pass in a detector iterator to the constructor and say
 
 ```python
-    for (time, detections) in tracker:
-        ...
+for (time, tracks) in tracker:
+    ...
 ```
 
 ---
@@ -117,7 +105,7 @@ class MultiTargetTracker(_TrackerMixInNext, Tracker):
 
 ---
 
-# Public usage pattern for TOMHTTracker
+# Public usage pattern for our TO-MHT tracker
 
 ```python
 tracker = TOMHTTracker(
@@ -164,149 +152,313 @@ for (time, detections) in source:
   - ambiguity resolution
   - confirmed system track starts
 - Those starts are injected after processing that same timestamp
-- They enter the same node-based structure as internal births
+- They enter the same data structures as internal births
 
 ---
 
-# TODO: A few slides explaining TO-MHT conceptually
+# Conceptual core of TO-MHT
 
-- Figures from tutorials
-- Tree structures
-- Track trees
-- N-scan pruning
-- Pruning/merging
+### TO-MHT as track trees + global hypotheses
 
----
-
-# TODO: Typical data structures
-
----
-
-# TODO: Typical update flow
+- A TO-MHT keeps multiple plausible association histories alive over time
+- Conceptually, each logical track is a **track tree** (aka family)
+- Each node in that tree corresponds to one local association decision at one scan
+- A **global hypothesis** selects one active leaf from each track tree
+- Global consistency means, for example:
+  - no detection is used twice
+  - clutter / births are handled consistently
 
 ---
 
-# TODO: Current data structures and update flow
+# Track trees (or families) + global hypotheses
 
-- TODO: Review and update the slides below
+![Track trees](./track_trees.jpg)
 
 ---
 
-# Core internal data structures
+# Core TO-MHT pattern
 
-## `TrackHypothesisNode`
+This “local branching + global consistency” split is the core TO-MHT pattern.
 
+- Ambiguity is stored **inside each track** as branching history
+- Joint consistency is handled **across tracks** by global hypotheses
+- Shared history is represented by parent links
+
+---
+
+# Conceptual core data structures
+
+### Measurement / scan
+- one batch of detections at one timestamp
+
+### Track-hypothesis node
+- one state estimate after one local association decision
+- linked to its parent in the same logical track
+
+### Track tree
+- all competing histories for one logical target
+
+### Global hypothesis
+- one consistent joint choice of active leaves across trees
+
+---
+
+# Conceptual track-hypothesis node
+
+Typical contents of a node:
+
+- logical track identity
+- parent pointer
+- child pointers
+- scan index / timestamp
+- state estimate
+- association type
+  - detection, missed detection, birth / start
+- measurement reference (if any)
+- local score contribution
+
+---
+
+# Conceptual track tree
+
+Typical contents:
+
+- logical track identity
+- root pointer
+- leaf pointers
+- metadata
+
+Interpretation: 
+- one tree per logical target
+- leaves are the active competing hypotheses
+- parent/child structure captures association history
+
+---
+
+# Conceptual global hypothesis
+
+Core contents:
+
+- selected leaf for each track
+- log weight
+
+---
+
+# Conceptual update step
+
+At a high level, one TO-MHT scan update looks like:
+
+1. predict active leaves to the new timestamp
+2. generate local child hypotheses for feasible associations + miss
+3. combine local choices into globally consistent hypotheses
+4. score and prune
+5. apply delayed decision logic (for example N-scan)
+6. apply confirmation/deletion logic
+7. produce output tracks
+
+---
+
+# Generate child hypotheses inside each track tree
+
+After prediction and gating, each active track leaf branches into alternatives:
+- matched to detection 1
+- matched to detection 4
+- missed
+- ...
+
+For each alternative, update state and create a child node.
+
+Result: every track tree gets a new frontier of child leaves at the current time step.
+
+Note: At this point, we have not yet enforced that the same detection cannot be used by two different tracks globally.
+
+---
+
+# Create birth hypotheses for unexplained detections
+
+Detections that are not assigned to an existing track in a given global hypothesis may represent:
+
+- clutter / false alarm
+- new target birth
+
+So for relevant detections, create tentative new-track roots or first nodes.
+
+In practice, these choices are usually folded into the later global association step.
+
+---
+
+## Build global hypotheses from consistent combinations
+
+Form **globally consistent combinations** such that:
+
+- each existing track selects at most one child branch
+- each detection is used at most once
+- unassigned detections are explained as clutter or births
+- optional extra logic: exclusivity zones, class constraints, kinematic conflicts
+
+Result: a pool of global hypotheses
+
+This is often posed as a ranked assignment / multidimensional consistency problem.
+
+---
+
+# Score the new global hypotheses
+
+Each new global hypothesis gets a score or log weight from:
+
+- parent global score
+- track update likelihoods
+- missed-detection penalties
+- clutter model
+- birth model
+- optional existence probabilities / priors
+
+---
+
+# Prune aggressively
+
+Without pruning, MHT explodes.
+
+Common pruning steps:
+
+- keep only top `K` global hypotheses
+- prune low-scoring global hypotheses below threshold
+- prune dominated local branches not used by any surviving global
+- merge nearly identical states if your implementation supports it
+- apply N-scan pruning / deferred decision logic
+
+This step is central to making the tracker practical.
+
+---
+
+# Apply N-scan logic and resolve old ambiguity
+
+If using N-scan pruning:
+
+- look back `N` scans
+- find branch decisions that are now effectively common across the surviving best globals
+- collapse older ambiguity
+- promote stable prefixes to confirmed track history
+
+So the tracker keeps ambiguity only in a moving recent window.
+
+---
+
+# Update track status
+
+Based on the surviving hypotheses, update lifecycle state:
+
+- tentative -> confirmed
+- confirmed -> coasted
+- coasted too long -> deleted
+
+One may also maintain per-track stats like:
+
+- hit count
+- consecutive misses
+- track existence probability
+- age
+- confirmation score
+
+---
+
+# Produce output tracks
+
+Finally, derive the user-facing track set, usually from:
+
+- the single best global hypothesis, or
+- a weighted summary over several globals
+
+Output each selected track’s current state and maybe its smoothed history.
+
+---
+
+# Summary
+
+One can think of one update as:
+
+- **predict** old leaves forward
+- **branch** each track on all plausible explanations
+- **pack** those branches into a small set of globally consistent worlds
+- **prune** almost everything
+- **extract** user-facing track set
+
+---
+
+# What the current implementation stores
+
+### `TrackHypothesisNode`
 One logical-track hypothesis at one scan step.
 
-Groups of fields:
-- core structural identity / ancestry / per-step payload
-- cached operational fields
-- provenance / instrumentation
-- small compatibility/boundary support where still needed
+Carries:
+- same-track parent link
+- state payload
+- association choice / used detection identity
+- local score contribution
+- cached counters such as hits / misses / age
+- provenance such as internal birth vs external start
 
-## `GlobalHypothesis`
+---
 
+# What the current implementation stores, cont.
+
+### `GlobalHypothesis`
+One global hypothesis, i.e., one consistent joint choice of active leaves across trees.
+
+Carries:
 - one active leaf per logical track
 - cumulative log weight
 
 ---
 
-# `TrackHypothesisNode` at a glance
+# Our current update pipeline
 
-## Core structural
-- `node_id`, `track_id`, `parent`, `scan_index`
-- `state`, `state_kind`
-- `used_det_key`, `assoc_label`
-- `log_delta`
+1. sort detections deterministically
+2. expand each current global
+3. apply unused-detection score term
+4. collapse exact structural duplicates
+5. beam prune
+6. update N-scan commitment
+7. apply internal births
+8. produce MAP output
 
-## Cached operational
-- `age`, `hits`, `missed_count`
-- `last_det_key`, `last_det_hit`
-
-## Provenance / debug
-- `root_source`, `birth_scan_index`
+This is the implementation-level version of the conceptual TO-MHT update.
 
 ---
 
-# Why this structure matters
+# Continuation / expansion in our implementation
 
-- Shared ancestry is structural, not copied
-- Branch identity is node identity + parent links
-- Globals no longer carry copied full `Track` history
-- N-scan commitment can be based on explicit ancestor agreement
-- Stone Soup `Track` objects remain the external boundary, not the internal truth
-
----
-
-# Main update pipeline
-
-1. Sort detections deterministically
-2. Expand each current global
-3. Apply unused-detection score term
-4. Collapse exact structural duplicates
-5. Beam prune
-6. Update N-scan commitment
-7. Apply internal births
-8. Produce MAP output
-
----
-
-# Continuation / expansion
-
-## Local per-track continuation
+### Local per-track continuation
 - reconstruct temporary Stone Soup `Track`
 - hypothesise and score local alternatives
 - keep bounded number of child candidates
 - always keep a miss if present
 
-## Joint global assembly
+### Joint global assembly
 - combine local candidates across tracks
 - enforce detection exclusivity
-- drop tracks whose miss budget is exceeded
+- drop track hypotheses whose miss budget is exceeded
 - accumulate resulting global log weights
 
 ---
 
-# Dedupe and beam
+# Dedupe, beam, and commitment
 
-- Expanded globals are adjusted for detections left unused
-- Exact structural duplicates are identified by:
-  - `track_id -> leaf_node_id`
-- Highest-weight global survives per signature
-- Then normal beam pruning keeps the top globals
+After expansion:
+- globals are adjusted for detections left unused
+- exact structural duplicates are collapsed
+- top globals survive beam pruning
 
----
-
-# N-scan commitment in this implementation
-
-For scan `k` and window `N`:
-
-- boundary is `b = k - N`
-- commitment is computed after beam pruning
+Then:
+- N-scan commitment is computed from the surviving globals
 - commitment is per-track
-- only globals that still contain a track participate for that track
-- ancestor node identity at boundary `b` is the criterion
+- ancestor identity at boundary `b = k - N` is the criterion
 
 ---
 
-# Important N-scan clarification
+# Internal births in the current implementation
 
-Current implementation has:
-
-- explicit logical commitment
-- conservative post-commit ancestry cleanup
-
-Current implementation does **not** have:
-
-- committed-history materialisation
-- broad lifecycle redesign
-- full deletion policy cleanup
-
----
-
-# Internal births
-
-Birth phase is a separate bounded stage after the main continuation pipeline.
+Internal births are handled as a separate phase after the main continuation pipeline.
 
 Sequence:
 - identify residual detections
@@ -321,46 +473,79 @@ Sequence:
 
 # External starts vs internal births
 
-## Shared structure
-- both become root-like node entries in the same hypothesis system
+### Shared structure
+- both enter the same node-based hypothesis system
 
-## Different semantics
+### Different semantics
 - external starts are already confirmed
-- internal births are still tracker-side initiation logic
-- scoring/policy expectations are not the same
+- internal births are tracker-side initiation logic
+- they should not be thought of as the same thing operationally
+
+For ISAC, only external starts will be used, at least for the time being.
 
 ---
 
-# Current status
+# Summary of the current implementation
 
-## What is strong now
 - explicit node-based TO-MHT structure
-- explicit ancestor-based N-scan commitment
+- globals reference leaf nodes
 - structural dedupe
-- cleaner API story
-- cleaner code organization/readability
+- explicit ancestor-based N-scan commitment
+- conservative post-commit ancestry cleanup
 - external confirmed starts supported
-
-## What is still provisional
-- multi-sensor miss handling / termination policy
-- scoring assumptions for broader integration cases
-- deeper performance optimization
+- API is intended be stable
 
 ---
 
-# Integration 
+# What needs to be improved
 
-TODO: Shift gears and talk about integration
+### Intentionally simple / currently pragmatic
+- Scoring details
+  - currently simplified and/or based on heuristics
+- Internal birth handling
+- Track trees are currently implicit, no track tree data structure
+- N-scan pruning implemented, other aspects of pruning largely missing
+
+### Still future work
+- Proper lifecycle / deletion
+- Multi-sensor miss policy
+- Broader scaling / performance optimization
+
+---
+
+# What is out of scope
+
+In a real system, one might do things like:
+
+- store nodes in arrays/arenas, not pointer-heavy objects, for cache efficiency
+- use integer IDs instead of raw pointers
+- represent measurement usage with bitsets
+- ...
+
+These kinds of optimizations seem out of scope for the current Python implementation.
+
+---
+
+# What to expect from the initial release
+
+- a conceptually clean TO-MHT core
+- a stable Stone Soup-facing API
+- external-start support for integration
+- enough maturity to start integration and validation/evaluation of usefulness
+- a good foundation to iterate from
+- still much work left to do, on multiple fronts
 
 ---
 
 # Test scenarios
 
-- A few simple synthetic scenarios, inherited from Stone Soup MFA example
+- A few simple synthetic scenarios included, inherited from Stone Soup MFA example
+  - Was very useful to get started
 - Still useful
-  - Different underlying measurement models
-  - Close/crossing targets
-  - High clutter
+  - Based on different variants of underlying Stone Soup components
+  - Small and simple, analyzing details is tractable
+  - Each has some challenging aspects
+    - targets starting close to each other, crossing targets, high clutter
   - Also used as a quick smoke test
 - Could be extended and tweaked
 
@@ -368,59 +553,61 @@ TODO: Shift gears and talk about integration
 
 # Integration with SafeRadar replay pipeline
 
-- SafeRadar detection data can be used with this TO-MHT implementation
+- SafeRadar detection data has been integrated with this TO-MHT implementation
 - Done via a Stone Soup adapter
-- Allows evaluation using existing tools
+  - translates between SafeRadar and Stone Soup representations of detections and tracks
+- Allows evaluation of TO-MHT tracking using existing tools
   - Foxglove
   - Matlab/Python
+
+---
+
+# Quick tour of the code in VS Code + demo
+
+- VS Code
+  - Folder structure
+  - Main files and classes
+  - Test scenarios
 - Demo
+  - Test scenarios
+  - SafeRadar integration
 
 ---
 
-# ISAC-specific integration questions
+# ISAC integration: Assumptions
 
-Likely discussion points:
-- detections and hypothesiser assumptions
-- updater/state compatibility
-- external-start interface details
-- multi-sensor misses and lifecycle policy
-- what should live on our side vs their side
-
-TODO: Update
+- The TO-MHT tracker will be used only for system tracks, at least initially
+- No internal births / track starts
+- External track starts are generated from unused detections
+  - via existing sensor trackers + deghoster, outside the scope of the TO-MHT
+- All ambiguities (u/v + doppler) are handled transparently by the hypothesiser
+  - given a track prediction, resolution is trivial
+- IMM handled inside hypothesiser + updater, transparent to the TO-MHT tracker
+- Detections carry everything the hypothesiser + updater need for multi-sensor support
+- Multiple sensors (TX-RX links) at the same timestamp are handled via successive `tracker_update` calls, each containing detections from one sensor
 
 ---
 
-# Handoff flow
+# ISAC handoff flow
 
 Current plan:
 - maintain working development repo on our side
 - export snapshots to a dedicated handoff/export repo
-- mirror that into the ISAC environment
+- mirror export repo into the Ericsson environment
+- likely mirror code into the sandbox folder of the ISAC repo
 - first code handoff planned after the workshop
 
 ---
 
-# TODO: Expectations for the current version
+# Next steps after first code handoff
 
-- good enough for initial integration/handoff
-- strong enough to explain and collaborate around
-- not yet the final lifecycle/scoring/performance story
-- likely to evolve once integration reveals real constraints
+## Ericsson
 
----
+- Start working on being able to swap in `TOMHTTracker` as system tracker
+- Report any issues that come up in integration
+- Try running it on a few recorded scenarios
 
-# TODO: Likely next technical themes
+## SafeRadar
 
-- multi-sensor miss / termination policy
-- scoring cleanup once ISAC assumptions are clearer
-- broader performance/scaling work if needed
-- deeper integration-facing cleanup only where it buys something
-
----
-
-# Discussion
-
-- Which part of the workflow should own what?
-- What are the main integration constraints on the ISAC side?
-- What should the first handoff contain?
-- What should we explicitly defer?
+- Keep iterating on the implementation
+- Fix integration issues as they come up
