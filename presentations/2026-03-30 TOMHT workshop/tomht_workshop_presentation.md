@@ -489,23 +489,22 @@ For ISAC, only external starts will be used, at least for the time being.
 # Summary of the current implementation
 
 - explicit node-based TO-MHT structure
-- globals reference leaf nodes
-- structural dedupe
+- global hypotheses reference leaf nodes
 - explicit ancestor-based N-scan commitment
 - conservative post-commit ancestry cleanup
+- output from each update is MAP (highest-weight global hypothesis)
 - external confirmed starts supported
-- API is intended be stable
+- API is intended to be Stone Soup compliant and stable
 
 ---
 
 # What needs to be improved
 
 ### Intentionally simple / currently pragmatic
-- Scoring details
-  - currently simplified and/or based on heuristics
-- Internal birth handling
 - Track trees are currently implicit, no track tree data structure
 - N-scan pruning implemented, other aspects of pruning largely missing
+- Scoring details are currently simplified and/or based on heuristics
+- Internal birth handling
 
 ### Still future work
 - Proper lifecycle / deletion
@@ -541,13 +540,14 @@ These kinds of optimizations seem out of scope for the current Python implementa
 # Test scenarios
 
 - A few simple synthetic scenarios included, inherited from Stone Soup MFA example
-  - Was very useful to get started
+  - was very useful to get started
 - Still useful
-  - Based on different variants of underlying Stone Soup components
-  - Small and simple, so analyzing details is tractable
-  - Each has some challenging aspects
+  - based on different variants of underlying Stone Soup components
+  - truth is available
+  - small and simple, so analyzing details is tractable
+  - each has some challenging aspects
     - targets starting close to each other, crossing targets, high clutter
-  - Also used as a quick smoke test
+  - also used as a quick smoke test
 - Could be extended and tweaked
 
 ---
@@ -582,7 +582,7 @@ These kinds of optimizations seem out of scope for the current Python implementa
 - External track starts are generated from unused detections
   - via existing sensor trackers + deghoster, outside the scope of the TO-MHT
 - All ambiguities (u/v + doppler) are handled transparently by the hypothesiser
-  - given a track prediction, resolution is trivial
+  - note: given a track prediction, resolution of detection ambiguities is trivial
 - IMM handled inside hypothesiser + updater, transparent to the TO-MHT tracker
 - Detections carry everything the hypothesiser + updater need for multi-sensor support
 - Multiple sensors (TX-RX links) at the same timestamp are handled via successive `tracker_update` calls, each containing detections from one sensor
@@ -593,9 +593,9 @@ These kinds of optimizations seem out of scope for the current Python implementa
 
 Current plan:
 - maintain working development repo on our side
-- export snapshots to a dedicated handoff/export repo
+- export snapshots/releases to a dedicated handoff/export repo
 - mirror export repo into the Ericsson environment
-- likely mirror code into the sandbox folder of the ISAC repo
+- likely mirror code into `.../sandbox/fusion/mht` folder of the ISAC repo
 - first code handoff planned after the workshop
 
 ---
