@@ -17,8 +17,9 @@ SafeRadar Research AB
 
 - TO-MHT vs "simple" trackers (e.g., GNN) 
 - TO-MHT data structures and update flow in general
-- Our implementation
+- Current state of our implementation
 - Integration
+- Next steps
 
 ---
 
@@ -42,11 +43,12 @@ SafeRadar Research AB
 - Stone Soup based
   - Use standard Stone Soup APIs, without special hacks or assumptions
   - Should allow integration in any Stone Soup compliant environment
+  - Abstracts away all dependencies on measurement and transition models, etc
 - Support ISAC use case
 - Code should be easy to read and work with
 - Prioritize clean architecture and code over raw performance
   - Algorithmic optimizations to keep branching under control still essential
-  - Some code-level optimization to remove obvious inefficiencies 
+  - Some code-level optimization to remove obvious inefficiencies is fine
 
 ---
 
@@ -163,8 +165,7 @@ for (time, detections) in source:
 - A TO-MHT keeps multiple plausible association histories alive over time
 - Conceptually, each logical track is a **track tree** (aka family)
 - Each node in that tree corresponds to one local association decision at one scan
-- A **global hypothesis** selects one active leaf from each track tree
-- Global consistency means, for example:
+- A **global hypothesis** selects one active leaf from each track tree, in a way that is globally consistent between tracks, including history:
   - no detection is used twice
   - clutter / births are handled consistently
 
@@ -287,14 +288,14 @@ In practice, these choices are usually folded into the later global association 
 
 ---
 
-## Build global hypotheses from consistent combinations
+# Build global hypotheses from consistent combinations
 
 Form **globally consistent combinations** such that:
 
 - each existing track selects at most one child branch
 - each detection is used at most once
 - unassigned detections are explained as clutter or births
-- optional extra logic: exclusivity zones, class constraints, kinematic conflicts
+- optional extra logic
 
 Result: a pool of global hypotheses
 
@@ -324,7 +325,7 @@ Common pruning steps:
 - keep only top `K` global hypotheses
 - prune low-scoring global hypotheses below threshold
 - prune dominated local branches not used by any surviving global
-- merge nearly identical states if your implementation supports it
+- merge nearly identical states
 - apply N-scan pruning / deferred decision logic
 
 This step is central to making the tracker practical.
@@ -367,7 +368,7 @@ One may also maintain per-track stats like:
 Finally, derive the user-facing track set, usually from:
 
 - the single best global hypothesis, or
-- a weighted summary over several globals
+- a weighted combination of several globals
 
 Output each selected track’s current state and maybe its smoothed history.
 
@@ -422,7 +423,7 @@ Carries:
 7. apply internal births
 8. produce MAP output
 
-This is the implementation-level version of the conceptual TO-MHT update.
+This is the current implementation-level version of the conceptual TO-MHT update.
 
 ---
 
@@ -530,7 +531,7 @@ These kinds of optimizations seem out of scope for the current Python implementa
 
 - a conceptually clean TO-MHT core
 - a stable Stone Soup-facing API
-- external-start support for integration
+- external-start support for ISAC integration
 - enough maturity to start integration and validation/evaluation of usefulness
 - a good foundation to iterate from
 - still much work left to do, on multiple fronts
@@ -543,7 +544,7 @@ These kinds of optimizations seem out of scope for the current Python implementa
   - Was very useful to get started
 - Still useful
   - Based on different variants of underlying Stone Soup components
-  - Small and simple, analyzing details is tractable
+  - Small and simple, so analyzing details is tractable
   - Each has some challenging aspects
     - targets starting close to each other, crossing targets, high clutter
   - Also used as a quick smoke test
@@ -601,13 +602,15 @@ Current plan:
 
 # Next steps after first code handoff
 
-## Ericsson
+### Ericsson
 
 - Start working on being able to swap in `TOMHTTracker` as system tracker
 - Report any issues that come up in integration
 - Try running it on a few recorded scenarios
 
-## SafeRadar
+### SafeRadar
 
-- Keep iterating on the implementation
 - Fix integration issues as they come up
+- Keep iterating on the implementation
+- Likely near-term themes:
+  - explicit track trees, refined scoring and miss models, improved lifecycle / pruning / deletion behavior, ...
