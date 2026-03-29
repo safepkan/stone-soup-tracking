@@ -52,6 +52,8 @@ OperatingModeName = Literal["CUSTOM", "EXTERNAL", "INTERNAL", "BOTH"]
 
 
 class TOMHTOperatingMode(str, Enum):
+    """Preset runner modes for internal births and external-start injection."""
+
     CUSTOM = "CUSTOM"
     EXTERNAL = "EXTERNAL"
     INTERNAL = "INTERNAL"
@@ -59,22 +61,29 @@ class TOMHTOperatingMode(str, Enum):
 
     @classmethod
     def choices(cls) -> tuple[str, ...]:
+        """Return valid string values for CLI/user-facing mode parsing."""
         return tuple(mode.value for mode in cls)
 
 
 @dataclass(frozen=True)
 class ModeConfiguration:
+    """Resolved mode flags controlling initiator births and external starts."""
+
     use_initiator: bool
     external_starts_enabled: bool
 
 
 @dataclass(frozen=True)
 class ExternalStartTimingConfiguration:
+    """Resolved scan index (and provenance) for external-start injection."""
+
     start_scan: int | None
     source: str
 
 
 def _normalize_operating_mode(mode: str | None) -> TOMHTOperatingMode:
+    """Normalize and validate a user-provided mode label."""
+
     if mode is None:
         return TOMHTOperatingMode.CUSTOM
     normalized = mode.upper().replace("_", "-")
@@ -97,6 +106,8 @@ def _resolve_external_start_enablement(
     mode: TOMHTOperatingMode,
     use_external_starts: bool,
 ) -> bool:
+    """Resolve whether external starts are enabled after mode overrides."""
+
     if mode == TOMHTOperatingMode.INTERNAL:
         return False
     if mode in {TOMHTOperatingMode.EXTERNAL, TOMHTOperatingMode.BOTH}:
@@ -111,6 +122,8 @@ def _resolve_external_start_timing(
     external_start_scan: int | None,
     external_start_delay_scans: int | None,
 ) -> ExternalStartTimingConfiguration:
+    """Choose and validate the scan index where external starts are injected."""
+
     if external_start_scan is not None and external_start_delay_scans is not None:
         raise ValueError(
             "Specify at most one of external_start_scan and "
@@ -148,6 +161,8 @@ def _resolve_mode_configuration(
     requested_mode: TOMHTOperatingMode,
     configuration: ModeConfiguration,
 ) -> ModeConfiguration:
+    """Map a requested preset mode to concrete runtime toggles."""
+
     if requested_mode == TOMHTOperatingMode.CUSTOM:
         return configuration
     if requested_mode == TOMHTOperatingMode.EXTERNAL:
@@ -167,6 +182,8 @@ def _resolve_mode_configuration(
 
 
 def _running_in_ipython_kernel() -> bool:
+    """Return True when running under a Jupyter/IPython ZMQ kernel."""
+
     try:
         from IPython import get_ipython  # type: ignore
 
@@ -177,6 +194,8 @@ def _running_in_ipython_kernel() -> bool:
 
 
 def _show_animation(ani) -> None:
+    """Display animation when interactive, otherwise close cleanly in headless runs."""
+
     backend = mpl.get_backend().lower()
     headless_backends = ("agg", "pdf", "ps", "svg", "cairo", "pgf")
     force_show = os.environ.get("TOMHT_SHOW", "").lower() in {"1", "true", "yes"}
@@ -201,6 +220,14 @@ def _show_animation(ani) -> None:
         plt.show()
 
 
+def _format_external_start_truth_indices(external_starts) -> str:
+    """Format external-start truth IDs for compact logging output."""
+
+    return ",".join(
+        str(int(track.metadata["scenario_truth_index"])) for track in external_starts
+    )
+
+
 def run_tomht(
     setup: SetupName,
     *,
@@ -214,6 +241,13 @@ def run_tomht(
     debug_display_hypotheses: bool | None = None,
     debug_display_births: bool | None = None,
 ) -> None:
+    """Run one TOMHT scenario end-to-end and render or suppress animation output.
+
+    This runner wires scenario generation, tracker construction, optional external
+    starts, per-scan updates, and plotting into a single callable entrypoint that
+    doubles as a lightweight usage example for ``TOMHTTracker``.
+    """
+
     requested_mode_raw = (
         operating_mode.value
         if isinstance(operating_mode, TOMHTOperatingMode)
@@ -222,6 +256,8 @@ def run_tomht(
     mode = _normalize_operating_mode(operating_mode)
 
     def _apply_debug_overrides(params: TOMHTParams) -> TOMHTParams:
+        """Apply optional debug flag overrides to baseline tracker parameters."""
+
         if debug_display_detections is not None:
             params = replace(params, debug_display_detections=debug_display_detections)
         if debug_display_scan_stats is not None:
@@ -242,6 +278,8 @@ def run_tomht(
         ]
 
         def build_external_starts(scan_index: int, timestamp: datetime.datetime):
+            """Build scenario-derived external starts for the current crossing scan."""
+
             return external_tomht_tracks_for_crossing(truths, scan_index, timestamp)
 
         styles = ("r-", "b-")
@@ -251,6 +289,8 @@ def run_tomht(
         )
 
         def build_external_starts(scan_index: int, timestamp: datetime.datetime):
+            """Build scenario-derived external starts for the current bearing-range scan."""
+
             return external_tomht_tracks_for_bearing_range(
                 truths, scan_index, timestamp
             )
@@ -356,23 +396,13 @@ def run_tomht(
     plotter.ax.set_aspect("auto")
     frames: list[list] = []
 
-    for n, (timestamp, detections) in enumerate(zip(timestamps, scans)):
-        artists: list = []
-
-        _, tracks_out = tracker.update_tracker(timestamp, detections)
-        if delayed_external_start_scan == n:
-            external_starts = build_external_starts(n, timestamp)
-            tracker.add_external_starts(timestamp, external_starts)
-            truth_indices = ",".join(
-                str(int(track.metadata["scenario_truth_index"]))
-                for track in external_starts
-            )
-            print(
-                "EXTERNAL_STARTS "
-                f"setup={setup} scan={n} t={timestamp} count={len(external_starts)} "
-                f"truth_indices=[{truth_indices}]"
-            )
-            tracks_out = tracker.get_map_output_tracks()
+    def build_scan_artists(
+        *,
+        scan_index: int,
+        detections,
+        tracks_out,
+    ) -> list:
+        """Render one scan's truths, detections, and tracker output as artists."""
 
         ax = plotter.ax
         ax.set_xlabel("$x$")
@@ -380,8 +410,11 @@ def run_tomht(
         ax.set_xlim(*config.v_bounds[0])
         ax.set_ylim(*config.v_bounds[1])
 
+        artists: list = []
         artists.extend(
-            plotter.plot_ground_truths([t[: n + 1] for t in truths], mapping=[0, 2])
+            plotter.plot_ground_truths(
+                [truth[: scan_index + 1] for truth in truths], mapping=[0, 2]
+            )
         )
         artists.extend(
             plotter.plot_measurements(
@@ -389,8 +422,30 @@ def run_tomht(
             )
         )
         artists.extend(plot_tracks_stable_xy(tracks_out, ax, styles=styles))
+        return artists
 
-        frames.append(artists)
+    for n, (timestamp, detections) in enumerate(zip(timestamps, scans)):
+        _, tracks_out = tracker.update_tracker(timestamp, detections)
+
+        if delayed_external_start_scan == n:
+            external_starts = build_external_starts(n, timestamp)
+            tracker.add_external_starts(timestamp, external_starts)
+            tracks_out = tracker.tracks
+
+            print(
+                "EXTERNAL_STARTS "
+                f"setup={setup} scan={n} t={timestamp} count={len(external_starts)} "
+                "truth_indices="
+                f"[{_format_external_start_truth_indices(external_starts)}]"
+            )
+
+        frames.append(
+            build_scan_artists(
+                scan_index=n,
+                detections=detections,
+                tracks_out=tracks_out,
+            )
+        )
 
     if tracker.params.collect_stats:
         tracker.print_summary_stats()

@@ -6,6 +6,7 @@ It replaces the earlier pre-Phase-B description in which globals still stored co
 
 ## Recent updates
 
+- 2026-03-29: small runner readability cleanup in `mht/runners/tomht_runner.py`: factored per-scan plot/artist construction from the `run_tomht(...)` main loop into a local helper `build_scan_artists(...)`; plotting behavior is unchanged.
 - 2026-03-24: added a narrow post-commit ancestry cleanup pass in `mht/tomht_tracker.py` (`_cleanup_committed_ancestry()`), called immediately after `_update_n_scan_commitment(...)`. Commitment semantics are unchanged; cleanup is intentionally separate and conservative (reclaims only node ancestry unreachable from active leaves and commitment-bookkeeping references).
 - 2026-03-24: focused readability/documentation pass on `TOMHTParams` in `mht/tomht_tracker.py`: expanded class docstring with stable-vs-heuristic guidance, added explicit parameter-group headers (core beam/scoring/N-scan/internal-birth guards/debug), and clarified comments for less-obvious knobs (`prob_gate`, `births_k`, `unused_det_log_penalty`, `birth_log_penalty`) with no behavior/default changes.
 - 2026-03-24: small readability/modularization cleanup in scoring setup: moved default scoring-model construction from hypothesiser attributes and BetaRatio sanity/warning diagnostics out of `TOMHTTracker.__init__` into `mht/tomht_scoring.py` helpers; tracker behavior and scoring semantics are unchanged.
