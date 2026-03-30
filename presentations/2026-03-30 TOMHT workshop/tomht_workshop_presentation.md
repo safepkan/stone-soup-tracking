@@ -474,6 +474,7 @@ For ISAC, only external starts will be used, at least for the time being.
 - explicit node-based track hypothesis structure
 - global hypotheses reference leaf nodes
 - some remaining global-hypothesis-oriented structure
+- track scores based on probabilities extracted from the hypothesizer
 - explicit ancestor-based N-scan commitment
 - conservative post-commit ancestry cleanup
 - output from each update is MAP (highest-weight global hypothesis)
@@ -495,19 +496,6 @@ For ISAC, only external starts will be used, at least for the time being.
 - Proper lifecycle / deletion
 - Multi-sensor miss policy
 - Broader scaling / performance optimization
-
----
-
-# What is out of scope
-
-In a real system, one might do things like:
-
-- store nodes in arrays/arenas, not pointer-heavy objects, for cache efficiency
-- use integer IDs instead of raw pointers
-- represent measurement usage with bitsets
-- ...
-
-These kinds of optimizations seem out of scope for the current Python implementation.
 
 ---
 
@@ -597,4 +585,4 @@ Current plan:
 - Fix integration issues as they come up
 - Keep iterating on the implementation
 - Likely near-term themes:
-  - explicit track trees, refined scoring and miss models, improved lifecycle / pruning / deletion behavior, ...
+  - explicit track trees, remove remaining HO structure, refined scoring and miss models, improved lifecycle / pruning / deletion behavior, ...
