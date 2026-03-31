@@ -33,6 +33,17 @@ At the end of this phase, the tracker should be organized around the following p
 
 This is the key correction relative to the current handoff release.
 
+### Public API stability
+
+The public operational API should remain unchanged through this phase:
+
+- `update_tracker(time, detections) -> (time, tracks)`
+- `tracks`
+- `add_external_starts(time, starts)`
+- `get_unused_detections()`
+
+Public debug / inspection helpers and instrumentation output may change as appropriate to fit the new architecture.
+
 ### Why this phase now
 
 Reasons to prioritize this next:
@@ -54,18 +65,23 @@ This distinction should be made explicit in the redesign.
 The following should persist across scans:
 
 - explicit track trees / track families
-- track-hypothesis nodes within those trees
+- all unpruned track-hypothesis nodes within those trees
 - root / leaf structure per tree
 - per-node state, score, association, counters, provenance
 - stable logical track IDs
 - N-scan / commitment-related persistent state as needed
 - minimal long-lived tracker statistics / counters
 
+Important clarification for this phase:
+
+- when a local child hypothesis is materialized as a new `TrackHypothesisNode`, it becomes part of the persistent tree structure
+- the primary persistent frontier is therefore the set of current leaf nodes across the track trees, not a persistent list of global hypotheses
+
 ### Per-scan transient state
 
 The following should be rebuilt fresh on each update:
 
-- local candidate child hypotheses for the current scan
+- temporary hypothesiser / gating results before node materialization
 - conflict / incompatibility relations among current candidate track hypotheses
 - per-scan track clusters
 - rebuilt cluster-level global hypotheses
@@ -83,6 +99,7 @@ Some transient structures may be worth keeping available until the next update f
 - current cluster MAP selections
 - current active leaves per track tree
 - full current set of track trees
+- statistics on disagreement between MAP-based pruning and alternative globals
 
 This category should be treated deliberately:
 
@@ -111,6 +128,8 @@ Expected changes:
   - cached counters / provenance
 - add:
   - child pointers or child IDs
+- likely change:
+  - node mutability, so child links can be maintained directly
 - possibly refine:
   - score fields if clearer accumulated/local score separation is helpful
   - miss/lifecycle-related fields once the new architecture is in place
@@ -132,6 +151,12 @@ Goal:
 
 - make the “one logical track = one tree/family” idea explicit in code,
 - rather than implicit in node parent chains only.
+
+Note for this phase:
+
+- a `TrackTree` does **not** need to carry a separate committed Stone Soup `Track` object yet
+- output/history views can still be reconstructed from tree structure directly
+- reconstructable history is therefore limited to the depth retained in the tree, which is acceptable for this phase
 
 ### 3.3 Current tree set
 
@@ -181,24 +206,28 @@ The desired scan update should look approximately like this.
 
 For each active leaf in each track tree:
 
-- predict to the new timestamp
-- gate detections
-- generate feasible child hypotheses
+- call the hypothesiser at the new timestamp, as in the current implementation
+- use the hypothesiser/updater boundary exactly as before
+- translate returned local hypotheses into child nodes
 - create matched and miss children
-- keep existing scoring semantics initially unless the rewrite forces a small cleanup
+- use the **same local per-track scoring model as before** in this phase unless the rewrite forces a small mechanical cleanup
 
-This part should be close to what the tracker already does conceptually.
+This phase is still hypothesiser-driven at the Stone Soup boundary; the architectural rewrite is about how the resulting hypotheses are stored and combined.
 
-### Step 2: Local pruning of weak branches
+### Step 2: Minimal local pruning and simple lifecycle handling
 
-After local expansion:
+In the first version, local pruning and lifecycle handling are intentionally simple.
 
-- cap children per leaf
-- keep miss branch as needed
-- apply miss-budget style local elimination if still appropriate
-- optionally apply small local duplicate suppression if useful
+At most:
 
-The intent is to keep the candidate track-hypothesis set manageable before rebuilding globals.
+- cap the number of children per leaf
+- **always keep a miss branch if the hypothesiser returned one**, matching current behavior
+- remove any leaf with `missed_count > max_missed` from the active leaf set
+- remove an entire track tree if it has no surviving active leaves
+
+This is the simple first-version replacement for the current architecture's per-global drop semantics.
+
+Stronger local pruning and broader lifecycle design can be added later if needed.
 
 ### Step 3: Form independent track clusters
 
@@ -211,10 +240,11 @@ Planned approach:
 - extract connected components
 - treat each connected component as an independent cluster for global reconstruction
 
-Important design choice:
+Important design choices:
 
 - clusters are recomputed on each update
 - they are **not** maintained as persistent tracker objects across scans
+- in this phase, clustering models only **measurement-exclusivity conflicts** induced by shared detections among current candidate track hypotheses
 
 This should simplify the architecture and provide a major performance win in many scenes.
 
@@ -223,26 +253,28 @@ This should simplify the architecture and provide a major performance win in man
 For each cluster:
 
 - construct the current incompatibility / conflict structure among candidate track hypotheses
-- solve for:
-  - best global hypothesis
-  - ideally also K-best globals
+- solve for one or more globally consistent leaf selections
 - represent the result in a solver-independent way
 
 The rebuilt globals should now be **derived from the current cluster track hypotheses**, not inherited directly from a persistent old global frontier.
 
 ### Step 5: N-scan pruning on explicit track trees
 
-Use the best global hypothesis (or the surviving set if needed) to perform N-scan pruning on the explicit trees.
+In this first rewrite, N-scan pruning is intentionally based on the **MAP global hypothesis only**.
 
-In an explicit track-tree setting, this should become much cleaner than in the current architecture.
+At pruning depth `N`:
 
-Current working expectation:
+- for each tree old enough to prune, identify the child of the current root that contains the MAP-selected leaf
+- keep that child and promote it to be the new root
+- remove its siblings
+- trees younger than the pruning depth are left unchanged
 
-- for each tree, identify the branch selected by the best global hypothesis
-- prune away root-level alternatives older than the N-scan cutoff
-- retain the unresolved recent tail
+This is a deliberate simplification for the first version.
 
-The exact pruning semantics should be written carefully once the explicit tree structure exists.
+To assess whether this is too aggressive in practice, the implementation should collect disagreement statistics between:
+
+- the MAP-selected pruning decision
+- and the alternative rebuilt globals for that cluster
 
 ### Step 6: Extract MAP output
 
@@ -261,8 +293,15 @@ Retain useful transient structures from the last scan for inspection:
 - rebuilt globals
 - cluster explanations
 - current MAP selection
+- pruning disagreement statistics
 
-This should be explicit and deliberate rather than accidental.
+Debug / instrumentation printing will likely need to change in this phase.
+
+Goal:
+
+- keep a similar level of usefulness for debugging and scenario comparison
+- do not commit in advance to the exact output format
+- make a best effort to provide a reasonable set of per-scan and summary outputs adapted to the new architecture
 
 ---
 
@@ -274,57 +313,129 @@ The tracker should not depend directly on one specific global-hypothesis solver 
 
 Introduce a wrapper / abstraction layer so the main code can stay independent of:
 
-- Hungarian-only fallback path
-- pure Python Murty implementation
-- optimized external Murty implementation
+- exhaustive enumeration in the first implementation
+- pure Python Murty implementation later
+- optimized external Murty implementation later
 - future replacements
 
-### 5.2 Initial solver requirements
+### 5.2 Exact first-version optimization problem
 
-We need at least:
+Per cluster, define the solver input as:
 
-- best global hypothesis solver
-- ideally K-best support
+- a list of track trees in the cluster:
+  - `[track_1, track_2, ..., track_T]`
+- for each track, its current active leaves:
+  - `track_i.leaves = [leaf_i_1, leaf_i_2, ..., leaf_i_Li]`
+- for each leaf:
+  - `leaf.score`
+  - `leaf.detections`, the set of detection identifiers used within the unresolved window / current tree depth relevant to conflict checking
 
-Likely options to evaluate:
+Detection identifier format in this phase:
 
-- `scipy.optimize.linear_sum_assignment` for best assignment / baseline cases
-- simple Python Murty implementation as an understandable first step
-- `motrom/fastmurty` or similar later if needed
+- use `(scan_index, det_index)`-style keys
+- not per-scan indices alone
+- so cross-scan references inside the unresolved window cannot collide
 
-The first implementation should prioritize:
+Decision variable:
 
-- correctness
-- inspectability
-- clean integration into the tracker architecture
+- choose exactly one active leaf from each surviving track tree in the cluster
 
-over ultimate speed.
+Feasibility constraint:
 
-### 5.3 Keep main code independent of solver details
+- a combination of selected leaves is feasible iff for every pair of selected leaves from different tracks:
+  - `leaf_i.detections ∩ leaf_j.detections = ∅`
 
-The rest of the tracker should depend on a small interface such as:
+Objective:
 
-- solve best cluster global
-- solve K-best cluster globals
+- maximize:
+  - `sum(leaf.score for leaf in selected_leaves)`
+  - **plus** the same style of unused-detection penalty as before, now treated as a per-combination term
 
-and not care how the solver works internally.
+Explicit rule for the unused-detection term in this phase:
+
+- compute it **cluster-locally**
+- define each cluster's conflict universe as the **union of current-scan detection keys that appear in any active leaf candidate in that cluster**
+- use only those cluster-local current-scan detections for the unused-detection term
+- for a feasible cluster combination, count which of those cluster-local current-scan detections are unused by that combination
+- add the corresponding penalty to that cluster combination score
+- full-scan score is then the sum of cluster scores
+
+Important clarification:
+
+- committed/shared history within a tree contributes the same additive constant to all leaves of that tree, so it does not affect which combination is optimal; it only shifts absolute scores
+- the unused-detection term is not forced into per-leaf scores in this phase; it remains an explicit per-combination/global-style term
+
+### 5.3 First implementation: exhaustive enumeration
+
+For the first version, use exhaustive enumeration:
+
+- generate the Cartesian product of the leaf lists in a cluster
+- filter combinations for feasibility
+- score each feasible combination
+- return the best
+
+To support pruning-disagreement statistics:
+
+- exhaustive enumeration should also retain enough per-scan information about non-MAP combinations to compare their pruning choices against the MAP choice before those alternatives are discarded
+- those alternatives do **not** need to persist as long-lived tracker state
+
+This is acceptable for the first version because:
+
+- clusters are expected to stay fairly small
+- the main goal is correctness and architectural clarity
+- clustering and minimal pruning should already reduce the search space substantially
+
+### 5.4 Later optimization
+
+After the architecture is working, solver replacement can be a separate step.
+
+Later options may include:
+
+- Murty-style K-best ranking
+- optimized external implementations
+- other assignment / relaxation formulations if profiling shows the need
+
+The rest of the tracker should depend only on a small solver interface and not on solver internals.
 
 ---
 
-## 6. Birth handling in this phase
+## 6. Birth and external-start handling in this phase
 
 Births are **not** the main architectural priority of this phase.
 
 The ISAC path currently does not use internal births, so this part can stay intentionally modest.
 
-### Minimal acceptable approach
+### Internal births
 
-A pragmatic first-pass approach is acceptable, for example:
+Minimal acceptable approach:
 
-- create new birth trees from detections not explained by surviving associations
-- assume those births do not conflict with existing track trees if generated only from unassociated detections
-- assume the initiator does not generate mutually conflicting births unless proven otherwise
+- still use the `initiator` passed via the constructor when it is not `None`
+- determine birth input detections **after Step 2**
+- specifically, use the current-scan detections unused by the **union of all surviving active leaves after local pruning / simple lifecycle filtering**
+- feed only those detections to the initiator
+- create new birth trees from the resulting initiated tracks
+- under that rule, births do not conflict with existing track trees
+- assume the initiator does not generate mutually conflicting birth candidates unless proven otherwise
 - add birth trees late in the update flow and let normal later survival determine whether they persist
+
+### External track starts
+
+External starts should remain supported.
+
+Planned interpretation in this phase:
+
+- each external start becomes a new single-node track tree
+- as with births, assume external starts are created only from currently unused detections
+- under that rule, they are effectively separate new clusters with no conflicts to existing trees at insertion time
+
+### Explicit risk note
+
+With minimal birth handling and incomplete lifecycle logic:
+
+- internal births may be over-produced
+- or published too early in some scenarios
+
+This is acceptable for the first rewrite because ISAC does not use internal births, but should be monitored in synthetic/replay validation.
 
 ### Explicit non-goal for this phase
 
@@ -344,10 +455,11 @@ The first track-oriented rewrite does **not** need to solve all pruning question
 
 Likely enough for the first version:
 
-- local branch limits
+- minimal local branch limits
+- simple `max_missed`-based leaf / tree deletion
 - clustering
-- K-best per-cluster reconstruction
-- N-scan pruning
+- rebuilt globals by exhaustive enumeration
+- MAP-only N-scan pruning
 
 That may already be sufficient to make many scenarios tractable.
 
@@ -367,6 +479,7 @@ The tracker should make it reasonably easy to inspect:
 - why trees were clustered together
 - rebuilt globals per cluster
 - current MAP output
+- disagreement between MAP-based pruning and alternative rebuilt globals
 
 Suggested direction:
 
@@ -392,7 +505,8 @@ Expected actions:
   - explicit track trees
   - per-scan clustering
   - rebuilt globals
-  - tree-based N-scan pruning
+  - MAP-based tree pruning
+  - simple leaf/tree deletion under `max_missed`
   - debug snapshots if exposed
 
 ### 9.2 TOMHTParams
@@ -472,7 +586,8 @@ This phase should be considered successful if, at the end:
 - explicit track trees exist
 - globals are rebuilt from current surviving track hypotheses rather than propagated scan-to-scan as the main state
 - per-scan clustering exists and works
-- N-scan pruning operates naturally on explicit trees
+- MAP-based pruning operates naturally on explicit trees
+- simple leaf/tree deletion under `max_missed` works
 - current public API remains usable for integration
 - synthetic scenarios work again
 - replay data gives sensible results
