@@ -1,5 +1,17 @@
 # TO-MHT Current State
 
+## Update (2026-03-31): Phase D architecture in place
+
+The tracker has now been moved to the track-oriented Phase D architecture:
+
+- persistent explicit track trees are now the primary scan-to-scan state
+- globals are rebuilt per scan/per cluster from current active leaves
+- previous scan global lists are no longer the persistent search frontier
+- MAP-only N-scan pruning is applied directly on explicit trees
+- measurement-exclusivity clustering is explicit and recomputed each scan
+- internal births and external starts are represented as new trees under the simplified Phase D assumptions
+- an explicit per-tree frontier cap (`max_leaves_per_track_tree`) is now used to keep the first exhaustive solver implementation tractable on longer runs
+
 This document is the **current-state snapshot for the first ISAC handoff release**.
 
 It describes the state of the code that was presented in the workshop and handed off into the ISAC sandbox area for initial integration work. It is intentionally a **snapshot document**, not a roadmap and not a full design history.

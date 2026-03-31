@@ -1,5 +1,7 @@
 """Passive TO-MHT scan stats structures and summary reporting helpers."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 import datetime
 from statistics import median
@@ -13,10 +15,15 @@ class BirthStats:
     residual_detections_considered: int = 0
     birth_tracks_created: int = 0
     birth_tracks_kept: int = 0
-    birth_track_instances_in_beam: int = 0
-    globals_with_birth: int = 0
-    globals_before_births: int = 0
-    globals_after_births: int = 0
+
+
+@dataclass(frozen=True)
+class RebuildStats:
+    cluster_count: int = 0
+    combinations_evaluated: int = 0
+    feasible_combinations: int = 0
+    rebuilt_globals_stored: int = 0
+    nscan_disagreement_total: int = 0
 
 
 @dataclass(frozen=True)
@@ -25,22 +32,20 @@ class ScanStats:
     scan_wall_ms: float
     maxrss_mb: float
     node_count_total: int
-    leaf_instances_in_beam: int
+    active_trees: int
+    active_leaves: int
     num_detections: int
-    globals_in: int
-    globals_expanded: int
-    globals_after_unused: int
-    globals_after_dedupe: int
-    globals_after_beam: int
+    cluster_count: int
+    combinations_evaluated: int
+    feasible_combinations: int
+    rebuilt_globals_stored: int
+    nscan_disagreement_total: int
     nscan_boundary_scan_index: int
     nscan_tracks_in_scope: int
     nscan_tracks_committed: int
-    globals_after_births: int
     birth_candidates: int
     birth_tracks_created: int
     birth_tracks_kept: int
-    birth_track_instances_in_beam: int
-    globals_with_birth: int
     map_tracks: int
     map_used: int
     map_unused: int
@@ -58,18 +63,20 @@ def print_scan_stats(
     """Print one per-scan instrumentation block from precomputed ScanStats."""
     print(
         f"SCAN t={timestamp} det={scan_stats.num_detections} "
-        f"globals in={scan_stats.globals_in} exp={scan_stats.globals_expanded} "
-        f"after_unused={scan_stats.globals_after_unused} dedup={scan_stats.globals_after_dedupe} "
-        f"beam={scan_stats.globals_after_beam} "
+        f"trees={scan_stats.active_trees} leaves={scan_stats.active_leaves} "
+        f"clusters={scan_stats.cluster_count} "
+        f"comb_eval={scan_stats.combinations_evaluated} "
+        f"comb_feas={scan_stats.feasible_combinations} "
+        f"rebuilt_globals={scan_stats.rebuilt_globals_stored} "
         f"nscan boundary={scan_stats.nscan_boundary_scan_index} "
         f"in_scope={scan_stats.nscan_tracks_in_scope} "
         f"committed_now={scan_stats.nscan_tracks_committed} "
         f"committed_total={len(nscan_snapshot.committed_boundary_by_track_id)} "
+        f"disagree={scan_stats.nscan_disagreement_total} "
         f"births cand={scan_stats.birth_candidates} "
-        f"tracks_created={scan_stats.birth_tracks_created} tracks_kept={scan_stats.birth_tracks_kept} "
-        f"beam_inst={scan_stats.birth_track_instances_in_beam} "
-        f"globals_with_birth={scan_stats.globals_with_birth} "
-        f"after={scan_stats.globals_after_births} MAP tracks={scan_stats.map_tracks} "
+        f"tracks_created={scan_stats.birth_tracks_created} "
+        f"tracks_kept={scan_stats.birth_tracks_kept} "
+        f"MAP tracks={scan_stats.map_tracks} "
         f"used={scan_stats.map_used} unused={scan_stats.map_unused} "
         f"hit_rate={scan_stats.map_mean_hit_rate:.2f}"
     )
@@ -77,7 +84,6 @@ def print_scan_stats(
     print(
         f"SCAN_MEMORY t={timestamp} "
         f"nodes={scan_stats.node_count_total} "
-        f"leaf_inst={scan_stats.leaf_instances_in_beam} "
         f"maxrss_mb={scan_stats.maxrss_mb:.1f}"
     )
     if nscan_snapshot.latest_committed_ancestor_by_track_id:
@@ -104,47 +110,41 @@ def print_summary_stats(
     committed_boundary_by_track_id: Mapping[int, int],
 ) -> None:
     """Print aggregate instrumentation summaries from collected ScanStats."""
+    del max_global_hypotheses
     if not stats:
         print("SUMMARY scans=0 (no collected ScanStats)")
         return
 
     num_scans = len(stats)
-    expanded = [s.globals_expanded for s in stats]
-    deduped = [s.globals_after_dedupe for s in stats]
-    beamed = [s.globals_after_beam for s in stats]
-    after_births = [s.globals_after_births for s in stats]
-    birth_created = [s.birth_tracks_created for s in stats]
-    birth_kept = [s.birth_tracks_kept for s in stats]
-    map_tracks = [s.map_tracks for s in stats]
-    map_unused = [s.map_unused for s in stats]
-    map_used = [s.map_used for s in stats]
-    map_hit_rate = [s.map_mean_hit_rate for s in stats]
-    scan_wall_ms = [s.scan_wall_ms for s in stats]
-    maxrss_mb = [s.maxrss_mb for s in stats]
-    node_count_total = [s.node_count_total for s in stats]
-    leaf_instances_in_beam = [s.leaf_instances_in_beam for s in stats]
-    nscan_tracks_in_scope = [s.nscan_tracks_in_scope for s in stats]
-    nscan_tracks_committed = [s.nscan_tracks_committed for s in stats]
 
     def _mean(values: list[int] | list[float]) -> float:
         if not values:
             return 0.0
         return float(sum(values)) / float(len(values))
 
-    max_globals = max_global_hypotheses
-    beam_full_pre_births = sum(1 for s in stats if s.globals_after_beam == max_globals)
-    beam_full_post_births = sum(
-        1 for s in stats if s.globals_after_births == max_globals
-    )
-    scans_with_births = sum(1 for s in stats if s.birth_tracks_created > 0)
-    scans_with_birth_globals = sum(1 for s in stats if s.globals_with_birth > 0)
-    scans_birth_push_to_full = sum(
-        1
-        for s in stats
-        if s.globals_after_beam < max_globals
-        and s.globals_after_births == max_globals
-        and s.globals_with_birth > 0
-    )
+    trees = [s.active_trees for s in stats]
+    leaves = [s.active_leaves for s in stats]
+    clusters = [s.cluster_count for s in stats]
+    comb_eval = [s.combinations_evaluated for s in stats]
+    comb_feas = [s.feasible_combinations for s in stats]
+    rebuilt = [s.rebuilt_globals_stored for s in stats]
+    disagree = [s.nscan_disagreement_total for s in stats]
+
+    birth_created = [s.birth_tracks_created for s in stats]
+    birth_kept = [s.birth_tracks_kept for s in stats]
+    birth_cand = [s.birth_candidates for s in stats]
+
+    map_tracks = [s.map_tracks for s in stats]
+    map_unused = [s.map_unused for s in stats]
+    map_used = [s.map_used for s in stats]
+    map_hit_rate = [s.map_mean_hit_rate for s in stats]
+
+    scan_wall_ms = [s.scan_wall_ms for s in stats]
+    maxrss_mb = [s.maxrss_mb for s in stats]
+    node_count_total = [s.node_count_total for s in stats]
+
+    nscan_tracks_in_scope = [s.nscan_tracks_in_scope for s in stats]
+    nscan_tracks_committed = [s.nscan_tracks_committed for s in stats]
 
     print(
         "SUMMARY "
@@ -153,10 +153,16 @@ def print_summary_stats(
         f"det_mean={_mean([s.num_detections for s in stats]):.2f}"
     )
     print(
-        "SUMMARY globals "
-        f"expanded med={median(expanded):.1f} max={max(expanded)} "
-        f"dedup med={median(deduped):.1f} max={max(deduped)} "
-        f"beam med={median(beamed):.1f} max={max(beamed)}"
+        "SUMMARY trees "
+        f"active med={median(trees):.1f} max={max(trees)} "
+        f"leaves med={median(leaves):.1f} max={max(leaves)}"
+    )
+    print(
+        "SUMMARY clusters "
+        f"count med={median(clusters):.1f} max={max(clusters)} "
+        f"comb_eval med={median(comb_eval):.1f} max={max(comb_eval)} "
+        f"comb_feas med={median(comb_feas):.1f} max={max(comb_feas)} "
+        f"globals med={median(rebuilt):.1f} max={max(rebuilt)}"
     )
     print(
         "SUMMARY timing "
@@ -168,32 +174,24 @@ def print_summary_stats(
         "SUMMARY memory "
         f"nodes_total med={median(node_count_total):.1f} "
         f"max={max(node_count_total)} "
-        f"leaf_instances_beam med={median(leaf_instances_in_beam):.1f} "
-        f"max={max(leaf_instances_in_beam)} "
         f"maxrss_mb final={maxrss_mb[-1]:.1f} "
         f"peak={max(maxrss_mb):.1f}"
     )
     print(
-        "SUMMARY beam "
-        f"after_births med={median(after_births):.1f} max={max(after_births)} "
-        f"full_pre_births={beam_full_pre_births}/{num_scans} ({beam_full_pre_births / num_scans:.1%}) "
-        f"full_post_births={beam_full_post_births}/{num_scans} ({beam_full_post_births / num_scans:.1%})"
-    )
-    print(
         "SUMMARY births "
-        f"active={scans_with_births}/{num_scans} ({scans_with_births / num_scans:.1%}) "
+        f"candidates med={median(birth_cand):.1f} max={max(birth_cand)} "
         f"tracks_created med={median(birth_created):.1f} mean={_mean(birth_created):.2f} max={max(birth_created)} "
-        f"tracks_kept med={median(birth_kept):.1f} mean={_mean(birth_kept):.2f} max={max(birth_kept)} "
-        f"globals_with_birth={scans_with_birth_globals}/{num_scans} ({scans_with_birth_globals / num_scans:.1%}) "
-        f"birth_pushes_to_full={scans_birth_push_to_full}/{num_scans} ({scans_birth_push_to_full / num_scans:.1%})"
+        f"tracks_kept med={median(birth_kept):.1f} mean={_mean(birth_kept):.2f} max={max(birth_kept)}"
     )
     print(
         "SUMMARY nscan "
         f"tracks_in_scope med={median(nscan_tracks_in_scope):.1f} mean={_mean(nscan_tracks_in_scope):.2f} "
         f"committed_now med={median(nscan_tracks_committed):.1f} mean={_mean(nscan_tracks_committed):.2f} "
+        f"disagreement med={median(disagree):.1f} mean={_mean(disagree):.2f} max={max(disagree)} "
         f"latest_boundary={last_nscan_boundary_scan_index} "
         f"committed_tracks_total={len(committed_boundary_by_track_id)}"
     )
+
     miss_hist_all: dict[int, int] = {}
     for scan in stats:
         for misses, count in scan.map_miss_hist.items():

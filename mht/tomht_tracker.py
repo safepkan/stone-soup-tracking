@@ -1,4 +1,4 @@
-"""Track-oriented MHT with node-based internals and Stone Soup-facing APIs.
+"""Track-oriented MHT with persistent track trees and per-scan rebuilt globals.
 
 Typical usage pattern:
 ```python
@@ -14,46 +14,44 @@ Core control APIs:
 - ``add_external_starts(time,starts)``: inject confirmed external starts after the
   same-timestamp ``update_tracker()`` call.
 
-Read-only inspection helpers (not required for normal operation):
-- ``get_map_hypothesis_snapshot()``
-- ``get_map_output_tracks()``
-- ``get_n_scan_commitment_snapshot()``
-
-Boundary model:
-- External interface stays Stone Soup-native (detections/tracks/hypothesiser/updater).
-- Internal branch structure is node-native (``track_id -> leaf node`` per global).
-- N-scan commitment is maintained by ancestor agreement at boundary ``b = k - N``.
-- Stone Soup ``Track`` objects remain the compatibility boundary for output and
-  integration-facing interfaces.
+Track-oriented architecture in this phase:
+- persistent state is explicit ``TrackTree`` objects and their active leaves,
+- globals are rebuilt per cluster on every scan from current leaves,
+- the previous scan's explicit global list is not the persistent search frontier.
 """
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
 import datetime
 import resource
 import sys
 import time as wall_clock
+from itertools import product
 from types import MappingProxyType
-from ordered_set import OrderedSet
 from typing import Any, Iterable, Mapping
+
+from ordered_set import OrderedSet
 
 import numpy as np
 
 from stonesoup.base import Property
 from stonesoup.hypothesiser.probability import PDAHypothesiser
 from stonesoup.initiator.base import Initiator
-from stonesoup.types.state import State
-from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.types.detection import Detection
+from stonesoup.types.state import State
 from stonesoup.types.track import Track
-from stonesoup.types.update import Update
+from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.updater.base import Updater
 
 from mht.tomht_model import (
-    ChildCandidate,
+    ClusterRebuildSnapshot,
+    DetectionKey,
     GlobalHypothesis,
     MAPHypothesisSnapshot,
     NScanCommitmentSnapshot,
     TrackHypothesisNode,
+    TrackTree,
 )
 from mht.tomht_output import reconstruct_track_from_leaf_node
 from mht.tomht_scoring import (
@@ -63,10 +61,12 @@ from mht.tomht_scoring import (
 )
 from mht.tomht_stats import (
     BirthStats,
+    RebuildStats,
     ScanStats,
     print_scan_stats as print_scan_stats_report,
     print_summary_stats as print_summary_stats_report,
 )
+
 
 # ============================================================================
 # Tracker-Local Support Structures / Params
@@ -75,92 +75,59 @@ from mht.tomht_stats import (
 
 @dataclass(frozen=True)
 class TOMHTParams:
-    """Flat tracker-configuration block for TO-MHT runtime controls.
-
-    Keep this as a single immutable parameter object passed at tracker
-    construction. Most users should tune these first:
-    ``max_global_hypotheses``, ``max_children_per_track``, ``max_missed``,
-    and ``ns_scan_window``.
+    """Flat tracker configuration for the track-oriented TO-MHT implementation.
 
     Stable operational controls:
-    - beam/hypothesis growth and miss tolerance,
-    - N-scan commitment window size.
+    - per-leaf local branching and miss tolerance,
+    - MAP-only N-scan pruning window,
+    - optional debug/stat visibility toggles.
 
-    Current-policy / heuristic controls:
-    - internal-birth ranking and penalties
-      (``max_births_per_scan``, ``births_k``, ``birth_log_penalty``,
-      ``unused_det_log_penalty``),
-    - scoring defaults that depend on hypothesiser-provided values.
-
-    Debug/instrumentation flags are visibility knobs and are not intended to
-    change tracker semantics.
+    Compatibility note:
+    ``max_global_hypotheses`` is retained as a cap for how many rebuilt globals
+    are kept per cluster for debug/snapshot storage; it is no longer a persistent
+    beam frontier carried scan-to-scan.
     """
 
-    # Core hypothesis-management / beam control (stable operational knobs):
-
-    # Beam width: keep at most this many scored globals each scan.
-    max_global_hypotheses: int = 20
-    # Per active leaf, keep up to this many local child candidates.
+    # Local expansion / lifecycle controls.
     max_children_per_track: int = 5
-    # Per-leaf miss budget. If exceeded, that track hypothesis is dropped from
-    # the resulting global during continuation expansion.
+    # Optional per-tree frontier cap applied after local expansion.
+    max_leaves_per_track_tree: int | None = 50
     max_missed: int = 5
 
-    # Scoring / numerical behavior:
+    # Rebuilt-global storage cap (debug/inspection cap, not persistent beam state).
+    max_global_hypotheses: int = 20
 
-    # Only beta_ratio is currently supported.
+    # Scoring / numerical behavior.
     scoring_mode: str = "beta_ratio"
-    # Numeric floor for log-domain probability math.
     log_epsilon: float = 1e-12
-    # Fallback P_G for default scoring if hypothesiser has no prob_gate.
     prob_gate: float = 0.99
 
-    # N-scan commitment:
-
-    # Sole commitment-window knob: boundary is b = k - N.
+    # MAP-only N-scan pruning: boundary is b = k - N.
     ns_scan_window: int = 3
 
-    # Internal birth policy (current heuristic policy controls):
-
-    # Keep at most this many internal births per scan.
+    # Internal birth handling (kept intentionally simple in this phase).
     max_births_per_scan: int = 2
-    # Fixed per-birth log penalty; higher means more conservative births.
     birth_log_penalty: float = 8.0
-    # Residuals come from detections unused by the top-k globals only.
-    births_k: int = 5
-    # Fallback per-unused-detection clutter penalty if no clutter density.
     unused_det_log_penalty: float = 0.2
 
-    # Birth sanity guards:
-
-    # Safety: reject absurd positions.
+    # Birth sanity guards.
     birth_max_abs_pos: float = 1e5
-    # Safety: reject absurd uncertainty.
     birth_max_covar_trace: float = 1e12
 
-    # Debug / instrumentation (visibility only; no branch/scoring semantics):
-
-    # Display detections in debug output.
+    # Debug / instrumentation toggles.
     debug_display_detections: bool = False
-    # Display per-scan stats in debug output.
     debug_display_scan_stats: bool = True
-    # Display hypotheses in debug output.
     debug_display_hypotheses: bool = True
-    # Display internal births in debug output.
     debug_display_births: bool = True
-    # Display MAP miss history in debug output.
     debug_display_map_miss_hist: bool = False
-    # Maximum births shown in debug output.
     debug_births_max: int = 5
-    # Maximum globals shown in debug output.
     debug_globals_max: int = 5
-    # Enable ScanStats collection for per-scan summaries.
     collect_stats: bool = True
 
 
 @dataclass(frozen=True)
 class ScanContext:
-    """Per-scan context passed into scoring models."""
+    """Per-scan context passed into scoring and pipeline helpers."""
 
     scan_index: int
     timestamp: datetime.datetime
@@ -169,13 +136,23 @@ class ScanContext:
 
 
 @dataclass(frozen=True)
-class BirthTemplate:
-    """Birth template for an internal track start."""
+class LocalChildCandidate:
+    """One retained local child candidate produced from one leaf expansion."""
 
     track_id: int
-    leaf_node: TrackHypothesisNode
-    template_track: Track
-    used_det_key: int | None
+    child_node: TrackHypothesisNode
+    used_det_key: DetectionKey | None
+    log_delta: float
+
+
+@dataclass(frozen=True)
+class _ClusterWorkItem:
+    """Transient per-scan cluster build input."""
+
+    cluster_id: int
+    track_ids: tuple[int, ...]
+    current_scan_det_keys_by_track_id: dict[int, set[DetectionKey]]
+    conflict_links: tuple[tuple[int, int, tuple[DetectionKey, ...]], ...]
 
 
 # ============================================================================
@@ -186,26 +163,24 @@ class BirthTemplate:
 class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     """Public TO-MHT tracker contract with Stone Soup boundary objects.
 
-    Core operational APIs:
-    - ``update_tracker(time,detections)``: main per-scan update; returns
-      ``(time, map_tracks)``.
-    - ``tracks``: current MAP output tracks.
-    - ``add_external_starts(time,starts)``: inject externally confirmed starts
-      for the most recently processed timestamp (call after that update).
+    Operational APIs:
+    - ``update_tracker(time,detections)``
+    - ``tracks``
+    - ``add_external_starts(time,starts)``
 
-    Read-only inspection/debug APIs:
-    - ``get_map_hypothesis_snapshot()``: node-native MAP leaf snapshot.
-    - ``get_map_output_tracks()``: reconstructed MAP output ``Track`` objects.
-    - ``get_n_scan_commitment_snapshot()``: current ancestor-identity N-scan
-      commitment bookkeeping.
-
-    Internal model:
-    - ``TrackHypothesisNode`` is the branching unit.
-    - each global stores one current leaf node per logical ``track_id``.
-    - commitment is maintained by ancestor agreement after beam pruning.
-
-    API boundary remains Stone Soup-native; internal hypothesis evolution is
-    node-based.
+    Core per-scan pipeline order:
+    1. Sort detections deterministically.
+    2. Expand active leaves in every persistent ``TrackTree``.
+    3. Apply simple lifecycle filtering (drop leaves with miss budget exceeded,
+       drop trees with no surviving active leaves).
+    4. Optionally create internal birth trees from detections unused by the union
+       of surviving active leaves after Step 3.
+    5. Recompute measurement-exclusivity clusters from current trees.
+    6. Rebuild feasible globals per cluster via exhaustive enumeration and choose
+       MAP per cluster.
+    7. Merge cluster MAP selections into full-scan MAP, then apply MAP-only
+       N-scan tree pruning.
+    8. Keep last-scan debug snapshots and return MAP output tracks.
     """
 
     ASSOC_PAD = -1
@@ -227,14 +202,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # =========================================================================
     # Public API
     # =========================================================================
-    #
-    # Class roadmap:
-    # 1) Public API + top-level scan pipeline.
-    # 2) Scan pipeline support (ordering, stats, instrumentation).
-    # 3) Continuation/expansion and dedupe/beam/N-scan helpers.
-    # 4) Internal birth helpers.
-    # 5) Node lifecycle and external-start helpers.
-    # 6) Diagnostics/instrumentation helpers.
 
     def __init__(
         self,
@@ -246,12 +213,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         params: TOMHTParams = TOMHTParams(),
         scoring_model: ScoringModel | None = None,
     ) -> None:
-        """Construct the tracker with Stone Soup components and TO-MHT params.
-
-        Runtime note: type hints name ``PDAHypothesiser``, but the runtime
-        contract used by this tracker is narrower duck-typing around
-        ``hypothesise(...)`` outputs and per-hypothesis fields.
-        """
+        """Construct the tracker with Stone Soup components and TO-MHT params."""
         super().__init__(hypothesiser, updater)
         self.detector = detector
         self.params = params
@@ -270,21 +232,29 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         self._next_track_id = 0
         self._next_node_id = 0
+
+        # Persistent tracker state.
         self._nodes_by_id: dict[int, TrackHypothesisNode] = {}
-        # N-scan commitment bookkeeping; physical node cleanup is intentionally
-        # deferred to a later phase.
+        self.track_trees_by_track_id: dict[int, TrackTree] = {}
+
+        # Last-scan rebuilt artifacts retained for inspection only.
+        self._last_cluster_snapshots: list[ClusterRebuildSnapshot] = []
+        self.global_hypotheses: list[GlobalHypothesis] = [
+            GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=0.0)
+        ]
+        self._last_map_global: GlobalHypothesis = self.global_hypotheses[0]
+
+        # N-scan bookkeeping snapshots.
         self._last_nscan_boundary_scan_index = None
         self._last_nscan_tracks_in_scope = 0
         self._last_nscan_committed_ancestor_by_track_id = {}
         self._committed_boundary_by_track_id = {}
         self._committed_ancestor_by_track_id = {}
 
-        self.global_hypotheses: list[GlobalHypothesis] = [
-            GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=0.0)
-        ]
         self._last_update_timestamp: datetime.datetime | None = None
         self._last_scan_index: int | None = None
         self._last_unused_detections: list[Detection] = []
+
         self.last_scan_stats: ScanStats | None = None
         self._stats: list[ScanStats] = []
         self.reset_stats()
@@ -296,10 +266,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     @property
     def tracks(self) -> set[Track]:
-        """Current MAP output as Stone Soup ``Track`` objects.
-
-        Equivalent content to ``get_map_output_tracks()``.
-        """
+        """Current MAP output as Stone Soup ``Track`` objects."""
         return self.get_map_output_tracks()
 
     def update_tracker(
@@ -307,37 +274,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         time: datetime.datetime,
         detections: Iterable[Detection],
     ) -> tuple[datetime.datetime, set[Track]]:
-        """Run the main one-scan update and return ``(time, MAP tracks)``.
-
-        This is the primary operational entry point. The returned tracks are the
-        current MAP output as reconstructed Stone Soup ``Track`` objects.
-        MAP here means maximum a posteriori, i.e. the highest-weight current
-        global hypothesis.
-        If externally confirmed starts exist at this timestamp, call
-        ``add_external_starts(time,starts)`` after this method for the same
-        ``time``.
-
-        Pipeline order:
-        1. Sort detections deterministically for stable indexing.
-        2. Expand globals via per-track child-node candidates.
-        3. Apply unused-detection score term.
-        4. Dedupe globals by structural leaf-node identity.
-        5. Beam prune to top-K globals.
-        6. Update ancestor-based N-scan commitment (pre-birth boundary).
-        7. Optionally apply internal births from residual detections.
-        8. Return current MAP output tracks.
-        """
-        # Setup / preparation.
+        """Run one scan update and return ``(time, MAP tracks)``."""
         scan_wall_start_ns = wall_clock.perf_counter_ns()
-        self._last_unused_detections = []
-        globals_in = len(self.global_hypotheses)
+
         scan_index = (
             0 if self._last_scan_index is None else int(self._last_scan_index) + 1
         )
         det_list = self._sorted_detections(detections)
-        # Use id(det) because Stone Soup hypotheses keep the original Detection
-        # objects; hash/equality isn't defined on Detection, but identity is
-        # stable within a scan.
         det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}
         ctx = ScanContext(
             scan_index=scan_index,
@@ -346,52 +289,56 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             det_index_by_obj=det_index_by_obj,
         )
 
-        # Core scan pipeline:
-        # sort detections -> expand -> unused-score -> dedupe -> beam ->
-        # N-scan commitment -> bounded birth phase -> MAP output.
+        # 1) Expand every tree locally.
+        self._expand_all_track_trees(ctx)
 
-        # Expand globals with current batch of detections
-        expanded: list[GlobalHypothesis] = []
-        for gh in self.global_hypotheses:
-            expanded.extend(self._expand_global_hypothesis(gh, ctx))
-        globals_expanded = len(expanded)
+        # 2) Simple lifecycle handling.
+        self._remove_empty_trees()
 
-        # Apply unused detection penalty
-        expanded = [self._apply_unused_detection_penalty(gh, ctx) for gh in expanded]
-        globals_after_unused = len(expanded)
+        # 3) Internal births from Step-2 residual detections.
+        birth_stats = self._run_internal_births(ctx)
 
-        # Dedupe
-        expanded = self._dedupe_globals_by_leaf_identity(expanded)
-        globals_after_dedupe = len(expanded)
+        # 4) Build clusters and rebuild globals per cluster (fresh each scan).
+        cluster_work = self._build_track_clusters(ctx)
+        cluster_snapshots, rebuild_stats = self._rebuild_cluster_globals(
+            cluster_work, ctx
+        )
 
-        # Keep top-K globals (beam)
-        expanded.sort(key=lambda g: g.log_weight, reverse=True)
-        self.global_hypotheses = expanded[: self.params.max_global_hypotheses]
-        globals_after_beam = len(self.global_hypotheses)
+        map_global = self._merge_cluster_map_globals(cluster_snapshots)
+        self._last_map_global = map_global
+
+        # 5) MAP-only N-scan pruning on explicit trees + disagreement stats.
         (
             nscan_boundary_scan_index,
             nscan_tracks_in_scope,
             nscan_tracks_committed,
-        ) = self._update_n_scan_commitment(
+            disagreement_total,
+            cluster_snapshots,
+        ) = self._apply_map_n_scan_pruning(
             scan_index=scan_index,
-            post_beam_globals=self.global_hypotheses,
+            map_global=map_global,
+            cluster_snapshots=cluster_snapshots,
         )
-        # Keep logical commitment and physical cleanup intentionally separate:
-        # commitment computes/records agreement; cleanup only reclaims ancestry
-        # that is no longer reachable from active leaves or commitment refs.
-        self._cleanup_committed_ancestry()
 
-        # Births run as a separate bounded phase after continuation/beam/N-scan:
-        # residual detections are processed once, with per-scan birth limits and
-        # post-branch beam truncation enforced in the birth path.
-        birth_stats = self._branch_globals_with_births(ctx)
+        rebuild_stats = replace(
+            rebuild_stats,
+            nscan_disagreement_total=disagreement_total,
+        )
+        self._last_cluster_snapshots = cluster_snapshots
 
-        # Post-pipeline bookkeeping and instrumentation.
+        # Keep one full-scan MAP global in compatibility slot for old inspection paths.
+        self.global_hypotheses = [map_global]
+
+        # 6) Reclaim node storage not reachable from surviving roots/leaves/commitments.
+        self._cleanup_unreachable_nodes()
+
+        # 7) Post-scan instrumentation.
         scan_wall_ms = (wall_clock.perf_counter_ns() - scan_wall_start_ns) / 1e6
         maxrss_mb = self._get_process_maxrss_mb()
         node_count_total = len(self._nodes_by_id)
-        leaf_instances_in_beam = sum(
-            len(gh.leaf_nodes_by_track_id) for gh in self.global_hypotheses
+        active_leaves = sum(
+            len(tree.active_leaf_node_ids)
+            for tree in self.track_trees_by_track_id.values()
         )
 
         self._run_scan_instrumentation(
@@ -399,12 +346,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             scan_wall_ms=scan_wall_ms,
             maxrss_mb=maxrss_mb,
             node_count_total=node_count_total,
-            leaf_instances_in_beam=leaf_instances_in_beam,
-            globals_in=globals_in,
-            globals_expanded=globals_expanded,
-            globals_after_unused=globals_after_unused,
-            globals_after_dedupe=globals_after_dedupe,
-            globals_after_beam=globals_after_beam,
+            active_trees=len(self.track_trees_by_track_id),
+            active_leaves=active_leaves,
+            rebuild_stats=rebuild_stats,
             nscan_boundary_scan_index=nscan_boundary_scan_index,
             nscan_tracks_in_scope=nscan_tracks_in_scope,
             nscan_tracks_committed=nscan_tracks_committed,
@@ -413,56 +357,49 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         self._last_update_timestamp = time
         self._last_scan_index = scan_index
-
-        # Explicit MAP output step (maximum a posteriori / highest-weight global).
         map_output_tracks = self.get_map_output_tracks()
         return time, map_output_tracks
 
     def add_external_starts(
-        self, time: datetime.datetime, starts: Iterable[Track]
+        self,
+        time: datetime.datetime,
+        starts: Iterable[Track],
     ) -> None:
-        """Inject externally confirmed starts for the latest processed timestamp.
-
-        Intended call pattern:
-        1. Run ``update_tracker(time,detections)`` for timestamp ``time``.
-        2. Call ``add_external_starts(time,starts)`` with confirmed starts at that
-           same ``time``; starts are inserted into the current post-update globals.
-        Timestamp/order enforcement is handled by
-        ``_validate_external_starts_timestamp(...)``.
-
-        Duplicate-like inputs are not deduplicated here: each supplied start is
-        treated as a distinct confirmed track and receives a fresh tracker-owned
-        track_id.
-        """
+        """Insert externally confirmed starts as new single-node track trees."""
         self._validate_external_starts_timestamp(time)
         start_list = list(starts)
-        if not start_list or not self.global_hypotheses:
+        if not start_list:
             return
 
-        templates = [
-            self._make_external_start_template(start, time) for start in start_list
-        ]
-
-        new_globals: list[GlobalHypothesis] = []
-        for gh in self.global_hypotheses:
-            leaf_nodes_by_track_id = dict(gh.leaf_nodes_by_track_id)
-            for template in templates:
-                leaf_nodes_by_track_id[template.track_id] = template
-            new_globals.append(
-                GlobalHypothesis(
-                    leaf_nodes_by_track_id=leaf_nodes_by_track_id,
-                    log_weight=gh.log_weight,
-                )
+        for start in start_list:
+            root = self._make_external_start_root(start, time)
+            tree = TrackTree(
+                track_id=root.track_id,
+                root_node_id=root.node_id,
+                active_leaf_node_ids={root.node_id},
+                root_source="external_start",
             )
-        self.global_hypotheses = new_globals
+            self.track_trees_by_track_id[root.track_id] = tree
+
+        # External starts are assumed to be from currently unused detections,
+        # so add them directly to the last MAP view.
+        merged = dict(self._last_map_global.leaf_nodes_by_track_id)
+        for track_id, tree in self.track_trees_by_track_id.items():
+            if track_id in merged:
+                continue
+            if len(tree.active_leaf_node_ids) != 1:
+                continue
+            only_leaf_id = next(iter(tree.active_leaf_node_ids))
+            merged[track_id] = self._nodes_by_id[only_leaf_id]
+
+        self._last_map_global = GlobalHypothesis(
+            leaf_nodes_by_track_id=merged,
+            log_weight=self._last_map_global.log_weight,
+        )
+        self.global_hypotheses = [self._last_map_global]
 
     def get_unused_detections(self) -> list[Detection]:
-        """
-        Return residual detections from the most recent completed update_tracker().
-
-        Residual detections are considered consumed when internal births are enabled
-        (i.e. ``initiator is not None``), so this returns an empty list in that mode.
-        """
+        """Return residual detections from the most recent completed update."""
         if self._last_update_timestamp is None:
             raise RuntimeError(
                 "get_unused_detections() requires a completed update_tracker() first."
@@ -482,17 +419,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         }
 
     def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
-        """Return read-only node-native MAP state for inspection/debug only."""
-        if not self.global_hypotheses:
+        """Return read-only node-native MAP state for inspection/debug."""
+        if self._last_map_global is None:
             return None
-        best = self.global_hypotheses[0]
         return MAPHypothesisSnapshot(
-            log_weight=float(best.log_weight),
-            leaf_nodes_by_track_id=MappingProxyType(dict(best.leaf_nodes_by_track_id)),
+            log_weight=float(self._last_map_global.log_weight),
+            leaf_nodes_by_track_id=MappingProxyType(
+                dict(self._last_map_global.leaf_nodes_by_track_id)
+            ),
         )
 
     def get_n_scan_commitment_snapshot(self) -> NScanCommitmentSnapshot:
-        """Return read-only N-scan commitment bookkeeping (inspection/debug)."""
+        """Return read-only MAP-based N-scan pruning bookkeeping."""
         return NScanCommitmentSnapshot(
             boundary_scan_index=self._last_nscan_boundary_scan_index,
             tracks_in_scope=int(self._last_nscan_tracks_in_scope),
@@ -502,6 +440,21 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             committed_boundary_by_track_id=dict(self._committed_boundary_by_track_id),
             committed_ancestor_by_track_id=dict(self._committed_ancestor_by_track_id),
         )
+
+    def get_last_cluster_snapshots(self) -> tuple[ClusterRebuildSnapshot, ...]:
+        """Return the most recent per-scan rebuilt-cluster snapshots."""
+        return tuple(self._last_cluster_snapshots)
+
+    def get_track_tree_snapshot(self) -> Mapping[int, dict[str, object]]:
+        """Return a read-only snapshot of current persistent tree roots/leaves."""
+        out: dict[int, dict[str, object]] = {}
+        for track_id, tree in sorted(self.track_trees_by_track_id.items()):
+            out[track_id] = {
+                "root_node_id": int(tree.root_node_id),
+                "active_leaf_node_ids": tuple(sorted(tree.active_leaf_node_ids)),
+                "root_source": tree.root_source,
+            }
+        return MappingProxyType(out)
 
     def print_summary_stats(self) -> None:
         """Print aggregate instrumentation summaries from collected ScanStats."""
@@ -513,9 +466,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     # =========================================================================
-    # Scan Pipeline Support
+    # Scan Pipeline Utilities
     # =========================================================================
-    # Detection ordering and low-level scan utilities.
 
     @staticmethod
     def _det_sort_key(det: Detection) -> tuple:
@@ -543,12 +495,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 return (1, str(x))
 
         vec_key = tuple(_elem_key(x) for x in vec)
-
-        # Note: if two detections are perfect duplicates (same timestamp + same state_vector),
-        # they are indistinguishable by content. Their relative order will then fall back to the
-        # input iterable’s iteration order. Python’s sort is stable, so if the input order is
-        # deterministic (e.g. a list), the result is deterministic; if the input is an unordered
-        # container (e.g. a set), duplicate ordering may vary between runs.
         return (ts_key, len(vec_key), vec_key)
 
     def _sorted_detections(self, detections: Iterable[Detection]) -> list[Detection]:
@@ -559,31 +505,134 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     @staticmethod
     def _get_process_maxrss_mb() -> float:
         ru = resource.getrusage(resource.RUSAGE_SELF)
-        # ru_maxrss units differ by platform:
-        # - macOS: bytes
-        # - Linux: KiB
         if sys.platform == "darwin":
             return float(ru.ru_maxrss) / (1024.0 * 1024.0)
         return float(ru.ru_maxrss) / 1024.0
 
-    # Shared detection-usage utilities.
-
-    def _used_det_keys_for_leaf_nodes(
-        self, leaf_nodes_by_track_id: Mapping[int, TrackHypothesisNode]
+    @staticmethod
+    def _current_scan_det_indices_from_keys(
+        keys: Iterable[DetectionKey], scan_index: int
     ) -> set[int]:
-        used: set[int] = set()
-        for leaf_node in leaf_nodes_by_track_id.values():
-            if leaf_node.used_det_key is not None:
-                used.add(int(leaf_node.used_det_key))
-        return used
-
-    def _used_det_keys_in_global(self, gh: GlobalHypothesis) -> set[int]:
-        return self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id)
+        return {det_idx for (key_scan, det_idx) in keys if key_scan == scan_index}
 
     # =========================================================================
-    # Continuation / Expansion Helpers
+    # Node/Tree Construction Helpers
     # =========================================================================
-    # Local per-track continuation candidate generation.
+
+    def _allocate_node_id(self) -> int:
+        node_id = self._next_node_id
+        self._next_node_id += 1
+        return node_id
+
+    def _register_node(self, node: TrackHypothesisNode) -> TrackHypothesisNode:
+        self._nodes_by_id[node.node_id] = node
+        return node
+
+    def _create_track_hypothesis_node(
+        self,
+        *,
+        track_id: int,
+        parent: TrackHypothesisNode | None,
+        scan_index: int,
+        timestamp: datetime.datetime,
+        state: State,
+        state_kind: str,
+        used_det_key: DetectionKey | None,
+        assoc_label: int,
+        log_delta: float,
+        age: int,
+        hits: int,
+        missed_count: int,
+        last_det_key: DetectionKey | None,
+        last_det_hit: bool,
+        root_source: str,
+        birth_scan_index: int,
+    ) -> TrackHypothesisNode:
+        """Create and register one persistent hypothesis node."""
+        if parent is not None and parent.track_id != track_id:
+            raise ValueError(
+                "TrackHypothesisNode parent.track_id must match child track_id."
+            )
+
+        if parent is None:
+            history_keys: frozenset[DetectionKey]
+            if used_det_key is None:
+                history_keys = frozenset()
+            else:
+                history_keys = frozenset({used_det_key})
+            accumulated_log_score = float(log_delta)
+        else:
+            if used_det_key is None:
+                history_keys = parent.detection_history_keys
+            else:
+                history_keys = parent.detection_history_keys | {used_det_key}
+            accumulated_log_score = float(parent.accumulated_log_score) + float(
+                log_delta
+            )
+
+        node = TrackHypothesisNode(
+            node_id=self._allocate_node_id(),
+            track_id=int(track_id),
+            parent=parent,
+            scan_index=int(scan_index),
+            timestamp=timestamp,
+            state=state,
+            state_kind=state_kind,
+            used_det_key=used_det_key,
+            assoc_label=int(assoc_label),
+            log_delta=float(log_delta),
+            accumulated_log_score=float(accumulated_log_score),
+            detection_history_keys=history_keys,
+            age=int(age),
+            hits=int(hits),
+            missed_count=int(missed_count),
+            last_det_key=last_det_key,
+            last_det_hit=bool(last_det_hit),
+            root_source=root_source,
+            birth_scan_index=int(birth_scan_index),
+        )
+        self._register_node(node)
+        if parent is not None:
+            parent.child_node_ids.add(node.node_id)
+        return node
+
+    def _create_root_node(
+        self,
+        *,
+        track_id: int,
+        scan_index: int,
+        timestamp: datetime.datetime,
+        state: State,
+        state_kind: str,
+        used_det_key: DetectionKey | None,
+        assoc_label: int,
+        log_delta: float,
+        age: int,
+        hits: int,
+        root_source: str,
+    ) -> TrackHypothesisNode:
+        return self._create_track_hypothesis_node(
+            track_id=track_id,
+            parent=None,
+            scan_index=scan_index,
+            timestamp=timestamp,
+            state=state,
+            state_kind=state_kind,
+            used_det_key=used_det_key,
+            assoc_label=assoc_label,
+            log_delta=log_delta,
+            age=age,
+            hits=hits,
+            missed_count=0,
+            last_det_key=used_det_key,
+            last_det_hit=used_det_key is not None,
+            root_source=root_source,
+            birth_scan_index=scan_index,
+        )
+
+    # =========================================================================
+    # Local Expansion and Simple Lifecycle
+    # =========================================================================
 
     def _candidate_from_hypothesis(
         self,
@@ -592,14 +641,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         hypothesis: Any,
         ctx: ScanContext,
         log_delta: float,
-    ) -> ChildCandidate:
-        """Map one Stone Soup hypothesis to one node-native child candidate.
-
-        Miss and hit paths are handled explicitly: miss uses the hypothesis
-        prediction and increments the miss streak; hit runs updater/update,
-        binds a detection key, and resets the miss streak. Cached maintenance
-        fields are updated when creating the child node.
-        """
+    ) -> LocalChildCandidate:
+        """Map one Stone Soup hypothesis to one child node candidate."""
         if not hypothesis:
             state = getattr(hypothesis, "prediction")
             used_det_key = None
@@ -609,8 +652,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             last_det_key = leaf_node.last_det_key
         else:
             state = self.updater.update(hypothesis)
-            used_det_key = int(ctx.det_index_by_obj[id(hypothesis.measurement)])
-            assoc_label = used_det_key
+            det_index = int(ctx.det_index_by_obj[id(hypothesis.measurement)])
+            used_det_key = (ctx.scan_index, det_index)
+            assoc_label = det_index
             state_kind = "update"
             missed_count = 0
             last_det_key = used_det_key
@@ -633,7 +677,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             root_source=leaf_node.root_source,
             birth_scan_index=leaf_node.birth_scan_index,
         )
-        return ChildCandidate(
+        return LocalChildCandidate(
             track_id=leaf_node.track_id,
             child_node=child_node,
             used_det_key=used_det_key,
@@ -644,26 +688,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self,
         leaf_node: TrackHypothesisNode,
         ctx: ScanContext,
-    ) -> list[ChildCandidate]:
-        """Build retained local continuation candidates for one track leaf.
-
-        This helper is the continuation boundary adapter: it reconstructs a
-        temporary ``Track`` for hypothesiser/updater compatibility, scores and
-        prunes local hypotheses to the per-track limit (keeping one miss if
-        present), then translates retained hypotheses back to node-native
-        ``ChildCandidate`` objects.
-        """
+    ) -> list[LocalChildCandidate]:
+        """Build retained local continuation candidates for one active leaf."""
         track = reconstruct_track_from_leaf_node(leaf_node)
         multi = self.hypothesiser.hypothesise(track, ctx.detections, ctx.timestamp)
         singles = list(multi)
 
-        # Precompute scores with the chosen scoring model.
         hyp_scores = self.scoring_model.score_track_hypotheses(
-            track=track, hypotheses=singles, ctx=ctx
+            track=track,
+            hypotheses=singles,
+            ctx=ctx,
         )
 
         def _score_for_sort(hyp) -> float:
-            # Sort/prune by log-delta (hyp_scores); fall back to probability/weight only if missing.
             score = hyp_scores.get(id(hyp))
             if score is not None:
                 return float(score)
@@ -679,20 +716,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             except Exception:
                 return 0.0
 
-        def sort_key(hyp) -> tuple[float, int]:
+        def _sort_key(hyp) -> tuple[float, int]:
             p = _score_for_sort(hyp)
             if not hyp:
-                return (p, -1)  # deterministic position for misses among ties
+                return (p, -1)
             return (p, -ctx.det_index_by_obj.get(id(hyp.measurement), 10**9))
 
-        # Sort best-first and cap. Always keep a "miss" if present.
-        singles_sorted = sorted(singles, key=sort_key, reverse=True)
+        singles_sorted = sorted(singles, key=_sort_key, reverse=True)
         kept = singles_sorted[: self.params.max_children_per_track]
         miss = next((h for h in singles_sorted if not h), None)
         if miss is not None and miss not in kept:
             kept.append(miss)
 
-        candidates = [
+        out = [
             self._candidate_from_hypothesis(
                 leaf_node=leaf_node,
                 hypothesis=hyp,
@@ -701,407 +737,81 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
             for hyp in kept
         ]
-        candidates.sort(key=lambda c: c.log_delta, reverse=True)
-        return candidates
+        out.sort(key=lambda c: c.log_delta, reverse=True)
+        return out
 
-    # Joint global expansion under exclusivity constraints.
+    def _expand_one_track_tree(self, tree: TrackTree, ctx: ScanContext) -> None:
+        """Expand all active leaves in one persistent track tree."""
+        new_leaf_ids: set[int] = set()
 
-    def _assemble_joint_globals(
-        self,
-        *,
-        track_ids: list[int],
-        per_track_candidates: list[list[ChildCandidate]],
-        base_log_weight: float,
-    ) -> list[GlobalHypothesis]:
-        """Combine local candidates into exclusivity-valid joint globals.
-
-        Backtracks over per-track ``ChildCandidate`` lists, enforces
-        one-detection-per-global exclusivity across tracks, drops only tracks
-        whose child ``missed_count`` exceeds ``max_missed`` (branch continues),
-        and accumulates the resulting global log weights.
-        """
-        new_globals: list[GlobalHypothesis] = []
-
-        def _backtrack(
-            i: int,
-            used_det_keys: set[int],
-            acc_leaf_nodes: dict[int, TrackHypothesisNode],
-            acc_log: float,
-        ) -> None:
-            if i == len(track_ids):
-                new_globals.append(
-                    GlobalHypothesis(
-                        leaf_nodes_by_track_id=dict(acc_leaf_nodes),
-                        log_weight=acc_log,
-                    )
-                )
-                return
-
-            tid = track_ids[i]
-            for cand in per_track_candidates[i]:
-                if cand.track_id != tid:
-                    raise RuntimeError(
-                        "ChildCandidate track_id mismatch during global expansion."
-                    )
-                if cand.used_det_key is not None and cand.used_det_key in used_det_keys:
+        for leaf_id in sorted(tree.active_leaf_node_ids):
+            leaf = self._nodes_by_id[leaf_id]
+            candidates = self._candidates_for_track_leaf(leaf, ctx)
+            for cand in candidates:
+                if int(cand.child_node.missed_count) > self.params.max_missed:
                     continue
+                new_leaf_ids.add(cand.child_node.node_id)
 
-                child = cand.child_node
-                missed = int(child.missed_count)
-                if missed > self.params.max_missed:
-                    # Drop only this logical track from the branch and
-                    # continue combining remaining tracks.
-                    _backtrack(
-                        i + 1,
-                        used_det_keys,
-                        acc_leaf_nodes,
-                        acc_log + cand.log_delta,
-                    )
-                    continue
-
-                if cand.used_det_key is not None:
-                    used_det_keys.add(cand.used_det_key)
-                acc_leaf_nodes[tid] = child
-                _backtrack(
-                    i + 1, used_det_keys, acc_leaf_nodes, acc_log + cand.log_delta
-                )
-                acc_leaf_nodes.pop(tid, None)
-                if cand.used_det_key is not None:
-                    used_det_keys.remove(cand.used_det_key)
-
-        _backtrack(0, set(), dict(), base_log_weight)
-        return new_globals
-
-    def _expand_global_hypothesis(
-        self,
-        gh: GlobalHypothesis,
-        ctx: ScanContext,
-    ) -> list[GlobalHypothesis]:
-        """Expand one global by combining per-track local candidates.
-
-        This gathers retained local candidates for each track in ``gh``, then
-        assembles exclusivity-valid joint globals while preserving the existing
-        drop semantics for tracks that exceed ``max_missed``.
-        """
-        track_ids = sorted(gh.leaf_nodes_by_track_id.keys())
-
-        per_track_candidates: list[list[ChildCandidate]] = []
-        for tid in track_ids:
-            per_track_candidates.append(
-                self._candidates_for_track_leaf(gh.leaf_nodes_by_track_id[tid], ctx)
+        max_leaves = self.params.max_leaves_per_track_tree
+        if max_leaves is not None and len(new_leaf_ids) > max_leaves:
+            ranked = sorted(
+                (self._nodes_by_id[node_id] for node_id in new_leaf_ids),
+                key=lambda node: (
+                    float(node.accumulated_log_score),
+                    -int(node.node_id),
+                ),
+                reverse=True,
             )
+            new_leaf_ids = {node.node_id for node in ranked[: int(max_leaves)]}
 
-        return self._assemble_joint_globals(
-            track_ids=track_ids,
-            per_track_candidates=per_track_candidates,
-            base_log_weight=gh.log_weight,
-        )
+        tree.active_leaf_node_ids = new_leaf_ids
+
+    def _expand_all_track_trees(self, ctx: ScanContext) -> None:
+        """Run local expansion for all current persistent track trees."""
+        for tree in self.track_trees_by_track_id.values():
+            self._expand_one_track_tree(tree, ctx)
+
+    def _remove_empty_trees(self) -> None:
+        """Drop any tree that has no surviving active leaves."""
+        dead_track_ids = [
+            track_id
+            for track_id, tree in self.track_trees_by_track_id.items()
+            if not tree.active_leaf_node_ids
+        ]
+        for track_id in dead_track_ids:
+            self.track_trees_by_track_id.pop(track_id, None)
 
     # =========================================================================
-    # Dedupe / Beam Helpers
+    # Internal Birth Handling (Simple Phase-D Policy)
     # =========================================================================
-    # Sequence here: score expanded globals for unused detections, collapse
-    # exact structural duplicates, then beam pruning runs in update_tracker().
 
-    def _apply_unused_detection_penalty(
-        self,
-        gh: GlobalHypothesis,
-        ctx: ScanContext,
-    ) -> GlobalHypothesis:
-        """Apply the scoring-model term for detections unused by this global.
-
-        Runs after continuation expansion and before dedupe/beam pruning.
-        """
-        if not ctx.detections:
-            return gh
-        used = self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id)
-        delta = self.scoring_model.score_unused_detections(used_det_keys=used, ctx=ctx)
-        if delta == 0.0:
-            return gh
-        return GlobalHypothesis(
-            leaf_nodes_by_track_id=gh.leaf_nodes_by_track_id,
-            log_weight=gh.log_weight + delta,
-        )
-
-    def _leaf_signature_for_global(
-        self, gh: GlobalHypothesis
-    ) -> tuple[tuple[int, int], ...]:
-        """Return this global's structural dedupe signature.
-
-        Signature = active leaf-node identity per track_id.
-        """
-        return tuple(
-            sorted(
-                (track_id, leaf_node.node_id)
-                for track_id, leaf_node in gh.leaf_nodes_by_track_id.items()
+    def _active_leaf_nodes(self) -> list[TrackHypothesisNode]:
+        out: list[TrackHypothesisNode] = []
+        for tree in self.track_trees_by_track_id.values():
+            out.extend(
+                self._nodes_by_id[node_id] for node_id in tree.active_leaf_node_ids
             )
-        )
-
-    def _dedupe_globals_by_leaf_identity(
-        self, globals: list[GlobalHypothesis]
-    ) -> list[GlobalHypothesis]:
-        """
-        Keep best log_weight per structural leaf signature.
-
-        Two globals are duplicates only when they contain the same leaf node for
-        every active track_id.
-        """
-        best: dict[tuple[tuple[int, int], ...], GlobalHypothesis] = {}
-        for gh in globals:
-            sig = self._leaf_signature_for_global(gh)
-            prev = best.get(sig)
-            if prev is None or gh.log_weight > prev.log_weight:
-                best[sig] = gh
-        return list(best.values())
-
-    # =========================================================================
-    # N-Scan Commitment Helpers
-    # =========================================================================
-    # Ancestor-based commitment at boundary b = k - N.
-    # Pipeline note: update_tracker() applies this before the birth phase.
-
-    def _ancestor_at_scan_boundary(
-        self,
-        leaf_node: TrackHypothesisNode,
-        boundary_scan_index: int,
-    ) -> TrackHypothesisNode | None:
-        """
-        Return this track's ancestor node exactly at `boundary_scan_index`.
-
-        Returns None when no exact-boundary ancestor exists, for example:
-        - boundary is before this track's birth/root scan, or
-        - ancestry has no node exactly at that scan index.
-        """
-        if boundary_scan_index < 0:
-            return None
-        node: TrackHypothesisNode | None = leaf_node
-        while node is not None and int(node.scan_index) > boundary_scan_index:
-            node = node.parent
-        if node is None:
-            return None
-        if int(node.scan_index) != boundary_scan_index:
-            return None
-        return node
-
-    def _compute_committed_track_ancestors_at_boundary(
-        self,
-        post_beam_globals: list[GlobalHypothesis],
-        boundary_scan_index: int,
-    ) -> tuple[dict[int, TrackHypothesisNode], int]:
-        """
-        Compute per-track ancestor-identity agreement at one N-scan boundary.
-
-        The agreement set is per-track and only uses globals that still contain
-        that track_id. Track absence in some globals is not disagreement.
-
-        Conservative choice: if any participating global has no exact-boundary
-        ancestor for a track (e.g. track born after boundary), that track is not
-        marked committed at this boundary.
-        """
-        if boundary_scan_index < 0 or not post_beam_globals:
-            return {}, 0
-
-        track_ids = sorted(
-            {
-                track_id
-                for gh in post_beam_globals
-                for track_id in gh.leaf_nodes_by_track_id.keys()
-            }
-        )
-
-        committed: dict[int, TrackHypothesisNode] = {}
-        tracks_in_scope = 0
-        for track_id in track_ids:
-            boundary_ancestors: list[TrackHypothesisNode] = []
-            missing_exact_boundary = False
-            participating_globals = 0
-
-            for gh in post_beam_globals:
-                leaf_node = gh.leaf_nodes_by_track_id.get(track_id)
-                if leaf_node is None:
-                    continue
-                participating_globals += 1
-                boundary_ancestor = self._ancestor_at_scan_boundary(
-                    leaf_node,
-                    boundary_scan_index,
-                )
-                if boundary_ancestor is None:
-                    missing_exact_boundary = True
-                    break
-                boundary_ancestors.append(boundary_ancestor)
-
-            if participating_globals == 0:
-                continue
-            tracks_in_scope += 1
-            if not boundary_ancestors:
-                continue
-            if missing_exact_boundary:
-                continue
-
-            first = boundary_ancestors[0]
-            if all(anc.node_id == first.node_id for anc in boundary_ancestors[1:]):
-                committed[track_id] = first
-        return committed, tracks_in_scope
-
-    def _update_n_scan_commitment(
-        self,
-        *,
-        scan_index: int,
-        post_beam_globals: list[GlobalHypothesis],
-    ) -> tuple[int, int, int]:
-        """
-        Update tracker-owned N-scan commitment state for this scan.
-
-        Runs after beam pruning and before births, using boundary b = k - N.
-
-        This method is semantic/bookkeeping only: it records commitment
-        agreement state and does not perform ancestry retention decisions.
-        Physical ancestry cleanup is handled by a separate post-commit step in
-        ``update_tracker()``.
-        """
-        boundary_scan_index = int(scan_index) - int(self.params.ns_scan_window)
-        self._last_nscan_boundary_scan_index = boundary_scan_index
-        self._last_nscan_committed_ancestor_by_track_id = {}
-        self._last_nscan_tracks_in_scope = 0
-
-        committed, tracks_in_scope = (
-            self._compute_committed_track_ancestors_at_boundary(
-                post_beam_globals,
-                boundary_scan_index,
-            )
-        )
-        self._last_nscan_tracks_in_scope = tracks_in_scope
-        self._last_nscan_committed_ancestor_by_track_id = committed
-
-        for track_id, ancestor in committed.items():
-            prev_boundary = self._committed_boundary_by_track_id.get(track_id)
-            if prev_boundary is None or boundary_scan_index > prev_boundary:
-                self._committed_boundary_by_track_id[track_id] = boundary_scan_index
-                self._committed_ancestor_by_track_id[track_id] = ancestor
-
-        return boundary_scan_index, tracks_in_scope, len(committed)
-
-    def _reachable_node_ids_from_seeds(
-        self, seeds: Iterable[TrackHypothesisNode]
-    ) -> set[int]:
-        """Return node IDs reachable via parent links from the supplied seeds."""
-        reachable: set[int] = set()
-        stack = list(seeds)
-        while stack:
-            node = stack.pop()
-            node_id = int(node.node_id)
-            if node_id in reachable:
-                continue
-            reachable.add(node_id)
-            if node.parent is not None:
-                stack.append(node.parent)
-        return reachable
-
-    def _cleanup_committed_ancestry(self) -> None:
-        """
-        Conservatively reclaim unreachable node history after commitment update.
-
-        This runs after logical N-scan commitment bookkeeping has been computed.
-        Semantics are unchanged:
-        - active leaves and their full currently linked ancestry are retained,
-        - explicit commitment bookkeeping node references are retained,
-        - only nodes no longer reachable from those retained references are
-          removed from the node registry.
-        """
-        if not self._nodes_by_id:
-            return
-
-        seeds: list[TrackHypothesisNode] = []
-        for gh in self.global_hypotheses:
-            seeds.extend(gh.leaf_nodes_by_track_id.values())
-        seeds.extend(self._last_nscan_committed_ancestor_by_track_id.values())
-        seeds.extend(self._committed_ancestor_by_track_id.values())
-
-        if not seeds:
-            self._nodes_by_id.clear()
-            return
-
-        retained_node_ids = self._reachable_node_ids_from_seeds(seeds)
-        if len(retained_node_ids) == len(self._nodes_by_id):
-            return
-
-        self._nodes_by_id = {
-            node_id: node
-            for node_id, node in self._nodes_by_id.items()
-            if node_id in retained_node_ids
-        }
-
-    # =========================================================================
-    # Internal Birth Helpers
-    # =========================================================================
-    # Internal birth branching from residual detections.
-    #
-    # Subgroups:
-    # - Residual detections and raw birth proposals.
-    # - Birth ranking and kept-candidate selection.
-    # - Birth template preparation and global branching.
-
-    # -------------------------------------------------------------------------
-    # Residual detections and raw birth proposals.
-    # -------------------------------------------------------------------------
-
-    def _residual_detections(
-        self,
-        globals: list[GlobalHypothesis],
-        detections: list[Detection],
-    ) -> list[Detection]:
-        k = max(1, min(self.params.births_k, len(globals)))
-        used: set[int] = set()
-        for gh in globals[:k]:
-            used |= self._used_det_keys_in_global(gh)
-
-        out = []
-        for i, d in enumerate(detections):
-            if i not in used:
-                out.append(d)
         return out
 
     def _birth_used_key(
-        self, tr: Track, det_index_by_obj: dict[int, int]
-    ) -> int | None:
-        # Try to recover which detection was used to create this initiated track.
+        self,
+        tr: Track,
+        *,
+        scan_index: int,
+        det_index_by_obj: dict[int, int],
+    ) -> DetectionKey | None:
         try:
             last = tr.states[-1]
             hyp = getattr(last, "hypothesis", None)
             meas = getattr(hyp, "measurement", None) if hyp is not None else None
             if meas is None:
                 return None
-            return det_index_by_obj.get(id(meas))
+            det_index = det_index_by_obj.get(id(meas))
+            if det_index is None:
+                return None
+            return (scan_index, int(det_index))
         except Exception:
             return None
-
-    def _birth_support_points(self, birth: Track) -> int:
-        holding = birth.metadata.get("holding_track", None)
-        hist = holding if isinstance(holding, Track) else birth
-        # updates_only semantics (you use updates_only=True in your initiator)
-        return sum(1 for s in hist.states if isinstance(s, Update))
-
-    def _birth_covar_trace(self, birth: Track) -> float:
-        st = birth.states[-1]
-        cov = getattr(st, "covar", None)
-        if cov is None:
-            return float("inf")
-        return float(np.trace(np.asarray(cov, dtype=float)))
-
-    def _birth_holding_track(self, birth: Track) -> Track:
-        holding = birth.metadata.get("holding_track", None)
-        return holding if isinstance(holding, Track) else birth
-
-    # -------------------------------------------------------------------------
-    # Birth ranking and kept-candidate selection.
-    # -------------------------------------------------------------------------
-
-    def _birth_support_age_misses(self, birth: Track) -> tuple[int, int, int]:
-        holding = self._birth_holding_track(birth)
-        age = len(holding)  # number of steps in holding life
-        support = self._birth_support_points(birth)  # update-count (hits)
-        misses = max(age - support, 0)
-        return support, age, misses
 
     def _birth_is_sane(self, tr: Track) -> bool:
         st = tr.states[-1]
@@ -1128,404 +838,609 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         return True
 
-    def _generate_birth_candidates(
-        self, residual: list[Detection], timestamp: datetime.datetime
-    ) -> list[Track]:
-        """Ask the initiator for raw birth proposals from residual detections."""
-        assert self.initiator is not None
-        return (
-            list(self.initiator.initiate(OrderedSet(residual), timestamp))
-            if residual
-            else []
-        )
-
-    def _filter_birth_candidates(self, born: list[Track]) -> list[Track]:
-        """Drop initiated tracks that fail basic numeric/state sanity checks."""
-        return [tr for tr in born if self._birth_is_sane(tr)]
-
-    def _birth_ranking_key(
-        self, tr: Track, det_index_by_obj: dict[int, int]
-    ) -> tuple[int, int, int, float, int]:
-        used = self._birth_used_key(tr, det_index_by_obj)
-        support, age, misses = self._birth_support_age_misses(tr)
-        covtr = self._birth_covar_trace(tr)
-
-        # Prefer: more support, fewer misses, shorter holding age (i.e. confirmed quickly),
-        # then tighter covariance, then deterministic tie-break.
-        return (
-            -support,
-            misses,
-            age,
-            covtr,
-            used if used is not None else 10**9,
-        )
-
-    def _score_and_rank_birth_candidates(
-        self, born: list[Track], det_index_by_obj: dict[int, int]
-    ) -> list[tuple[tuple[int, int, int, float, int], Track]]:
-        """Compute deterministic ranking keys and return candidates sorted best-first."""
-        born_scored = [
-            (self._birth_ranking_key(tr, det_index_by_obj), tr) for tr in born
+    def _residual_detection_indices_after_step2(self, ctx: ScanContext) -> list[int]:
+        used_current_scan_det_indices: set[int] = set()
+        for leaf in self._active_leaf_nodes():
+            used_current_scan_det_indices |= self._current_scan_det_indices_from_keys(
+                leaf.detection_history_keys,
+                ctx.scan_index,
+            )
+        return [
+            i
+            for i in range(len(ctx.detections))
+            if i not in used_current_scan_det_indices
         ]
-        born_scored.sort(key=lambda kt: kt[0])
-        return born_scored
 
-    def _select_kept_birth_candidates(
-        self,
-        born_scored: list[tuple[tuple[int, int, int, float, int], Track]],
-        *,
-        det_index_by_obj: dict[int, int],
-        timestamp: datetime.datetime,
-    ) -> list[Track]:
-        """Apply per-scan birth cap after ranking; emit debug listing pre/post cap."""
-        born = [tr for _, tr in born_scored]
-        if self.params.debug_display_births:
-            print(f"\nBirth candidates at {timestamp} (pre-limit): {len(born_scored)}")
-            self._display_births(born, det_index_by_obj)
+    def _run_internal_births(self, ctx: ScanContext) -> BirthStats:
+        """Create simple internal birth trees from Step-2 residual detections."""
+        residual_det_indices = self._residual_detection_indices_after_step2(ctx)
+        residual_detections = [ctx.detections[i] for i in residual_det_indices]
 
-        born = born[: self.params.max_births_per_scan]
+        if self.initiator is None:
+            self._last_unused_detections = residual_detections
+            return BirthStats(
+                residual_detections_considered=len(residual_detections),
+                birth_tracks_created=0,
+                birth_tracks_kept=0,
+            )
 
-        if self.params.debug_display_births:
-            print(f"Births kept (post-limit): {len(born)}")
-            self._display_births(born, det_index_by_obj)
-        return born
+        self._last_unused_detections = []
+        if not residual_detections:
+            return BirthStats(
+                residual_detections_considered=0,
+                birth_tracks_created=0,
+                birth_tracks_kept=0,
+            )
 
-    # -------------------------------------------------------------------------
-    # Birth template preparation and global branching.
-    # -------------------------------------------------------------------------
+        born = list(
+            self.initiator.initiate(OrderedSet(residual_detections), ctx.timestamp)
+        )
+        birth_tracks_created = len(born)
 
-    def _prepare_birth_templates(
-        self,
-        born: list[Track],
-        det_index_by_obj: dict[int, int],
-        ctx: ScanContext,
-    ) -> tuple[list[BirthTemplate], set[int]]:
-        """Assign stable track IDs and root nodes for each kept birth candidate."""
-        birth_templates: list[BirthTemplate] = []
-        birth_track_ids: set[int] = set()
+        # Keep this phase intentionally simple: numeric sanity + fixed cap.
+        born = [tr for tr in born if self._birth_is_sane(tr)]
+        if len(born) > self.params.max_births_per_scan:
+            born = born[: self.params.max_births_per_scan]
+        birth_tracks_kept = len(born)
+
+        if self.params.debug_display_births and born:
+            print(f"\nInternal births at {ctx.timestamp}: kept={birth_tracks_kept}")
+            for tr in born[: self.params.debug_births_max]:
+                state = tr.states[-1].state_vector
+                print(f"  birth_state={self._fmt_state_xyvxvy(state)}")
+
         for tr in born:
-            tid = self._next_track_id
+            track_id = self._next_track_id
             self._next_track_id += 1
-            used_key = self._birth_used_key(tr, det_index_by_obj)
             state = tr.states[-1]
-            leaf_node = self._create_root_node(
-                track_id=tid,
+            used_key = self._birth_used_key(
+                tr,
+                scan_index=ctx.scan_index,
+                det_index_by_obj=ctx.det_index_by_obj,
+            )
+            age = max(len(tr), 1)
+            hits = 1 if used_key is not None else 0
+            root_log_delta = self.scoring_model.score_birth(
+                birth_track=tr,
+                used_det_key=(None if used_key is None else int(used_key[1])),
+                ctx=ctx,
+            )
+            root = self._create_root_node(
+                track_id=track_id,
                 scan_index=ctx.scan_index,
                 timestamp=getattr(state, "timestamp", ctx.timestamp),
                 state=state,
-                state_kind="birth",
+                state_kind="internal_birth",
                 used_det_key=used_key,
                 assoc_label=(
-                    TOMHTTracker.ASSOC_PAD if used_key is None else int(used_key)
+                    TOMHTTracker.ASSOC_PAD if used_key is None else int(used_key[1])
                 ),
-                age=1,
-                hits=1 if used_key is not None else 0,
+                log_delta=float(root_log_delta),
+                age=age,
+                hits=hits,
                 root_source="internal_birth",
             )
-            birth_templates.append(
-                BirthTemplate(
-                    track_id=tid,
-                    leaf_node=leaf_node,
-                    template_track=tr,
-                    used_det_key=used_key,
+            self.track_trees_by_track_id[track_id] = TrackTree(
+                track_id=track_id,
+                root_node_id=root.node_id,
+                active_leaf_node_ids={root.node_id},
+                root_source="internal_birth",
+            )
+
+        return BirthStats(
+            residual_detections_considered=len(residual_detections),
+            birth_tracks_created=birth_tracks_created,
+            birth_tracks_kept=birth_tracks_kept,
+        )
+
+    # =========================================================================
+    # Per-Scan Clustering + Global Rebuild
+    # =========================================================================
+
+    def _current_scan_candidate_keys_for_tree(
+        self,
+        tree: TrackTree,
+        scan_index: int,
+    ) -> set[DetectionKey]:
+        keys: set[DetectionKey] = set()
+        for leaf_id in tree.active_leaf_node_ids:
+            leaf = self._nodes_by_id[leaf_id]
+            if (
+                leaf.used_det_key is not None
+                and int(leaf.used_det_key[0]) == scan_index
+            ):
+                keys.add(leaf.used_det_key)
+        return keys
+
+    def _build_track_clusters(self, ctx: ScanContext) -> list[_ClusterWorkItem]:
+        """Build current independent clusters from shared current-scan detections."""
+        track_ids = sorted(self.track_trees_by_track_id.keys())
+        if not track_ids:
+            return []
+
+        keys_by_track: dict[int, set[DetectionKey]] = {
+            track_id: self._current_scan_candidate_keys_for_tree(
+                self.track_trees_by_track_id[track_id],
+                ctx.scan_index,
+            )
+            for track_id in track_ids
+        }
+
+        adjacency: dict[int, set[int]] = {track_id: set() for track_id in track_ids}
+        conflict_links: list[tuple[int, int, tuple[DetectionKey, ...]]] = []
+        for i, left_track_id in enumerate(track_ids):
+            for right_track_id in track_ids[i + 1 :]:
+                shared = keys_by_track[left_track_id] & keys_by_track[right_track_id]
+                if not shared:
+                    continue
+                adjacency[left_track_id].add(right_track_id)
+                adjacency[right_track_id].add(left_track_id)
+                conflict_links.append(
+                    (
+                        left_track_id,
+                        right_track_id,
+                        tuple(sorted(shared)),
+                    )
+                )
+
+        components: list[list[int]] = []
+        seen: set[int] = set()
+        for seed in track_ids:
+            if seed in seen:
+                continue
+            stack = [seed]
+            component: list[int] = []
+            seen.add(seed)
+            while stack:
+                cur = stack.pop()
+                component.append(cur)
+                for nbr in sorted(adjacency[cur]):
+                    if nbr in seen:
+                        continue
+                    seen.add(nbr)
+                    stack.append(nbr)
+            component.sort()
+            components.append(component)
+
+        out: list[_ClusterWorkItem] = []
+        for cluster_id, component in enumerate(
+            sorted(components, key=lambda c: tuple(c))
+        ):
+            comp_track_ids = tuple(component)
+            comp_track_set = set(comp_track_ids)
+            comp_links = tuple(
+                link
+                for link in conflict_links
+                if link[0] in comp_track_set and link[1] in comp_track_set
+            )
+            out.append(
+                _ClusterWorkItem(
+                    cluster_id=cluster_id,
+                    track_ids=comp_track_ids,
+                    current_scan_det_keys_by_track_id={
+                        track_id: set(keys_by_track[track_id])
+                        for track_id in comp_track_ids
+                    },
+                    conflict_links=comp_links,
                 )
             )
-            birth_track_ids.add(tid)
-        return birth_templates, birth_track_ids
+        return out
 
-    def _insert_birth_templates_into_global(
+    def _score_unused_cluster_current_scan_term(
         self,
-        gh: GlobalHypothesis,
-        templates: Iterable[BirthTemplate],
+        *,
+        cluster_universe: set[DetectionKey],
+        selected_used_current_scan_keys: set[DetectionKey],
         ctx: ScanContext,
-    ) -> GlobalHypothesis:
-        leaf_nodes_by_track_id = dict(gh.leaf_nodes_by_track_id)
-        birth_delta_total = 0.0
+    ) -> float:
+        """Compute explicit per-combination cluster-local unused-detection term."""
+        if not cluster_universe:
+            return 0.0
 
-        for template in templates:
-            leaf_nodes_by_track_id[template.track_id] = template.leaf_node
+        det_indices = sorted(
+            det_idx
+            for (scan_idx, det_idx) in cluster_universe
+            if scan_idx == ctx.scan_index
+        )
+        if not det_indices:
+            return 0.0
 
-            birth_delta_total += self.scoring_model.score_birth(
-                birth_track=template.template_track,
-                used_det_key=template.used_det_key,
+        detections_subset = [ctx.detections[idx] for idx in det_indices]
+        local_det_index_by_obj = {
+            id(det): local_idx for local_idx, det in enumerate(detections_subset)
+        }
+        local_ctx = ScanContext(
+            scan_index=ctx.scan_index,
+            timestamp=ctx.timestamp,
+            detections=detections_subset,
+            det_index_by_obj=local_det_index_by_obj,
+        )
+
+        local_slot_by_global_det_index = {
+            global_det_idx: local_idx
+            for local_idx, global_det_idx in enumerate(det_indices)
+        }
+        used_local_slots = {
+            local_slot_by_global_det_index[det_idx]
+            for (scan_idx, det_idx) in selected_used_current_scan_keys
+            if scan_idx == ctx.scan_index and det_idx in local_slot_by_global_det_index
+        }
+        return self.scoring_model.score_unused_detections(
+            used_det_keys=used_local_slots,
+            ctx=local_ctx,
+        )
+
+    def _cluster_leaf_options(
+        self,
+        track_ids: tuple[int, ...],
+    ) -> list[list[TrackHypothesisNode]]:
+        out: list[list[TrackHypothesisNode]] = []
+        for track_id in track_ids:
+            tree = self.track_trees_by_track_id[track_id]
+            leaves = [
+                self._nodes_by_id[node_id]
+                for node_id in sorted(tree.active_leaf_node_ids)
+            ]
+            if not leaves:
+                raise RuntimeError(
+                    "Cluster rebuild encountered a tree with no active leaves. "
+                    "Lifecycle filtering should remove empty trees before clustering."
+                )
+            out.append(leaves)
+        return out
+
+    def _rebuild_one_cluster(
+        self,
+        cluster: _ClusterWorkItem,
+        ctx: ScanContext,
+    ) -> ClusterRebuildSnapshot:
+        """Exhaustively enumerate and score feasible globals for one cluster."""
+        leaf_options = self._cluster_leaf_options(cluster.track_ids)
+        cluster_universe: set[DetectionKey] = set()
+        for keys in cluster.current_scan_det_keys_by_track_id.values():
+            cluster_universe |= keys
+
+        rebuilt_globals: list[GlobalHypothesis] = []
+        combinations_evaluated = 0
+        feasible_combinations = 0
+
+        for picked in product(*leaf_options):
+            combinations_evaluated += 1
+            selected = list(picked)
+
+            feasible = True
+            used_keys: set[DetectionKey] = set()
+            for leaf in selected:
+                overlap = used_keys & set(leaf.detection_history_keys)
+                if overlap:
+                    feasible = False
+                    break
+                used_keys |= set(leaf.detection_history_keys)
+            if not feasible:
+                continue
+
+            feasible_combinations += 1
+            leaf_nodes_by_track_id = {
+                track_id: selected[idx]
+                for idx, track_id in enumerate(cluster.track_ids)
+            }
+            leaf_score_sum = sum(float(leaf.accumulated_log_score) for leaf in selected)
+
+            used_current_scan_keys = {
+                key
+                for key in used_keys
+                if int(key[0]) == ctx.scan_index and key in cluster_universe
+            }
+            unused_term = self._score_unused_cluster_current_scan_term(
+                cluster_universe=cluster_universe,
+                selected_used_current_scan_keys=used_current_scan_keys,
                 ctx=ctx,
             )
 
+            rebuilt_globals.append(
+                GlobalHypothesis(
+                    leaf_nodes_by_track_id=leaf_nodes_by_track_id,
+                    log_weight=float(leaf_score_sum + unused_term),
+                )
+            )
+
+        if not rebuilt_globals:
+            raise RuntimeError(
+                "Cluster rebuild found no feasible combination. "
+                "Expected at least one feasible joint assignment."
+            )
+
+        rebuilt_globals.sort(key=lambda gh: gh.log_weight, reverse=True)
+        kept_globals = tuple(rebuilt_globals[: self.params.max_global_hypotheses])
+        map_global = kept_globals[0] if kept_globals else None
+
+        return ClusterRebuildSnapshot(
+            cluster_id=cluster.cluster_id,
+            track_ids=cluster.track_ids,
+            current_scan_conflict_det_keys=frozenset(cluster_universe),
+            conflict_links=cluster.conflict_links,
+            rebuilt_globals=kept_globals,
+            map_global=map_global,
+            feasible_combinations=feasible_combinations,
+            evaluated_combinations=combinations_evaluated,
+        )
+
+    def _rebuild_cluster_globals(
+        self,
+        clusters: list[_ClusterWorkItem],
+        ctx: ScanContext,
+    ) -> tuple[list[ClusterRebuildSnapshot], RebuildStats]:
+        if not clusters:
+            return [], RebuildStats()
+
+        snapshots = [self._rebuild_one_cluster(cluster, ctx) for cluster in clusters]
+        return (
+            snapshots,
+            RebuildStats(
+                cluster_count=len(snapshots),
+                combinations_evaluated=sum(s.evaluated_combinations for s in snapshots),
+                feasible_combinations=sum(s.feasible_combinations for s in snapshots),
+                rebuilt_globals_stored=sum(len(s.rebuilt_globals) for s in snapshots),
+                nscan_disagreement_total=0,
+            ),
+        )
+
+    @staticmethod
+    def _merge_cluster_map_globals(
+        cluster_snapshots: list[ClusterRebuildSnapshot],
+    ) -> GlobalHypothesis:
+        """Merge cluster MAP globals into one full-scan MAP selection."""
+        if not cluster_snapshots:
+            return GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=0.0)
+
+        merged_nodes: dict[int, TrackHypothesisNode] = {}
+        merged_log = 0.0
+        for snapshot in cluster_snapshots:
+            if snapshot.map_global is None:
+                continue
+            merged_nodes.update(snapshot.map_global.leaf_nodes_by_track_id)
+            merged_log += float(snapshot.map_global.log_weight)
+
         return GlobalHypothesis(
-            leaf_nodes_by_track_id=leaf_nodes_by_track_id,
-            log_weight=gh.log_weight + birth_delta_total,
-        )
-
-    def _compatible_birth_templates_for_global(
-        self, gh: GlobalHypothesis, birth_templates: list[BirthTemplate]
-    ) -> list[BirthTemplate]:
-        used_in_gh = self._used_det_keys_in_global(gh)
-        return [
-            template
-            for template in birth_templates
-            if template.used_det_key is None or template.used_det_key not in used_in_gh
-        ]
-
-    # Branching globals with compatible birth templates.
-
-    def _branch_global_with_birth_templates(
-        self,
-        gh: GlobalHypothesis,
-        compatible: list[BirthTemplate],
-        ctx: ScanContext,
-    ) -> list[GlobalHypothesis]:
-        """Branch one global with zero/one/(optional)two compatible birth templates."""
-        branched: list[GlobalHypothesis] = []
-
-        # If there are no tracks yet, don't keep the empty hypothesis once we have births to add.
-        if gh.leaf_nodes_by_track_id:
-            branched.append(gh)
-
-        # Always allow one-birth variants for compatible candidates.
-        for template in compatible:
-            branched.append(
-                self._insert_birth_templates_into_global(
-                    gh,
-                    [template],
-                    ctx,
-                )
-            )
-
-        # Optional: also include the "two births at once" variant when exactly 2 are compatible.
-        if len(compatible) >= 2 and self.params.max_births_per_scan >= 2:
-            first = compatible[0]
-            second = compatible[1]
-            if (
-                first.used_det_key is None
-                or second.used_det_key is None
-                or first.used_det_key != second.used_det_key
-            ):  # should always hold, but be safe
-                branched.append(
-                    self._insert_birth_templates_into_global(
-                        gh,
-                        [first, second],
-                        ctx,
-                    )
-                )
-        return branched
-
-    def _branch_globals_with_birth_templates(
-        self,
-        birth_templates: list[BirthTemplate],
-        ctx: ScanContext,
-    ) -> None:
-        """Apply birth-template branching across all globals, then post-birth beam limit."""
-        new_globals: list[GlobalHypothesis] = []
-        for gh in self.global_hypotheses:
-            compatible = self._compatible_birth_templates_for_global(
-                gh, birth_templates
-            )
-            new_globals.extend(
-                self._branch_global_with_birth_templates(
-                    gh,
-                    compatible,
-                    ctx,
-                )
-            )
-
-        new_globals.sort(key=lambda g: g.log_weight, reverse=True)
-        self.global_hypotheses = new_globals[: self.params.max_global_hypotheses]
-
-    def _birth_beam_stats(self, birth_track_ids: set[int]) -> tuple[int, int]:
-        if not birth_track_ids:
-            return 0, 0
-        birth_track_instances_in_beam = sum(
-            1
-            for gh in self.global_hypotheses
-            for tid in gh.leaf_nodes_by_track_id
-            if tid in birth_track_ids
-        )
-        globals_with_birth = sum(
-            1
-            for gh in self.global_hypotheses
-            if any(tid in birth_track_ids for tid in gh.leaf_nodes_by_track_id)
-        )
-        return birth_track_instances_in_beam, globals_with_birth
-
-    # -------------------------------------------------------------------------
-    # Birth phase entrypoint.
-    # -------------------------------------------------------------------------
-
-    def _branch_globals_with_births(
-        self,
-        ctx: ScanContext,
-    ) -> BirthStats:
-        """Run full internal births and return per-scan birth stats.
-
-        Birth-phase flow:
-        residual detections -> initiate -> sanity-filter -> rank/limit ->
-        template roots -> branch globals -> post-birth beam/stats.
-        """
-        globals_before_births = len(self.global_hypotheses)
-
-        if self.initiator is None:
-            residual = self._residual_detections(self.global_hypotheses, ctx.detections)
-            self._last_unused_detections = residual
-            return BirthStats(
-                globals_before_births=globals_before_births,
-                globals_after_births=len(self.global_hypotheses),
-            )
-
-        if not self.global_hypotheses:
-            self._last_unused_detections = []
-            return BirthStats(
-                globals_before_births=globals_before_births,
-                globals_after_births=len(self.global_hypotheses),
-            )
-
-        # ---------------------------------------------------------------------
-        # Residual detections and raw birth proposals.
-        # ---------------------------------------------------------------------
-        residual = self._residual_detections(self.global_hypotheses, ctx.detections)
-        self._last_unused_detections = []
-        residual_detections_considered = len(residual)
-        born = self._generate_birth_candidates(residual, ctx.timestamp)
-        birth_tracks_created = len(born)
-
-        # ---------------------------------------------------------------------
-        # Birth ranking and kept-candidate selection.
-        # ---------------------------------------------------------------------
-        born = self._filter_birth_candidates(born)
-        born_scored = self._score_and_rank_birth_candidates(born, ctx.det_index_by_obj)
-        born = self._select_kept_birth_candidates(
-            born_scored,
-            det_index_by_obj=ctx.det_index_by_obj,
-            timestamp=ctx.timestamp,
-        )
-        birth_tracks_kept = len(born)
-
-        # ---------------------------------------------------------------------
-        # Birth template preparation and global branching.
-        # ---------------------------------------------------------------------
-        birth_track_ids: set[int] = set()
-        if born:
-            # Allocate stable IDs once for these births (shared across variants)
-            birth_templates, birth_track_ids = self._prepare_birth_templates(
-                born,
-                ctx.det_index_by_obj,
-                ctx,
-            )
-            self._branch_globals_with_birth_templates(birth_templates, ctx)
-
-        birth_track_instances_in_beam, globals_with_birth = self._birth_beam_stats(
-            birth_track_ids
-        )
-
-        return BirthStats(
-            residual_detections_considered=residual_detections_considered,
-            birth_tracks_created=birth_tracks_created,
-            birth_tracks_kept=birth_tracks_kept,
-            birth_track_instances_in_beam=birth_track_instances_in_beam,
-            globals_with_birth=globals_with_birth,
-            globals_before_births=globals_before_births,
-            globals_after_births=len(self.global_hypotheses),
+            leaf_nodes_by_track_id=merged_nodes,
+            log_weight=float(merged_log),
         )
 
     # =========================================================================
-    # Node Lifecycle Helpers
+    # MAP-Only N-Scan Pruning on Explicit Trees
     # =========================================================================
 
-    def _allocate_node_id(self) -> int:
-        node_id = self._next_node_id
-        self._next_node_id += 1
-        return node_id
+    def _child_of_root_on_path(
+        self,
+        *,
+        root: TrackHypothesisNode,
+        leaf: TrackHypothesisNode,
+    ) -> TrackHypothesisNode | None:
+        """Return the root child that lies on the root->leaf path."""
+        if root.node_id == leaf.node_id:
+            return None
 
-    def _register_node(self, node: TrackHypothesisNode) -> TrackHypothesisNode:
-        self._nodes_by_id[node.node_id] = node
+        node = leaf
+        while node.parent is not None and node.parent.node_id != root.node_id:
+            node = node.parent
+        if node.parent is None:
+            return None
         return node
 
-    def _create_track_hypothesis_node(
+    def _is_descendant_of(
         self,
         *,
-        track_id: int,
-        parent: TrackHypothesisNode | None,
-        scan_index: int,
-        timestamp: datetime.datetime,
-        state: State,
-        state_kind: str,
-        used_det_key: int | None,
-        assoc_label: int,
-        log_delta: float,
-        age: int,
-        hits: int,
-        missed_count: int,
-        last_det_key: int | None,
-        last_det_hit: bool,
-        root_source: str,
-        birth_scan_index: int,
-    ) -> TrackHypothesisNode:
-        """Create and register one node."""
-        if parent is not None and parent.track_id != track_id:
-            raise ValueError(
-                "TrackHypothesisNode parent.track_id must match child track_id."
-            )
-        node = TrackHypothesisNode(
-            node_id=self._allocate_node_id(),
-            track_id=int(track_id),
-            parent=parent,
-            scan_index=int(scan_index),
-            timestamp=timestamp,
-            state=state,
-            state_kind=state_kind,
-            used_det_key=used_det_key,
-            assoc_label=int(assoc_label),
-            log_delta=float(log_delta),
-            age=int(age),
-            hits=int(hits),
-            missed_count=int(missed_count),
-            last_det_key=last_det_key,
-            last_det_hit=bool(last_det_hit),
-            root_source=root_source,
-            birth_scan_index=int(birth_scan_index),
-        )
-        return self._register_node(node)
+        node: TrackHypothesisNode,
+        ancestor: TrackHypothesisNode,
+    ) -> bool:
+        cur: TrackHypothesisNode | None = node
+        while cur is not None:
+            if cur.node_id == ancestor.node_id:
+                return True
+            cur = cur.parent
+        return False
 
-    def _create_root_node(
+    def _compute_cluster_pruning_disagreement(
         self,
         *,
-        track_id: int,
+        snapshot: ClusterRebuildSnapshot,
+        root_before_by_track_id: dict[int, TrackHypothesisNode],
+        map_choice_by_track_id: dict[int, int],
+    ) -> tuple[dict[int, int], int]:
+        """Compare MAP pruning child choices against alternative rebuilt globals."""
+        tracks_in_cluster = list(snapshot.track_ids)
+        map_choice_for_cluster = {
+            track_id: map_choice_by_track_id[track_id]
+            for track_id in tracks_in_cluster
+            if track_id in map_choice_by_track_id
+        }
+        if not map_choice_for_cluster:
+            return {}, 0
+
+        disagreement_count = 0
+        for alternative in snapshot.rebuilt_globals[1:]:
+            disagrees = False
+            for track_id, map_child_id in map_choice_for_cluster.items():
+                leaf = alternative.leaf_nodes_by_track_id.get(track_id)
+                if leaf is None:
+                    continue
+                root_before = root_before_by_track_id[track_id]
+                alt_child = self._child_of_root_on_path(root=root_before, leaf=leaf)
+                alt_child_id = None if alt_child is None else alt_child.node_id
+                if alt_child_id != map_child_id:
+                    disagrees = True
+                    break
+            if disagrees:
+                disagreement_count += 1
+
+        return map_choice_for_cluster, disagreement_count
+
+    def _apply_map_n_scan_pruning(
+        self,
+        *,
         scan_index: int,
-        timestamp: datetime.datetime,
-        state: State,
-        state_kind: str,
-        used_det_key: int | None,
-        assoc_label: int,
-        age: int,
-        hits: int,
-        root_source: str,
-    ) -> TrackHypothesisNode:
-        return self._create_track_hypothesis_node(
-            track_id=track_id,
-            parent=None,
-            scan_index=scan_index,
-            timestamp=timestamp,
-            state=state,
-            state_kind=state_kind,
-            used_det_key=used_det_key,
-            assoc_label=assoc_label,
-            log_delta=0.0,
-            age=age,
-            hits=hits,
-            missed_count=0,
-            last_det_key=used_det_key,
-            last_det_hit=used_det_key is not None,
-            root_source=root_source,
-            birth_scan_index=scan_index,
+        map_global: GlobalHypothesis,
+        cluster_snapshots: list[ClusterRebuildSnapshot],
+    ) -> tuple[int, int, int, int, list[ClusterRebuildSnapshot]]:
+        """Apply MAP-only N-scan root-child promotion and disagreement bookkeeping."""
+        boundary_scan_index = int(scan_index) - int(self.params.ns_scan_window)
+        self._last_nscan_boundary_scan_index = boundary_scan_index
+        self._last_nscan_tracks_in_scope = 0
+        self._last_nscan_committed_ancestor_by_track_id = {}
+
+        if boundary_scan_index < 0 or not self.track_trees_by_track_id:
+            return boundary_scan_index, 0, 0, 0, cluster_snapshots
+
+        root_before_by_track_id: dict[int, TrackHypothesisNode] = {
+            track_id: self._nodes_by_id[tree.root_node_id]
+            for track_id, tree in self.track_trees_by_track_id.items()
+        }
+
+        map_choice_by_track_id: dict[int, int] = {}
+        for track_id, tree in sorted(self.track_trees_by_track_id.items()):
+            root_before = root_before_by_track_id[track_id]
+            if int(root_before.scan_index) >= boundary_scan_index:
+                continue
+            map_leaf = map_global.leaf_nodes_by_track_id.get(track_id)
+            if map_leaf is None:
+                continue
+            child = self._child_of_root_on_path(root=root_before, leaf=map_leaf)
+            if child is None:
+                continue
+            map_choice_by_track_id[track_id] = child.node_id
+
+        self._last_nscan_tracks_in_scope = len(map_choice_by_track_id)
+
+        updated_snapshots: list[ClusterRebuildSnapshot] = []
+        disagreement_total = 0
+        for snapshot in cluster_snapshots:
+            map_choice_for_cluster, disagreement_count = (
+                self._compute_cluster_pruning_disagreement(
+                    snapshot=snapshot,
+                    root_before_by_track_id=root_before_by_track_id,
+                    map_choice_by_track_id=map_choice_by_track_id,
+                )
+            )
+            disagreement_total += disagreement_count
+            updated_snapshots.append(
+                replace(
+                    snapshot,
+                    map_pruning_child_by_track_id=map_choice_for_cluster,
+                    disagreement_count=disagreement_count,
+                )
+            )
+
+        committed_count = 0
+        for track_id, chosen_child_id in map_choice_by_track_id.items():
+            current_tree = self.track_trees_by_track_id.get(track_id)
+            if current_tree is None:
+                continue
+            root_before = root_before_by_track_id[track_id]
+            chosen_child = self._nodes_by_id[chosen_child_id]
+
+            current_tree.root_node_id = chosen_child.node_id
+            chosen_child.parent = None
+
+            retained_leaf_ids = {
+                leaf_id
+                for leaf_id in current_tree.active_leaf_node_ids
+                if self._is_descendant_of(
+                    node=self._nodes_by_id[leaf_id],
+                    ancestor=chosen_child,
+                )
+            }
+            if not retained_leaf_ids:
+                retained_leaf_ids = {chosen_child.node_id}
+            current_tree.active_leaf_node_ids = retained_leaf_ids
+
+            self._last_nscan_committed_ancestor_by_track_id[track_id] = chosen_child
+            prev_boundary = self._committed_boundary_by_track_id.get(track_id)
+            if prev_boundary is None or boundary_scan_index > prev_boundary:
+                self._committed_boundary_by_track_id[track_id] = boundary_scan_index
+                self._committed_ancestor_by_track_id[track_id] = chosen_child
+            committed_count += 1
+
+            # Root promotion detaches the old root lineage from this tree.
+            root_before.child_node_ids = {
+                child_id
+                for child_id in root_before.child_node_ids
+                if child_id == chosen_child_id
+            }
+
+        self._remove_empty_trees()
+        return (
+            boundary_scan_index,
+            len(map_choice_by_track_id),
+            committed_count,
+            disagreement_total,
+            updated_snapshots,
         )
+
+    # =========================================================================
+    # Node Retention / Cleanup
+    # =========================================================================
+
+    def _reachable_node_ids_from_seeds(
+        self,
+        seeds: Iterable[TrackHypothesisNode],
+    ) -> set[int]:
+        """Return node IDs reachable via parent links from supplied seeds."""
+        reachable: set[int] = set()
+        stack = list(seeds)
+        while stack:
+            node = stack.pop()
+            node_id = int(node.node_id)
+            if node_id in reachable:
+                continue
+            reachable.add(node_id)
+            if node.parent is not None:
+                stack.append(node.parent)
+        return reachable
+
+    def _cleanup_unreachable_nodes(self) -> None:
+        """Reclaim nodes no longer reachable from roots/leaves/commitment refs."""
+        if not self._nodes_by_id:
+            return
+
+        seeds: list[TrackHypothesisNode] = []
+        for tree in self.track_trees_by_track_id.values():
+            seeds.append(self._nodes_by_id[tree.root_node_id])
+            seeds.extend(
+                self._nodes_by_id[node_id] for node_id in tree.active_leaf_node_ids
+            )
+        seeds.extend(self._last_nscan_committed_ancestor_by_track_id.values())
+        seeds.extend(self._committed_ancestor_by_track_id.values())
+
+        if not seeds:
+            self._nodes_by_id.clear()
+            return
+
+        retained_node_ids = self._reachable_node_ids_from_seeds(seeds)
+        if len(retained_node_ids) == len(self._nodes_by_id):
+            return
+
+        self._nodes_by_id = {
+            node_id: node
+            for node_id, node in self._nodes_by_id.items()
+            if node_id in retained_node_ids
+        }
+        for node in self._nodes_by_id.values():
+            node.child_node_ids = {
+                child_id
+                for child_id in node.child_node_ids
+                if child_id in retained_node_ids
+            }
 
     # =========================================================================
     # External-Start Helpers
     # =========================================================================
 
-    def _make_external_start_template(
-        self, start: Track, time: datetime.datetime
+    def _make_external_start_root(
+        self,
+        start: Track,
+        time: datetime.datetime,
     ) -> TrackHypothesisNode:
-        """Convert one confirmed external start Track into a root node template."""
+        """Convert one confirmed external start Track into a root node."""
         if len(start) == 0:
             raise ValueError(
                 "External starts must contain at least one state at the current timestamp."
@@ -1545,7 +1460,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         hits = int(start.metadata.get("hits", age))
         hits = min(max(hits, 1), age)
         state = start.states[-1]
-        assert self._last_scan_index is not None
+        if self._last_scan_index is None:
+            raise RuntimeError(
+                "External starts require at least one completed update_tracker() call."
+            )
+
         return self._create_root_node(
             track_id=track_id,
             scan_index=int(self._last_scan_index),
@@ -1554,13 +1473,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             state_kind="external_start",
             used_det_key=None,
             assoc_label=TOMHTTracker.ASSOC_PAD,
+            log_delta=0.0,
             age=age,
             hits=hits,
             root_source="external_start",
         )
 
     def _validate_external_starts_timestamp(self, time: datetime.datetime) -> None:
-        """Validate add_external_starts(...) call ordering and timestamp match."""
+        """Validate add_external_starts(...) ordering and timestamp match."""
         if not isinstance(time, datetime.datetime):
             raise TypeError(
                 "add_external_starts() time must be a datetime.datetime instance."
@@ -1579,7 +1499,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # =========================================================================
     # Diagnostics / Instrumentation Helpers
     # =========================================================================
-    # Scan-time instrumentation collection and optional debug displays.
 
     def _run_scan_instrumentation(
         self,
@@ -1588,12 +1507,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         scan_wall_ms: float,
         maxrss_mb: float,
         node_count_total: int,
-        leaf_instances_in_beam: int,
-        globals_in: int,
-        globals_expanded: int,
-        globals_after_unused: int,
-        globals_after_dedupe: int,
-        globals_after_beam: int,
+        active_trees: int,
+        active_leaves: int,
+        rebuild_stats: RebuildStats,
         nscan_boundary_scan_index: int,
         nscan_tracks_in_scope: int,
         nscan_tracks_committed: int,
@@ -1605,12 +1521,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             scan_wall_ms=scan_wall_ms,
             maxrss_mb=maxrss_mb,
             node_count_total=node_count_total,
-            leaf_instances_in_beam=leaf_instances_in_beam,
-            globals_in=globals_in,
-            globals_expanded=globals_expanded,
-            globals_after_unused=globals_after_unused,
-            globals_after_dedupe=globals_after_dedupe,
-            globals_after_beam=globals_after_beam,
+            active_trees=active_trees,
+            active_leaves=active_leaves,
+            rebuild_stats=rebuild_stats,
             nscan_boundary_scan_index=nscan_boundary_scan_index,
             nscan_tracks_in_scope=nscan_tracks_in_scope,
             nscan_tracks_committed=nscan_tracks_committed,
@@ -1628,11 +1541,26 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 print(f"  {det.state_vector}")
 
         if self.params.debug_display_hypotheses:
-            print(f"\nGlobal hypotheses at timestamp {ctx.timestamp}:")
-            self._display_global_hypotheses(ctx.detections)
+            print(f"\nCluster rebuilds at timestamp {ctx.timestamp}:")
+            self._display_cluster_rebuilds()
+
+    def _display_cluster_rebuilds(self) -> None:
+        for snapshot in self._last_cluster_snapshots:
+            print(
+                f"cluster={snapshot.cluster_id} tracks={list(snapshot.track_ids)} "
+                f"globals={len(snapshot.rebuilt_globals)} "
+                f"comb_eval={snapshot.evaluated_combinations} "
+                f"comb_feas={snapshot.feasible_combinations} "
+                f"disagree={snapshot.disagreement_count}"
+            )
+            for gh in snapshot.rebuilt_globals[: self.params.debug_globals_max]:
+                tids = sorted(gh.leaf_nodes_by_track_id.keys())
+                print(f"  logW={gh.log_weight:.3f} tids={tids}")
 
     def _map_stats_for_current_map(
-        self, detections: list[Detection]
+        self,
+        detections: list[Detection],
+        scan_index: int,
     ) -> tuple[int, int, int, dict[int, int], float]:
         map_snapshot = self.get_map_hypothesis_snapshot()
         map_tracks = 0
@@ -1644,9 +1572,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             return map_tracks, map_used, map_unused, map_miss_hist, map_mean_hit_rate
 
         map_tracks = len(map_snapshot.leaf_nodes_by_track_id)
-        map_used = len(
-            self._used_det_keys_for_leaf_nodes(map_snapshot.leaf_nodes_by_track_id)
-        )
+        used_keys = {
+            leaf.used_det_key
+            for leaf in map_snapshot.leaf_nodes_by_track_id.values()
+            if leaf.used_det_key is not None and int(leaf.used_det_key[0]) == scan_index
+        }
+        map_used = len(used_keys)
         map_unused = len(detections) - map_used
 
         hit_rates: list[float] = []
@@ -1668,41 +1599,36 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         scan_wall_ms: float,
         maxrss_mb: float,
         node_count_total: int,
-        leaf_instances_in_beam: int,
-        globals_in: int,
-        globals_expanded: int,
-        globals_after_unused: int,
-        globals_after_dedupe: int,
-        globals_after_beam: int,
+        active_trees: int,
+        active_leaves: int,
+        rebuild_stats: RebuildStats,
         nscan_boundary_scan_index: int,
         nscan_tracks_in_scope: int,
         nscan_tracks_committed: int,
         birth_stats: BirthStats,
     ) -> ScanStats:
         map_tracks, map_used, map_unused, map_miss_hist, map_mean_hit_rate = (
-            self._map_stats_for_current_map(ctx.detections)
+            self._map_stats_for_current_map(ctx.detections, ctx.scan_index)
         )
         return ScanStats(
             timestamp=ctx.timestamp,
             scan_wall_ms=float(scan_wall_ms),
             maxrss_mb=float(maxrss_mb),
             node_count_total=int(node_count_total),
-            leaf_instances_in_beam=int(leaf_instances_in_beam),
+            active_trees=int(active_trees),
+            active_leaves=int(active_leaves),
             num_detections=len(ctx.detections),
-            globals_in=globals_in,
-            globals_expanded=globals_expanded,
-            globals_after_unused=globals_after_unused,
-            globals_after_dedupe=globals_after_dedupe,
-            globals_after_beam=globals_after_beam,
+            cluster_count=rebuild_stats.cluster_count,
+            combinations_evaluated=rebuild_stats.combinations_evaluated,
+            feasible_combinations=rebuild_stats.feasible_combinations,
+            rebuilt_globals_stored=rebuild_stats.rebuilt_globals_stored,
+            nscan_disagreement_total=rebuild_stats.nscan_disagreement_total,
             nscan_boundary_scan_index=nscan_boundary_scan_index,
             nscan_tracks_in_scope=nscan_tracks_in_scope,
             nscan_tracks_committed=nscan_tracks_committed,
-            globals_after_births=birth_stats.globals_after_births,
             birth_candidates=birth_stats.residual_detections_considered,
             birth_tracks_created=birth_stats.birth_tracks_created,
             birth_tracks_kept=birth_stats.birth_tracks_kept,
-            birth_track_instances_in_beam=birth_stats.birth_track_instances_in_beam,
-            globals_with_birth=birth_stats.globals_with_birth,
             map_tracks=map_tracks,
             map_used=map_used,
             map_unused=map_unused,
@@ -1726,58 +1652,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             debug_display_map_miss_hist=self.params.debug_display_map_miss_hist,
         )
 
-    # Debug renderers for ad-hoc scan inspection.
-
-    def _display_global_hypotheses(self, det_list: list[Detection]) -> None:
-        for gh in self.global_hypotheses[: self.params.debug_globals_max]:
-            used = len(self._used_det_keys_for_leaf_nodes(gh.leaf_nodes_by_track_id))
-            unused = len(det_list) - used
-            print(
-                f"logW={gh.log_weight:.3f}, "
-                f"tracks={len(gh.leaf_nodes_by_track_id)}, "
-                f"used={used}, unused={unused}, "
-                f"ids={sorted(gh.leaf_nodes_by_track_id.keys())}"
-            )
-
-            for tid, node in sorted(gh.leaf_nodes_by_track_id.items()):
-                last = getattr(node.state, "state_vector")
-                ldk = node.last_det_key
-                miss = int(node.missed_count)
-                dk = node.used_det_key
-                used_str = "MISS" if dk is None else "HIT"
-                age = int(node.age)
-                hits = int(node.hits)
-                parent_node_id = (
-                    None if node.parent is None else int(node.parent.node_id)
-                )
-                committed_boundary = self._committed_boundary_by_track_id.get(tid)
-                committed_node = self._committed_ancestor_by_track_id.get(tid)
-                if committed_boundary is None or committed_node is None:
-                    committed_str = "none"
-                else:
-                    committed_str = (
-                        f"b={committed_boundary}->node={committed_node.node_id}"
-                    )
-                print(
-                    f"  tid={tid}, leaf={node.node_id}, parent={parent_node_id}, "
-                    f"{used_str}, age={age}, hits={hits}, miss={miss}, ldk={ldk}, "
-                    f"root={node.root_source}, committed={committed_str}, "
-                    f"last={self._fmt_state_xyvxvy(last)}"
-                )
-
-    def _display_births(
-        self, born: list[Track], det_index_by_obj: dict[int, int]
-    ) -> None:
-        for tr in born[: self.params.debug_births_max]:
-            used = self._birth_used_key(tr, det_index_by_obj)
-            support, age, misses = self._birth_support_age_misses(tr)
-            covtr = self._birth_covar_trace(tr)
-            last = tr.states[-1].state_vector
-            print(
-                f"  used={used}, support={support}, age={age}, misses={misses}, covtr={covtr:.2g}, "
-                f"last={self._fmt_state_xyvxvy(last)}"
-            )
-
     @staticmethod
     def _fmt_state_xyvxvy(state_vector) -> str:
         sv = np.asarray(state_vector, dtype=float)
@@ -1794,16 +1668,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
 
 def get_tomht_track_id(track: Track) -> int:
-    """Return the stable TOMHT logical track ID from a TOMHT output track.
-
-    TOMHTTracker assigns each logical track a stable integer ID that persists
-    across scans. The Track objects returned by ``update_tracker()`` and the
-    ``tracks`` property are reconstructed each scan, so ``Track.id`` (a UUID)
-    is not stable for TOMHT logical identity.
-
-    This helper is TOMHT-specific. It expects TOMHT metadata to be present on
-    the supplied ``Track``.
-    """
+    """Return the stable TOMHT logical track ID from a TOMHT output track."""
     try:
         return int(track.metadata["track_id"])
     except KeyError as exc:

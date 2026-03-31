@@ -1,5 +1,20 @@
 # TO-MHT Next Steps
 
+## Implementation status (2026-03-31)
+
+Phase D has now been implemented in code as the primary tracker architecture:
+
+- explicit persistent `TrackTree` state with active leaf frontiers
+- per-scan clustering and rebuilt cluster globals from current leaves
+- exhaustive enumeration solver with explicit per-combination cluster-local unused-detection term
+- `(scan_index, det_index)` detection keys for conflict checking
+- MAP-only N-scan tree pruning with disagreement statistics from rebuilt alternatives
+- simple `max_missed` leaf/tree lifecycle deletion
+- simple internal births from Step-2 residual detections and external starts as new single-node trees
+- practical per-tree active-leaf cap added (`max_leaves_per_track_tree`) to keep exhaustive-enumeration runtime bounded in longer scenario runs
+
+This planning document is therefore now mainly a reference/checklist for follow-up refinements, not a future architectural target.
+
 ## Next architectural phase
 
 **Phase D: transition to a true track-oriented TO-MHT**
