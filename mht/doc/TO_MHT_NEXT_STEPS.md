@@ -1,207 +1,488 @@
 # TO-MHT Next Steps
 
-## Current near-term phase
+## Next architectural phase
 
-**Phase C: integration-readiness and interface cleanup**
+**Phase D: transition to a true track-oriented TO-MHT**
 
-Phase B's main structural goals are now in code:
-- globals store `track_id -> leaf node`,
-- ancestry is explicit,
-- dedupe is structural,
-- N-scan commitment is ancestor-based and per-track,
-- external starts and internal births share the same node-based structure.
+The first handoff release is now complete and available for initial ISAC integration work.
 
-The current priority is therefore practical integration and code/interface cleanup rather than another large architectural rewrite.
+That release is good enough for:
 
-Status note (2026-03-22):
-- legacy MFA bootstrap code was moved from `mht/mfa` to `archive/mfa` so inactive baseline/reference code is out of the active TO-MHT package path.
-- TO-MHT tracker-construction helpers (`build_tomht_linear()` / `build_tomht_ukf()`) were moved from `mht/tomht_tracker.py` to `mht/helpers/tracker_builders.py`; `TOMHTTracker` now uses a generic Stone Soup `Initiator` type hint.
+- initial pipeline integration,
+- workshop discussion,
+- replay-based evaluation,
+- and continued collaboration.
 
-Status note (2026-03-23):
-- completed one more continuation/expansion readability follow-up in `mht/tomht_tracker.py`: moved joint candidate-combination recursion from nested scope into same-level private helper `_assemble_joint_globals(...)` with an explicit docstring and unchanged behavior.
-- completed a small readability-only cleanup in continuation/expansion helpers in `mht/tomht_tracker.py`: added compact role docstrings for `_candidate_from_hypothesis(...)`, `_candidates_for_track_leaf(...)`, and `_expand_global_hypothesis(...)`; clarified that `max_missed` overflow drops only that logical track from the branch; and isolated recursive joint combination behind a small nested helper with unchanged behavior.
-- completed one more low-risk readability/modularization split: extracted scoring contract/default (`ScoringModel`, `BetaRatioScoringModel`) from `mht/tomht_tracker.py` into new `mht/tomht_scoring.py`; tracker-side scoring-mode/default construction in `TOMHTTracker.__init__` stayed in place and behavior was unchanged.
-- completed one more narrow split in scan instrumentation/reporting: per-scan stats block rendering/printing moved from `mht/tomht_tracker.py` into `mht/tomht_stats.py` (`print_scan_stats(...)`); tracker-side scan pipeline and display decision flow remain in `TOMHTTracker`.
-- follow-up low-risk readability/modularization pass completed: passive scan stats/reporting pieces (`ScanStats`, `BirthStats`, aggregate summary printing) moved from `mht/tomht_tracker.py` into `mht/tomht_stats.py`, while scan-time instrumentation plumbing remains in `TOMHTTracker`.
-- class-level helper sections in `mht/tomht_tracker.py` were conservatively reordered to better match runtime/conceptual flow (notably N-scan helpers now appear before birth helpers).
-- low-risk in-file navigation/readability pass completed in `mht/tomht_tracker.py`: stronger section banners, compact class roadmap comment, and helper-cluster role headers; no behavior or algorithm changes.
-- as a low-risk readability/modularization step, core passive data-structure dataclasses were extracted from `mht/tomht_tracker.py` into `mht/tomht_model.py` (`TrackHypothesisNode`, `GlobalHypothesis`, `ChildCandidate`, `MAPHypothesisSnapshot`, `NScanCommitmentSnapshot`).
-- `ScanContext` intentionally remains in `mht/tomht_tracker.py`; passive `ScanStats`/`BirthStats` and aggregate summary reporting now live in `mht/tomht_stats.py`.
-- as a small boundary split, Stone Soup output/adapter helpers were extracted from `mht/tomht_tracker.py` into `mht/tomht_output.py` (lineage extraction, explicit output metadata projection, and `Track` reconstruction from a leaf node).
+However, the workshop, presentation work, and architectural review made the main next step clear:
 
-Status note (2026-03-24):
-- added a narrow post-commit ancestry cleanup step in `mht/tomht_tracker.py` (`_cleanup_committed_ancestry()`), invoked immediately after `_update_n_scan_commitment(...)`; commitment semantics remain unchanged and cleanup is intentionally conservative/reachability-based.
-- completed a focused readability/documentation pass on `TOMHTParams` in `mht/tomht_tracker.py`: expanded class docstring with stable-vs-heuristic guidance, made parameter-group intent explicit (beam/scoring/N-scan/internal-birth guards/debug), and clarified comments for less-obvious knobs (`prob_gate`, `births_k`, `unused_det_log_penalty`, `birth_log_penalty`) with unchanged behavior/defaults.
-- completed a small readability/modularization cleanup in scoring setup: moved default scoring-model construction from hypothesiser attributes and BetaRatio sanity/warning diagnostics out of `TOMHTTracker.__init__` into helper functions in `mht/tomht_scoring.py`; behavior and scoring semantics are unchanged.
-- completed a second small readability/navigation pass in the internal-birth section of `mht/tomht_tracker.py`: moved the birth-phase sequence note into `_branch_globals_with_births(...)` docstring and added lightweight subgroup dividers for residual/proposal, ranking/selection, and template/branching clusters; behavior stayed unchanged.
-- completed a first readability/structure pass over the internal-birth block in `mht/tomht_tracker.py`: added compact role docstrings to the main birth helpers and rewrote `_branch_globals_with_births(...)` with early guards (`initiator is None`, empty globals) so the primary birth flow is linear and easier to review, with no behavior/semantics changes.
+> move from the current node-based but still partly global-hypothesis-oriented implementation to a **true track-oriented TO-MHT** in which track trees / track hypotheses are the primary persistent state and global hypotheses are rebuilt from the current track set at each update.
 
-## Working checklist
+This document now serves as the planning document for that transition.
 
-This document is now intended as a working checklist for the integration-readiness phase.
-It should be allowed to accumulate practical notes, follow-up findings, and small decisions as the work progresses.
+---
 
-### 1. Stone Soup compliance / tracker interface
+## 1. Core architectural goal
 
-Primary goal:
-- make `TOMHTTracker` easier to use as a Stone Soup-style tracker without changing its current external behavior more than necessary.
+### Desired end state
 
-Status (2026-03-21):
-- this checklist item is now functionally complete in code.
+At the end of this phase, the tracker should be organized around the following principle:
 
-Implemented:
-- `(_TrackerMixInUpdate, Tracker)` inheritance is in place,
-- `update_tracker(time, detections)` delegates to the scan pipeline and returns `(time, tracks)`,
-- `tracks` property returns current MAP output tracks,
-- small public inspection helpers now exist (`get_map_hypothesis_snapshot()`, `get_map_output_tracks()`, `get_n_scan_commitment_snapshot()`, `get_unused_detections()`).
+- what persists from one update to the next is primarily the **track-tree / track-hypothesis structure**
+- global hypotheses are **reconstructed at each scan** from the current surviving track hypotheses and their incompatibilities
+- the tracker should no longer treat the previous scan's explicit list of global hypotheses as the main persistent search state
 
-Remaining scope for item 1:
-- keep this public API stable while doing items 2 and 3,
-- defer broader wording/style cleanup to item 4 (readability/documentation pass).
+This is the key correction relative to the current handoff release.
 
-### 2. Hypothesiser / scoring dependency check
+### Why this phase now
 
-Primary goal:
-- understand whether the current tracker/scoring path depends too strongly on `PDAHypothesiser`-style assumptions.
+Reasons to prioritize this next:
 
-Questions to answer:
-- what assumptions does the current default scoring path make about the hypothesiser,
-- are those assumptions acceptable for local replay integration,
-- are those assumptions acceptable for ISAC integration,
-- if not, is the likely remedy a custom scoring model, a wrapper, or a broader scoring cleanup task later.
+- this is the clearest remaining architectural gap after the first handoff
+- it aligns the implementation more directly with standard TO-MHT descriptions in textbooks/tutorials/papers
+- it should simplify the conceptual model of the tracker
+- it creates a better foundation for pruning, clustering, lifecycle work, and later optimization
+- it should make the implementation easier to reason about and evolve after integration starts
 
-This item is primarily about identifying risk, not immediately redesigning scoring unless integration forces it.
+---
 
-Current implementation note (2026-03-21):
-- `PDAHypothesiser` conformance is sufficient but not strictly necessary at runtime; the tracker currently relies on a narrower duck-typed contract at the hypothesiser boundary.
-Runtime hypothesiser contract used by `TOMHTTracker` today:
-- `hypothesiser.hypothesise(track,detections,timestamp)` must return an iterable of per-track hypotheses.
-- Each hypothesis must support hit/miss truthiness (`bool(hyp)`): miss is handled on the `False` path, hit on the `True` path.
-- Miss hypotheses must expose `.prediction` (used directly as the propagated state).
-- Hit hypotheses must expose `.measurement`, and that measurement must be the same object identity as one of the input detections for this scan (the tracker maps detections by `id(det)`).
-- Hit hypotheses must be compatible with `updater.update(hypothesis)`.
-- Practical stability expectation: each active track should produce at least one candidate (normally including a miss hypothesis), or expansion can collapse.
-Additional assumptions in current default scoring mode (`scoring_mode="beta_ratio"`):
-- Per-hypothesis `.probability` is consumed as a numeric-like association weight.
-- Miss probability mass (`beta0`) is derived from miss hypotheses (identified by miss truthiness and/or `MissedDetection` measurement).
-- Hypothesiser-level parameters are read opportunistically: `prob_detect`, `prob_gate`, and `clutter_density` or `clutter_spatial_density` (with fallbacks if missing).
-Implication for ISAC integration:
-- If ISAC hypothesiser matches the runtime contract and provides PDA-like probability semantics, it should work with current default scoring.
-- If it matches only the runtime association contract (but not PDA-like probability semantics), integration is still possible via a custom `scoring_model` adapter on our side.
-Typing note for later cleanup:
-- Current type hints use `PDAHypothesiser`, but the actual runtime contract is broader; deciding whether to loosen type annotations to a Stone Soup base `Hypothesiser`/interface can be deferred.
+## 2. Persistent vs transient state
 
-Working assessment for integration planning (2026-03-21):
-- Local replay integration is treated as unblocked by hypothesiser shape; we control that path and can select/adapt a hypothesiser to satisfy the current contract.
-- ISAC integration hypothesiser compatibility is still to be confirmed with the ISAC side.
-- Current planning assumption: hypothesiser mismatch is unlikely to block initial ISAC integration, because short-term adaptation on either side is likely feasible if needed.
-- Therefore, item 2 is currently treated as "risk understood, monitor during integration" rather than "hard blocker before item 3."
-- Scoring redesign/cleanup is still expected in the near future, so current compatibility work should prioritise pragmatic initial integration over overfitting to the current beta-ratio scoring details.
+This distinction should be made explicit in the redesign.
 
-### 3. Local replay-data integration and validation
+### Persistent state
 
-Primary goal:
-- get TOMHT working with local radar replay data using a Stone Soup-style hypothesiser/updater path that you can test independently.
+The following should persist across scans:
 
-Intended benefits:
-- validate real integration assumptions before relying on external environments,
-- surface timestamp / detection / updater / hypothesiser mismatches early,
-- build confidence in the tracker on data you control.
+- explicit track trees / track families
+- track-hypothesis nodes within those trees
+- root / leaf structure per tree
+- per-node state, score, association, counters, provenance
+- stable logical track IDs
+- N-scan / commitment-related persistent state as needed
+- minimal long-lived tracker statistics / counters
 
-Status (2026-03-21):
-- this checklist item is now functionally complete for the current phase,
-- keep adding concise operational notes here when new insights affect design, validation method, or priorities.
+### Per-scan transient state
 
-Status notes (2026-03-21):
-- First end-to-end local replay with `python.pipeline.batch_mcap_replay` and `--tracker-type stonesoup-mht` is producing usable output on a ~1 minute gate-approach aircraft scenario (multiple discrete aircraft-part point targets).
-- Equality check method for replay runs:
-  - run the same input file twice,
-  - extract `/radar_matlab_replay/tracks-legacy` using `mcap cat --json --topics ...`,
-  - compare JSON streams.
-- Current replay equality result:
-  - raw `tracks-legacy` JSON differs because `data.processing_time_ms` is runtime-dependent,
-  - after ignoring `data.processing_time_ms`, extracted `tracks-legacy` JSON is identical across repeated runs.
-- Practical regression method (preferred for now):
-  - compare stdout instrumentation lines (`[Scoring]`, `Birth candidates`, `Births kept`, `Global hypotheses`, `logW=`, `SCAN`, `SCAN_NSCAN_COMMITTED`) between two runs.
-  - In the current test, this instrumentation stream matched exactly across two repeated replays.
-- Performance/stability observations:
-  - intermittent "hang" reports are currently treated as likely long per-scan compute spikes rather than confirmed deadlock (combinatorial expansion can become large on some scans),
-  - after multiple additional tracker replays (2026-03-22), no stalls/hangs were observed; treat this as monitor-only for now and do not prioritise extra stall-specific work unless it recurs.
-  - memory growth during run is still expected overall, but the new conservative post-commit reachability cleanup should reduce retained unreachable branch history versus earlier fully-monotonic node retention.
-- Near-term validation follow-up:
-  - if stalls are observed again, collect per-scan wall-clock timing and correlate with `SCAN ... exp=...`, detection count, and birth activity to distinguish true hangs from expansion spikes.
-- Instrumentation update and first timing check (2026-03-21):
-  - added `SCAN_TIMING t=... wall_ms=...` per scan in TO-MHT debug instrumentation (kept existing `SCAN ...` line format unchanged for deterministic diffing),
-  - one replay run showed clear timing outliers late in the scenario (example max around scan 254, where expansion was also high),
-  - two-run comparison showed outlier *positions* are largely repeatable (top-10 overlap 8/10), while exact wall-ms values vary between runs as expected.
-- Lightweight memory instrumentation and first run (2026-03-21):
-  - added `SCAN_MEMORY t=... nodes=... leaf_inst=... maxrss_mb=...` per scan, plus `SUMMARY memory ...` aggregates,
-  - first full replay (`--max-cpis 400`) showed monotonic growth from about `202 MB` to `364 MB` max RSS and from `1` to about `56k` retained nodes,
-  - this supports treating node/history retention as a known scalability limit to address after initial integration.
-- Replay memory follow-up after conservative post-commit cleanup (2026-03-24):
-  - reran replay with `--max-cpis 400` using the current tracker (`tomht_replay_postcleanup_2026-03-24`),
-  - observed `SCAN_MEMORY` over 302 scans: `nodes` started at `1`, peaked at `4285`, and ended at `1119` (mean about `1371`),
-  - node count is no longer monotonic in this run (`84` downward steps; largest single drop `1048`), which is consistent with unreachable-ancestry reclamation,
-  - `maxrss_mb` high-water mark moved from about `202 MB` to `272 MB` (peak `272 MB`); this is substantially below the earlier `364 MB` replay note.
-  - In summary: Conservative post-commit ancestry cleanup successfully changed node retention from monotonic growth to bounded/reclaiming behavior, with a substantial replay-memory improvement, while preserving logical outputs.
-- Test command reference (kept for this phase while input file remains available):
-  - `cd ~/Git/l2-sp && source ./venv/bin/activate && python -m python.pipeline.batch_mcap_replay ~/Documents/MATLAB/cpi_replay_2025-12-10_173948.mcap --include-tracker --output-path /tmp --tracker-type stonesoup-mht --max-cpis 400`
-  - for repeatability checks, fix output folder/log names with `--folder-name` and redirect stdout/stderr to a log file.
+The following should be rebuilt fresh on each update:
 
-### 4. Code-level readability / cleanup
+- local candidate child hypotheses for the current scan
+- conflict / incompatibility relations among current candidate track hypotheses
+- per-scan track clusters
+- rebuilt cluster-level global hypotheses
+- solver outputs for best / K-best cluster hypotheses
+- temporary score tables and scratch structures
 
-Primary goal:
-- make the implementation easier to review, explain, and present.
+### Conceptually transient but useful for debug / inspection
 
-Status (2026-03-24):
-- this checklist item is now functionally complete for the current phase.
+Some transient structures may be worth keeping available until the next update for inspection:
 
-Implemented:
-- tightened tracker-side documentation and readability in `mht/tomht_tracker.py` (helper role docstrings, section navigation, and clearer parameter intent/comments in `TOMHTParams`),
-- split passive model/scoring/stats/output helpers into focused modules (`mht/tomht_model.py`, `mht/tomht_scoring.py`, `mht/tomht_stats.py`, `mht/tomht_output.py`) without changing behavior,
-- clarified compatibility boundaries around output reconstruction/metadata projection and made scoring setup/diagnostics easier to review.
+- clusters from the most recent update
+- why tracks were clustered together
+  - for example shared detections / incompatibility links
+- rebuilt globals from the most recent update
+- current cluster MAP selections
+- current active leaves per track tree
+- full current set of track trees
 
-Remaining scope for item 4:
-- continue small readability touch-ups opportunistically, but treat this item as complete unless a concrete integration or workshop need reopens it.
+This category should be treated deliberately:
 
-### 5. Export / packaging / handoff flow
+- not persistent in the architecture,
+- but intentionally exposed for debugging / visualization / validation.
 
-Primary goal:
-- establish a controlled way to deliver TOMHT snapshots into the ISAC-facing environment.
+---
 
-Current working idea:
-- create a dedicated export repo,
-- add an export script that writes a clean snapshot into that repo,
-- optionally include revision info / what-changed notes alongside each export,
-- define a simple mirroring or handoff flow into the ISAC environment.
+## 3. Intended target data structures
 
-This checklist item is as much about process clarity as code.
+### 3.1 TrackHypothesisNode
 
-### 6. Workshop preparation support
+`TrackHypothesisNode` will likely remain the core per-step hypothesis object, but should evolve.
 
-Primary goal:
-- keep the code and architecture in a state that will be easy to present in the ISAC workshop.
+Expected changes:
 
-Likely needs:
-- identify which parts of the architecture should be presented,
-- identify which code sections are readable enough to show directly,
-- note any rough edges that should be polished before the workshop,
-- defer actual presentation-material work until closer to the end of the coming week.
+- keep:
+  - `track_id`
+  - `node_id`
+  - `parent`
+  - `scan_index`
+  - `timestamp`
+  - `state`
+  - association identity
+  - score contribution / accumulated score inputs as needed
+  - cached counters / provenance
+- add:
+  - child pointers or child IDs
+- possibly refine:
+  - score fields if clearer accumulated/local score separation is helpful
+  - miss/lifecycle-related fields once the new architecture is in place
 
-## Things to keep in mind during this phase
+### 3.2 Explicit TrackTree / TrackFamily structure
 
-- avoid reopening broad algorithmic work unless integration exposes a concrete blocker,
-- keep Phase B structural gains stable,
-- prefer small practical improvements over another large refactor,
-- use local replay integration to learn what actually matters before reprioritising later phases,
-- update `CURRENT_STATE` and `ROADMAP` again if the integration phase reveals something materially new.
+Introduce an explicit track-tree structure.
 
-## Still-deferred topics
+Likely responsibilities:
 
-These remain real topics, but are not the primary focus of the current phase unless integration forces them forward:
-- broader scoring redesign,
-- principled existence modelling,
-- deeper internal-birth cleanup,
-- committed-history materialisation,
-- broader node garbage collection / ancestry compaction (beyond the current conservative post-commit reachability cleanup),
-- performance optimisation.
+- stable logical track identity
+- root pointer / root node ID
+- current leaf set
+- maybe direct node registry for that tree
+- metadata / provenance
+- maybe a quick way to inspect active frontier and depth
+
+Goal:
+
+- make the “one logical track = one tree/family” idea explicit in code,
+- rather than implicit in node parent chains only.
+
+### 3.3 Current tree set
+
+The tracker should hold an explicit collection of current track trees, for example something like:
+
+- `track_trees_by_track_id`
+or equivalent
+
+This should become part of the primary persistent tracker state.
+
+### 3.4 Cluster structures
+
+Introduce explicit per-scan cluster concepts.
+
+A cluster should represent a set of track trees that currently interact and therefore must be solved jointly.
+
+Useful contents for a cluster:
+
+- participating track IDs
+- participating leaf hypotheses / candidate track hypotheses
+- shared detections or conflict links that caused clustering
+- rebuilt globals for that cluster
+- cluster MAP selection
+- optional debug/inspection explanation
+
+These clusters do **not** need to persist across scans.
+
+### 3.5 GlobalHypothesis
+
+`GlobalHypothesis` probably still remains useful, but should change role.
+
+Desired role:
+
+- represent a current globally consistent set of selected track hypotheses
+- mainly as a per-scan / per-cluster rebuilt object
+- not as the main persistent scan-to-scan frontier
+
+This is a role change more than necessarily a complete type removal.
+
+---
+
+## 4. Intended update pipeline
+
+The desired scan update should look approximately like this.
+
+### Step 1: Extend all track trees
+
+For each active leaf in each track tree:
+
+- predict to the new timestamp
+- gate detections
+- generate feasible child hypotheses
+- create matched and miss children
+- keep existing scoring semantics initially unless the rewrite forces a small cleanup
+
+This part should be close to what the tracker already does conceptually.
+
+### Step 2: Local pruning of weak branches
+
+After local expansion:
+
+- cap children per leaf
+- keep miss branch as needed
+- apply miss-budget style local elimination if still appropriate
+- optionally apply small local duplicate suppression if useful
+
+The intent is to keep the candidate track-hypothesis set manageable before rebuilding globals.
+
+### Step 3: Form independent track clusters
+
+Build clusters from current track-tree interactions.
+
+Planned approach:
+
+- collect the set of detections currently used / competed for by each track tree frontier
+- create a graph where track trees are connected if their current candidate sets intersect / conflict
+- extract connected components
+- treat each connected component as an independent cluster for global reconstruction
+
+Important design choice:
+
+- clusters are recomputed on each update
+- they are **not** maintained as persistent tracker objects across scans
+
+This should simplify the architecture and provide a major performance win in many scenes.
+
+### Step 4: Rebuild globals per cluster
+
+For each cluster:
+
+- construct the current incompatibility / conflict structure among candidate track hypotheses
+- solve for:
+  - best global hypothesis
+  - ideally also K-best globals
+- represent the result in a solver-independent way
+
+The rebuilt globals should now be **derived from the current cluster track hypotheses**, not inherited directly from a persistent old global frontier.
+
+### Step 5: N-scan pruning on explicit track trees
+
+Use the best global hypothesis (or the surviving set if needed) to perform N-scan pruning on the explicit trees.
+
+In an explicit track-tree setting, this should become much cleaner than in the current architecture.
+
+Current working expectation:
+
+- for each tree, identify the branch selected by the best global hypothesis
+- prune away root-level alternatives older than the N-scan cutoff
+- retain the unresolved recent tail
+
+The exact pruning semantics should be written carefully once the explicit tree structure exists.
+
+### Step 6: Extract MAP output
+
+Keep output simple initially:
+
+- output MAP only, as today
+- reconstruct output tracks from the selected leaf hypotheses
+- combine cluster outputs into one tracker output set
+
+### Step 7: Keep debug / inspection artifacts from the last update
+
+Retain useful transient structures from the last scan for inspection:
+
+- current trees
+- clusters
+- rebuilt globals
+- cluster explanations
+- current MAP selection
+
+This should be explicit and deliberate rather than accidental.
+
+---
+
+## 5. Solver plan
+
+### 5.1 Solver abstraction first
+
+The tracker should not depend directly on one specific global-hypothesis solver implementation.
+
+Introduce a wrapper / abstraction layer so the main code can stay independent of:
+
+- Hungarian-only fallback path
+- pure Python Murty implementation
+- optimized external Murty implementation
+- future replacements
+
+### 5.2 Initial solver requirements
+
+We need at least:
+
+- best global hypothesis solver
+- ideally K-best support
+
+Likely options to evaluate:
+
+- `scipy.optimize.linear_sum_assignment` for best assignment / baseline cases
+- simple Python Murty implementation as an understandable first step
+- `motrom/fastmurty` or similar later if needed
+
+The first implementation should prioritize:
+
+- correctness
+- inspectability
+- clean integration into the tracker architecture
+
+over ultimate speed.
+
+### 5.3 Keep main code independent of solver details
+
+The rest of the tracker should depend on a small interface such as:
+
+- solve best cluster global
+- solve K-best cluster globals
+
+and not care how the solver works internally.
+
+---
+
+## 6. Birth handling in this phase
+
+Births are **not** the main architectural priority of this phase.
+
+The ISAC path currently does not use internal births, so this part can stay intentionally modest.
+
+### Minimal acceptable approach
+
+A pragmatic first-pass approach is acceptable, for example:
+
+- create new birth trees from detections not explained by surviving associations
+- assume those births do not conflict with existing track trees if generated only from unassociated detections
+- assume the initiator does not generate mutually conflicting births unless proven otherwise
+- add birth trees late in the update flow and let normal later survival determine whether they persist
+
+### Explicit non-goal for this phase
+
+Do **not** let internal births derail the main TO-MHT transition.
+
+If needed:
+
+- keep births simple,
+- mark them as provisional,
+- revisit later with a cleaner lifecycle / candidate / tentative / confirmed model.
+
+---
+
+## 7. Pruning expectations in this phase
+
+The first track-oriented rewrite does **not** need to solve all pruning questions.
+
+Likely enough for the first version:
+
+- local branch limits
+- clustering
+- K-best per-cluster reconstruction
+- N-scan pruning
+
+That may already be sufficient to make many scenarios tractable.
+
+Further pruning can be deferred unless the rewrite immediately shows a need.
+
+---
+
+## 8. Debug / visualization goals
+
+This should be an explicit part of the target state.
+
+The tracker should make it reasonably easy to inspect:
+
+- the full current set of track trees
+- active leaves in each tree
+- current clusters
+- why trees were clustered together
+- rebuilt globals per cluster
+- current MAP output
+
+Suggested direction:
+
+- add read-only debug/inspection properties or snapshot helpers
+- keep the public operational API stable
+- make internal structure easier to visualize during validation
+
+This will be important both for development and for explaining the rewrite.
+
+---
+
+## 9. Expected impact on tests and parameters
+
+### 9.1 Tests
+
+Some current tests will no longer make sense because they are tied to the current architecture.
+
+Expected actions:
+
+- remove tests that assume persistent scan-to-scan global-hypothesis-frontier mechanics
+- rewrite tests that should still hold conceptually but need new structural expectations
+- add tests for:
+  - explicit track trees
+  - per-scan clustering
+  - rebuilt globals
+  - tree-based N-scan pruning
+  - debug snapshots if exposed
+
+### 9.2 TOMHTParams
+
+`TOMHTParams` will likely need revision.
+
+Reason:
+
+- some parameters are tied to concepts from the current architecture
+
+Expected approach:
+
+- keep stable, still-meaningful knobs
+- rename / remove parameters tied to old mechanics
+- add new parameters only where clearly justified by the new architecture
+- avoid overfitting the parameter block too early
+
+---
+
+## 10. Validation strategy after rewrite
+
+Validation should be staged.
+
+### Stage 1: synthetic scenarios
+
+Use the existing scenario set first.
+
+Goal:
+
+- verify that the tracker is back in a sane working state
+- check that outputs still make sense qualitatively
+- catch obvious regressions in branching / scoring / pruning
+
+### Stage 2: replay data
+
+After synthetic scenarios are working:
+
+- run the tracker on recorded data
+- check that outputs remain sensible
+- inspect clusters / trees / MAP outputs
+- compare behavior and performance with the current handoff implementation
+
+This should give a reasonable level of confidence that the core rewrite is sound.
+
+---
+
+## 11. Execution strategy
+
+### Preferred implementation style
+
+This is likely best treated as a **coherent architectural rewrite**, not a very long chain of tiny patches.
+
+Reasons:
+
+- the target architecture is different in a fundamental way
+- many parts depend on each other
+- intermediate half-converted states may be more confusing than helpful
+
+### Practical note about using Codex
+
+If Codex is used for implementation:
+
+- first make the target architecture description clear enough that a human engineer would find it unambiguous
+- then try for a strong single-shot or mostly-single-shot implementation attempt
+- if execution stalls or drifts:
+  - diagnose whether the issue is the plan, the scope, or the code generation
+  - decide whether to steer incrementally or refresh the plan and retry
+
+The plan should be treated as the most important dependency.
+
+---
+
+## 12. Proposed phase outcome
+
+This phase should be considered successful if, at the end:
+
+- explicit track trees exist
+- globals are rebuilt from current surviving track hypotheses rather than propagated scan-to-scan as the main state
+- per-scan clustering exists and works
+- N-scan pruning operates naturally on explicit trees
+- current public API remains usable for integration
+- synthetic scenarios work again
+- replay data gives sensible results
+- the resulting code is conceptually closer to the TO-MHT model described in the workshop
+
+---
+
+## 13. Immediate next actions
+
+1. Clean up `TO_MHT_CURRENT_STATE.md` so it accurately reflects the first handoff release.
+2. Update this document into the true TO-MHT transition plan.
+3. Review the target-state description carefully before implementation.
+4. Then attempt the architectural rewrite.
