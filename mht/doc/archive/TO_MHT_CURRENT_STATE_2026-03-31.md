@@ -1,0 +1,251 @@
+# TO-MHT Current State
+
+This document is a current snapshot of the implementation after completing Phase B: explicit track-hypothesis structure and true ancestor-based N-scan commitment.
+
+It replaces the earlier pre-Phase-B description in which globals still stored copied `Track` objects and N-scan was only a history-tail approximation. That older description is no longer accurate. `TO_MHT_NEXT_STEPS.md` remains the main phase-planning document; this file is the implementation-status snapshot. 
+
+## Recent updates
+
+- 2026-03-29: small runner readability cleanup in `mht/runners/tomht_runner.py`: factored per-scan plot/artist construction from the `run_tomht(...)` main loop into a local helper `build_scan_artists(...)`; plotting behavior is unchanged.
+- 2026-03-24: added a narrow post-commit ancestry cleanup pass in `mht/tomht_tracker.py` (`_cleanup_committed_ancestry()`), called immediately after `_update_n_scan_commitment(...)`. Commitment semantics are unchanged; cleanup is intentionally separate and conservative (reclaims only node ancestry unreachable from active leaves and commitment-bookkeeping references).
+- 2026-03-24: focused readability/documentation pass on `TOMHTParams` in `mht/tomht_tracker.py`: expanded class docstring with stable-vs-heuristic guidance, added explicit parameter-group headers (core beam/scoring/N-scan/internal-birth guards/debug), and clarified comments for less-obvious knobs (`prob_gate`, `births_k`, `unused_det_log_penalty`, `birth_log_penalty`) with no behavior/default changes.
+- 2026-03-24: small readability/modularization cleanup in scoring setup: moved default scoring-model construction from hypothesiser attributes and BetaRatio sanity/warning diagnostics out of `TOMHTTracker.__init__` into `mht/tomht_scoring.py` helpers; tracker behavior and scoring semantics are unchanged.
+- 2026-03-24: second readability/navigation pass in the internal birth block in `mht/tomht_tracker.py`: moved the birth-phase sequence note into `_branch_globals_with_births(...)` docstring and added lightweight subgroup headers for residual/proposal, ranking/selection, and template/branching helper clusters; no behavior or birth semantics changed.
+- 2026-03-24: first readability/structure pass over internal birth processing in `mht/tomht_tracker.py`: added compact role-focused docstrings for the main birth pipeline helpers and rewrote `_branch_globals_with_births(...)` with explicit early guards for `initiator is None` and empty-global cases so the normal birth path reads linearly; behavior and birth semantics were unchanged.
+- 2026-03-23: continuation/expansion readability follow-up in `mht/tomht_tracker.py`: moved joint candidate-combination recursion from nested helper scope into same-level private helper `_assemble_joint_globals(...)` with an explicit role docstring and unchanged exclusivity / `max_missed` / log-weight behavior.
+- 2026-03-23: small readability-only cleanup in continuation/expansion helpers in `mht/tomht_tracker.py`: added compact role docstrings for `_candidate_from_hypothesis(...)`, `_candidates_for_track_leaf(...)`, and `_expand_global_hypothesis(...)`; clarified drop semantics when `max_missed` is exceeded (drop that logical track from the branch, do not reject the whole branch); and isolated recursive joint-combination logic behind a small nested helper with unchanged behavior.
+- 2026-03-23: completed one more low-risk readability split: moved scoring contract/default (`ScoringModel`, `BetaRatioScoringModel`) from `mht/tomht_tracker.py` into new `mht/tomht_scoring.py`; `TOMHTTracker` still owns scoring-mode parameter wiring/default construction in `__init__`, and scoring behavior is unchanged.
+- 2026-03-23: completed a small stats/reporting split follow-up: moved per-scan stats block rendering/printing from `mht/tomht_tracker.py` into `mht/tomht_stats.py` (`print_scan_stats(...)`), while `TOMHTTracker` still builds `ScanStats` and controls when scan stats are displayed.
+- 2026-03-23: follow-up low-risk readability/modularization pass: moved passive scan stats/reporting pieces (`ScanStats`, `BirthStats`, aggregate `print_summary_stats` logic) from `mht/tomht_tracker.py` into new `mht/tomht_stats.py`, and did a conservative class-section reorder so major helper groups read closer to runtime flow (notably N-scan helpers now appear before birth helpers).
+- 2026-03-23: performed a low-risk in-file navigation/readability pass in `mht/tomht_tracker.py` (heavier section banners, compact class roadmap comment, and helper-cluster role headers) with no algorithmic or behavioral changes.
+- 2026-03-23: extracted Stone Soup output/adapter helpers from `mht/tomht_tracker.py` into `mht/tomht_output.py` (`lineage_from_leaf_node`, explicit output metadata projection, and `Track` reconstruction from a leaf node). `TOMHTTracker` keeps the same public APIs and calls these helpers at the output/hypothesiser boundary.
+- 2026-03-23: extracted core passive data-structure dataclasses (`TrackHypothesisNode`, `GlobalHypothesis`, `ChildCandidate`, `MAPHypothesisSnapshot`, `NScanCommitmentSnapshot`) from `mht/tomht_tracker.py` into `mht/tomht_model.py`; in that initial step, `ScanContext` and `ScanStats` remained in `mht/tomht_tracker.py` (later follow-up moved passive stats/reporting to `mht/tomht_stats.py`).
+- 2026-03-23: removed `TrackHypothesisNode.track_metadata`; opaque metadata bags are no longer propagated through node ancestry, and reconstructed `Track.metadata` now contains explicit TOMHT-owned keys only.
+- 2026-03-23: removed legacy `TOMHTParams.assoc_history_len`; `ns_scan_window` is now the only N-scan window parameter.
+- 2026-03-22: added explicit TOMHT-facing helper `get_tomht_track_id(track)` in `mht/tomht_tracker.py` for extracting stable logical IDs from `TOMHTTracker` output tracks.
+- 2026-03-22: tracker-construction helpers `build_tomht_linear()` and `build_tomht_ukf()` were moved out of `mht/tomht_tracker.py` into `mht/helpers/tracker_builders.py`; `TOMHTTracker` now type-hints `initiator` as generic Stone Soup `Initiator` instead of `SimpleMeasurementInitiator`.
+- 2026-03-22: legacy MFA baseline scaffolding was moved from `mht/mfa` to `archive/mfa` to keep inactive/reference code out of the active TO-MHT package path.
+- 2026-03-21: `update_tracker()` was refactored so scan stats and debug output are handled by dedicated private helpers. The core scan pipeline path is now easier to read without instrumentation details inline.
+- 2026-03-21: `TOMHTTracker.get_unused_detections()` now exposes the residual detections from the most recent completed `update_tracker()`. Residuals are considered consumed when internal births are enabled (`initiator is not None`), so in that mode the method returns an empty list.
+- 2026-03-21: `TOMHTTracker.add_external_starts()` now follows the same argument style as `update_tracker()`: `add_external_starts(time, starts)` with `time: datetime.datetime`.
+- 2026-03-21: public API usage notes were tightened to make item-2/item-3 integration work less ambiguous.
+
+## What is now structurally correct
+
+### Explicit track-oriented hypothesis structure
+
+The tracker now uses an explicit per-track hypothesis-node representation.
+
+In the current implementation:
+- `TrackHypothesisNode` is the canonical internal unit of branching,
+- each node carries a same-track parent pointer,
+- each node has explicit `track_id`, `node_id`, `scan_index`, per-step state payload, association label / used detection identity, and cached maintenance fields,
+- ancestry is represented structurally by shared node identity rather than by copied history content. 
+
+This means the internal representation is now much closer to a real TO-MHT than before.
+
+### Globals now reference leaf nodes, not copied tracks
+
+`GlobalHypothesis` now stores `track_id -> leaf node` plus cumulative log weight.
+
+That means:
+- globals no longer use copied full-history `Track` objects as primary internal truth,
+- shared ancestry is expressed through shared node references,
+- branch identity is node-based rather than reconstructed from copied recent history.
+
+### Per-track branching is node-native
+
+Continuation now works structurally as parent-leaf to child-node creation.
+
+In practice:
+- hit and miss continuations create new child nodes,
+- global expansion operates over leaf nodes,
+- detection-usage checks read node fields,
+- deduplication is based on structural leaf identity (`track_id -> node_id`) rather than recent association-history tails.
+
+### Births and external starts now share the same structural system
+
+External starts and internal births are now both represented as root-like nodes in the same hypothesis structure.
+
+Their semantics remain distinct:
+- external starts are introduced through the external-start path and do not inherit internal-birth scoring semantics,
+- internal births are introduced through the birth path and remain birth-scored.
+
+So the structure is shared while provenance and scoring remain separate.
+
+### True N-scan commitment is now explicit
+
+N-scan handling is no longer just a history-tail approximation.
+
+The current implementation now computes commitment as follows:
+- after expansion/scoring and beam pruning,
+- before births,
+- at boundary `b = k - N`,
+- per logical `track_id`,
+- using explicit ancestor node identity at that boundary,
+- considering only surviving globals that still contain that `track_id`.
+
+A track is considered committed at boundary `b` only when all participating surviving globals agree on the same exact-boundary ancestor node.
+
+This is the intended Phase B semantic correction.
+
+### Commitment bookkeeping is explicit
+
+The tracker now keeps explicit internal commitment state and exposes a small read-only snapshot for debug/tests.
+
+This makes the current N-scan state inspectable without treating node cleanup or committed-history materialisation as already solved.
+
+### Small read-only MAP inspection helpers now exist
+
+The tracker now exposes small read-only helpers for inspecting the current MAP hypothesis in the new structure:
+- a node-native MAP snapshot,
+- and a public helper for reconstructed MAP output tracks.
+
+This reduces the need for runner/test code to reach into private reconstruction internals just to inspect the MAP view.
+
+### Stone Soup tracker interface compliance is now explicit
+
+`TOMHTTracker` now implements Stone Soup's tracker interface directly:
+- it subclasses the tracker mixin/base interface,
+- supports `update_tracker(time,detections)` returning `(time,tracks)`,
+- supports iterator-driven progression when `detector` is set.
+
+### Public API quick reference (integration-facing)
+
+This is the intended public surface for current integration tasks:
+
+- `update_tracker(time,detections) -> (time,tracks)`:
+  - main per-scan entry point,
+  - consumes one timestamp plus an iterable of `Detection`,
+  - returns the same timestamp with current MAP-output tracks.
+- `tracks` property:
+  - current MAP-output tracks,
+  - equivalent in content to `get_map_output_tracks()`.
+- iterator mode (`for time, tracks in tracker`):
+  - supported when `detector` is set,
+  - each iteration delegates through the same `update_tracker(...)` path.
+- `add_external_starts(time,starts)`:
+  - for externally confirmed starts only,
+  - requires a completed `update_tracker()` first,
+  - `time` must match the most recent completed `update_tracker()` timestamp.
+- `get_unused_detections()`:
+  - returns residual detections from the most recent completed `update_tracker()`,
+  - raises if called before the first completed update,
+  - returns an empty list when internal births are enabled (`initiator is not None`), since residuals are treated as consumed by the birth path.
+- `get_map_hypothesis_snapshot()`:
+  - read-only node-native MAP leaf-node view for inspection/tests.
+- `get_n_scan_commitment_snapshot()`:
+  - read-only commitment-state snapshot for inspection/tests.
+- `get_tomht_track_id(track)`:
+  - TOMHT-specific helper for stable logical track identity extraction from `TOMHTTracker`-produced tracks,
+  - reads `track.metadata["track_id"]`,
+  - not intended as a generic Stone Soup `Track` helper.
+
+## What is still transitional or awkward
+
+The core structure is now much better, but the implementation is not “finished” in every respect.
+
+### Stone Soup `Track` reconstruction is still an adapter boundary
+
+The tracker still reconstructs temporary Stone Soup `Track` objects from leaf-node ancestry for:
+- hypothesiser compatibility,
+- updater compatibility,
+- output,
+- some debugging/display paths.
+
+This is acceptable for now, but it is still a compatibility boundary rather than the ideal end-state.
+
+### Reconstructed `Track.metadata` is now explicit
+
+`TrackHypothesisNode` no longer carries an opaque metadata bag.
+Reconstructed compatibility `Track` outputs now project explicit TOMHT-owned metadata keys only (for example `track_id`, node/counter/debug fields), instead of carrying through arbitrary input metadata.
+
+### Physical node cleanup is now narrow and conservative
+
+Commitment semantics are still explicit and separate from memory policy, and a first narrow cleanup pass now runs after each N-scan commitment update.
+
+Current cleanup behavior:
+- keeps active leaf ancestry intact (no active-chain truncation),
+- keeps explicitly referenced commitment bookkeeping nodes,
+- removes node-registry entries that are no longer reachable from those retained references.
+
+Still deferred:
+- committed-prefix compaction,
+- committed-history materialisation,
+- broader node-lifecycle redesign beyond conservative reachability cleanup.
+
+So memory pressure from unreachable branch history is reduced, while logical commitment behavior and active-leaf semantics remain unchanged.
+
+### Committed-history materialisation is still deferred
+
+The tracker does not yet maintain a separate committed-history store, committed-track object model, or detached committed-prefix representation.
+
+Committed branch decisions are now explicit, but committed output materialisation is still a later-phase design question.
+
+### N-scan window configuration is now single-knob
+
+`TOMHTParams.ns_scan_window` is now the sole N-scan window parameter.
+Its default is `3`.
+
+### Performance has not been the focus yet
+
+Phase B prioritised structural correctness and semantic clarity.
+
+The tracker is therefore in a much better architectural state, but it has **not** yet been pushed hard on:
+- memory efficiency,
+- ancestry compaction,
+- avoiding reconstruction overhead,
+- or broader scaling/performance cleanup.
+
+## What is now solid operationally
+
+### External confirmed-start support remains in place
+
+The tracker still supports externally supplied confirmed starts via the external-start path.
+
+Current semantics remain:
+- external starts are injected via `add_external_starts(time, starts)` after a completed `update_tracker()` at the same timestamp,
+- they are inserted structurally into the current global hypotheses,
+- they are not routed through internal residual birth discovery,
+- they do not receive internal birth penalties.
+
+### Runner operating-mode support remains usable
+
+The existing runner still supports:
+- external-only operation,
+- internal-only operation,
+- both external starts and internal births,
+- explicit operating-mode and external-start timing configuration.
+
+So the integration-facing work from the previous phase remains intact while the tracker internals have become more structurally correct.
+
+### Deterministic/stable experimentation remains practical
+
+The tracker still has deterministic enough ordering / beam-management behavior to make inspection, debugging, and scenario comparison practical.
+
+That remains important because the new structure is more correct, but it also needs to stay inspectable.
+
+## What is still not ideal or still clearly “bad”
+
+To be explicit about the remaining shortcomings:
+
+- reconstructed `Track` views are still used at several compatibility boundaries,
+- node lifecycle policy is still only partially implemented (currently conservative post-commit reachability cleanup only),
+- committed-history output/materialisation does not exist,
+- performance/efficiency has not yet been revisited after the structural refactor.
+
+None of these invalidate the Phase B result, but they are the main remaining sources of technical awkwardness.
+
+## Bottom line
+
+The tracker is now in a meaningfully better architectural state than before:
+- explicit node-based ancestry exists,
+- globals reference per-track leaf nodes,
+- dedupe is structural,
+- births and external starts live in the same hypothesis structure,
+- and N-scan commitment is now explicit and ancestor-identity-based.
+
+So the main Phase B architectural goal has been achieved.
+
+The remaining issues are no longer “the tracker is structurally not a TO-MHT.”
+They are now mostly compatibility, cleanup, lifecycle, and future-design questions.
