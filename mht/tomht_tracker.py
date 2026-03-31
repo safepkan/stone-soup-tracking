@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import datetime
+import heapq
 import resource
 import sys
 import time as wall_clock
@@ -1089,6 +1090,48 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             out.append(leaves)
         return out
 
+    def _push_top_k_global(
+        self,
+        *,
+        top_k_heap: list[tuple[float, int, GlobalHypothesis]],
+        candidate: GlobalHypothesis,
+        insertion_order: int,
+        k: int,
+    ) -> None:
+        """Streaming top-K maintenance for rebuilt globals.
+
+        Heap entries are ``(log_weight, -insertion_order, global)``.
+        For equal ``log_weight``, this keeps earlier-enumerated combinations and
+        evicts later-enumerated ties, matching the previous stable-sort behavior.
+        """
+        if k <= 0:
+            return
+
+        entry = (
+            float(candidate.log_weight),
+            -int(insertion_order),
+            candidate,
+        )
+        if len(top_k_heap) < k:
+            heapq.heappush(top_k_heap, entry)
+            return
+        if entry > top_k_heap[0]:
+            heapq.heapreplace(top_k_heap, entry)
+
+    @staticmethod
+    def _finalize_top_k_globals(
+        top_k_heap: list[tuple[float, int, GlobalHypothesis]],
+    ) -> tuple[GlobalHypothesis, ...]:
+        """Return retained rebuilt globals sorted best-first."""
+        top_k_heap.sort(
+            key=lambda item: (
+                float(item[0]),  # log_weight
+                int(-item[1]),  # insertion_order (ascending for tie stability)
+            ),
+            reverse=True,
+        )
+        return tuple(item[2] for item in top_k_heap)
+
     def _rebuild_one_cluster(
         self,
         cluster: _ClusterWorkItem,
@@ -1100,9 +1143,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         for keys in cluster.current_scan_det_keys_by_track_id.values():
             cluster_universe |= keys
 
-        rebuilt_globals: list[GlobalHypothesis] = []
+        top_k_heap: list[tuple[float, int, GlobalHypothesis]] = []
         combinations_evaluated = 0
         feasible_combinations = 0
+        k = int(self.params.max_global_hypotheses)
 
         for picked in product(*leaf_options):
             combinations_evaluated += 1
@@ -1137,21 +1181,24 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 ctx=ctx,
             )
 
-            rebuilt_globals.append(
-                GlobalHypothesis(
-                    leaf_nodes_by_track_id=leaf_nodes_by_track_id,
-                    log_weight=float(leaf_score_sum + unused_term),
-                )
+            candidate = GlobalHypothesis(
+                leaf_nodes_by_track_id=leaf_nodes_by_track_id,
+                log_weight=float(leaf_score_sum + unused_term),
+            )
+            self._push_top_k_global(
+                top_k_heap=top_k_heap,
+                candidate=candidate,
+                insertion_order=feasible_combinations,
+                k=k,
             )
 
-        if not rebuilt_globals:
+        if feasible_combinations == 0:
             raise RuntimeError(
                 "Cluster rebuild found no feasible combination. "
                 "Expected at least one feasible joint assignment."
             )
 
-        rebuilt_globals.sort(key=lambda gh: gh.log_weight, reverse=True)
-        kept_globals = tuple(rebuilt_globals[: self.params.max_global_hypotheses])
+        kept_globals = self._finalize_top_k_globals(top_k_heap)
         map_global = kept_globals[0] if kept_globals else None
 
         return ClusterRebuildSnapshot(
