@@ -1,5 +1,24 @@
 # TO-MHT Next Steps
 
+## Update (2026-04-01): overload cluster splitting mitigation implemented
+
+Implemented (narrow pass):
+
+- overload-aware approximate decomposition for oversized exact clusters
+- trigger uses projected Cartesian combinations per cluster against
+  `overload_split_projected_combination_threshold` (default `500000`)
+- decomposition removes weakest conflict edges iteratively using pure
+  full-history shared detection-key counts (`len(shared_history_keys)`)
+- resulting connected components are solved exactly as independent subclusters
+- clear runtime instrumentation now reports `OVERLOAD_SPLIT ...` events plus
+  scan-level `split_clusters` / `split_ops` counters
+
+Controls:
+
+- `overload_split_enabled=True`
+- `overload_split_projected_combination_threshold=500000`
+- `overload_split_max_edge_removals_per_cluster=None`
+
 ## Update (2026-04-01): local cap relaxed to pure safety-valve range
 
 Following the post-solve supported-leaf pruning refinement:

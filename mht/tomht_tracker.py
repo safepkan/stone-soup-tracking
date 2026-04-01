@@ -101,6 +101,12 @@ class TOMHTParams:
     # Optional hard cap for one cluster's projected Cartesian leaf combinations.
     # If exceeded, cluster rebuild fails explicitly (no adaptive trimming/retry).
     max_projected_cluster_combinations: int | None = None
+    # Optional approximate overload mitigation:
+    # when a cluster's projected Cartesian combinations exceed this threshold,
+    # iteratively sever weakest conflict edges and solve resulting subclusters.
+    overload_split_enabled: bool = True
+    overload_split_projected_combination_threshold: int | None = 500_000
+    overload_split_max_edge_removals_per_cluster: int | None = None
 
     # Scoring / numerical behavior.
     scoring_mode: str = "beta_ratio"
@@ -161,6 +167,7 @@ class _ClusterWorkItem:
     track_ids: tuple[int, ...]
     current_scan_det_keys_by_track_id: dict[int, set[DetectionKey]]
     conflict_links: tuple[tuple[int, int, tuple[DetectionKey, ...]], ...]
+    overload_split_origin_cluster_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -169,6 +176,29 @@ class _ClusterUnusedScoreContext:
 
     local_ctx: ScanContext
     local_slot_by_global_det_index: dict[int, int]
+
+
+@dataclass(frozen=True)
+class _OverloadSplitRemovedEdge:
+    """One removed conflict-graph edge during overload decomposition."""
+
+    left_track_id: int
+    right_track_id: int
+    shared_history_key_count: int
+
+
+@dataclass(frozen=True)
+class _OverloadSplitSummary:
+    """Compact instrumentation for one original cluster overload split pass."""
+
+    original_cluster_id: int
+    original_track_ids: tuple[int, ...]
+    projected_before: int
+    projected_threshold: int
+    removed_edges: tuple[_OverloadSplitRemovedEdge, ...]
+    resulting_subclusters: tuple[tuple[int, ...], ...]
+    projected_after_by_subcluster: tuple[int, ...]
+    stopping_reason: str
 
 
 # ============================================================================
@@ -193,7 +223,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
        of surviving active leaves after Step 3.
     5. Recompute measurement-exclusivity clusters from current trees.
     6. Rebuild feasible globals per cluster via exhaustive enumeration and choose
-       MAP per cluster.
+       MAP per cluster; overloaded clusters may first be approximately decomposed
+       by severing weakest full-history conflict edges.
     7. Post-solve prune each cluster tree frontier to leaves supported by at
        least one retained rebuilt top-K global for that cluster.
     8. Merge cluster MAP selections into full-scan MAP, then apply MAP-only
@@ -1253,6 +1284,256 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             projected *= len(leaves)
         return projected
 
+    def _projected_combination_count_for_track_ids(
+        self,
+        track_ids: tuple[int, ...],
+    ) -> int:
+        """Projected Cartesian leaf combinations for one track-id tuple."""
+        projected = 1
+        for track_id in track_ids:
+            tree = self.track_trees_by_track_id[track_id]
+            leaf_count = len(tree.active_leaf_node_ids)
+            if leaf_count <= 0:
+                raise RuntimeError(
+                    "Cluster rebuild encountered a tree with no active leaves. "
+                    "Lifecycle filtering should remove empty trees before clustering."
+                )
+            projected *= leaf_count
+        return projected
+
+    @staticmethod
+    def _edge_pair(
+        left_track_id: int,
+        right_track_id: int,
+    ) -> tuple[int, int]:
+        if left_track_id <= right_track_id:
+            return (left_track_id, right_track_id)
+        return (right_track_id, left_track_id)
+
+    @staticmethod
+    def _connected_components_from_pairs(
+        track_ids: tuple[int, ...],
+        edge_pairs: Iterable[tuple[int, int]],
+    ) -> list[tuple[int, ...]]:
+        """Return connected components for the supplied undirected edge set."""
+        adjacency: dict[int, set[int]] = {track_id: set() for track_id in track_ids}
+        for left_track_id, right_track_id in edge_pairs:
+            adjacency[left_track_id].add(right_track_id)
+            adjacency[right_track_id].add(left_track_id)
+
+        components: list[tuple[int, ...]] = []
+        seen: set[int] = set()
+        for seed in sorted(track_ids):
+            if seed in seen:
+                continue
+            stack = [seed]
+            component: list[int] = []
+            seen.add(seed)
+            while stack:
+                cur = stack.pop()
+                component.append(cur)
+                for nbr in sorted(adjacency[cur]):
+                    if nbr in seen:
+                        continue
+                    seen.add(nbr)
+                    stack.append(nbr)
+            components.append(tuple(sorted(component)))
+        components.sort()
+        return components
+
+    @staticmethod
+    def _cluster_edge_strengths(
+        cluster: _ClusterWorkItem,
+    ) -> dict[tuple[int, int], int]:
+        """Return conflict-edge strengths = shared full-history key counts."""
+        strengths: dict[tuple[int, int], int] = {}
+        for left_track_id, right_track_id, shared_keys in cluster.conflict_links:
+            strengths[TOMHTTracker._edge_pair(left_track_id, right_track_id)] = len(
+                shared_keys
+            )
+        return strengths
+
+    def _split_overloaded_cluster(
+        self,
+        *,
+        cluster: _ClusterWorkItem,
+        projected_before: int,
+        threshold: int,
+    ) -> tuple[list[_ClusterWorkItem], _OverloadSplitSummary]:
+        """Approximate one overloaded cluster by severing weakest conflict edges."""
+        remaining_edge_keys_by_pair: dict[tuple[int, int], tuple[DetectionKey, ...]] = {
+            self._edge_pair(left_track_id, right_track_id): tuple(shared_keys)
+            for left_track_id, right_track_id, shared_keys in cluster.conflict_links
+        }
+        edge_strengths = self._cluster_edge_strengths(cluster)
+        removed_edges: list[_OverloadSplitRemovedEdge] = []
+
+        stopping_reason = "all_components_under_threshold"
+        max_removals = self.params.overload_split_max_edge_removals_per_cluster
+        max_removals_int = None if max_removals is None else int(max_removals)
+
+        while True:
+            components = self._connected_components_from_pairs(
+                cluster.track_ids,
+                remaining_edge_keys_by_pair.keys(),
+            )
+            overloaded_components: list[tuple[int, ...]] = []
+            for component_track_ids in components:
+                projected = self._projected_combination_count_for_track_ids(
+                    component_track_ids
+                )
+                if projected > threshold:
+                    overloaded_components.append(component_track_ids)
+            if not overloaded_components:
+                break
+
+            if max_removals_int is not None and len(removed_edges) >= max_removals_int:
+                stopping_reason = "max_edge_removals_reached"
+                break
+
+            weakest: tuple[int, int, int] | None = None
+            for component_track_ids in overloaded_components:
+                component_track_set = set(component_track_ids)
+                for left_track_id, right_track_id in remaining_edge_keys_by_pair:
+                    if (
+                        left_track_id not in component_track_set
+                        or right_track_id not in component_track_set
+                    ):
+                        continue
+                    strength = edge_strengths[(left_track_id, right_track_id)]
+                    candidate = (strength, left_track_id, right_track_id)
+                    if weakest is None or candidate < weakest:
+                        weakest = candidate
+
+            if weakest is None:
+                stopping_reason = "no_edges_left_in_overloaded_component"
+                break
+
+            strength, left_track_id, right_track_id = weakest
+            remaining_edge_keys_by_pair.pop((left_track_id, right_track_id), None)
+            removed_edges.append(
+                _OverloadSplitRemovedEdge(
+                    left_track_id=left_track_id,
+                    right_track_id=right_track_id,
+                    shared_history_key_count=strength,
+                )
+            )
+
+        final_components = self._connected_components_from_pairs(
+            cluster.track_ids,
+            remaining_edge_keys_by_pair.keys(),
+        )
+        subclusters: list[_ClusterWorkItem] = []
+        projected_after_by_subcluster: list[int] = []
+        for component_track_ids in final_components:
+            component_track_set = set(component_track_ids)
+            component_links = tuple(
+                (
+                    left_track_id,
+                    right_track_id,
+                    remaining_edge_keys_by_pair[(left_track_id, right_track_id)],
+                )
+                for left_track_id, right_track_id in sorted(remaining_edge_keys_by_pair)
+                if left_track_id in component_track_set
+                and right_track_id in component_track_set
+            )
+            subclusters.append(
+                _ClusterWorkItem(
+                    cluster_id=-1,
+                    track_ids=component_track_ids,
+                    current_scan_det_keys_by_track_id={
+                        track_id: set(
+                            cluster.current_scan_det_keys_by_track_id[track_id]
+                        )
+                        for track_id in component_track_ids
+                    },
+                    conflict_links=component_links,
+                    overload_split_origin_cluster_id=cluster.cluster_id,
+                )
+            )
+            projected_after_by_subcluster.append(
+                self._projected_combination_count_for_track_ids(component_track_ids)
+            )
+
+        summary = _OverloadSplitSummary(
+            original_cluster_id=cluster.cluster_id,
+            original_track_ids=cluster.track_ids,
+            projected_before=projected_before,
+            projected_threshold=threshold,
+            removed_edges=tuple(removed_edges),
+            resulting_subclusters=tuple(
+                subcluster.track_ids for subcluster in subclusters
+            ),
+            projected_after_by_subcluster=tuple(projected_after_by_subcluster),
+            stopping_reason=stopping_reason,
+        )
+        return subclusters, summary
+
+    def _maybe_split_cluster_under_overload(
+        self,
+        *,
+        cluster: _ClusterWorkItem,
+    ) -> tuple[list[_ClusterWorkItem], _OverloadSplitSummary | None]:
+        """Split one cluster only when projected Cartesian size exceeds threshold."""
+        if not self.params.overload_split_enabled:
+            return [cluster], None
+
+        threshold_raw = self.params.overload_split_projected_combination_threshold
+        if threshold_raw is None:
+            return [cluster], None
+        threshold = int(threshold_raw)
+        if threshold <= 0:
+            raise ValueError(
+                "overload_split_projected_combination_threshold must be positive "
+                "when overload splitting is enabled."
+            )
+
+        projected_before = self._projected_combination_count_for_track_ids(
+            cluster.track_ids
+        )
+        if projected_before <= threshold:
+            return [cluster], None
+
+        return self._split_overloaded_cluster(
+            cluster=cluster,
+            projected_before=projected_before,
+            threshold=threshold,
+        )
+
+    @staticmethod
+    def _log_overload_split_summary(
+        *,
+        scan_index: int,
+        summary: _OverloadSplitSummary,
+    ) -> None:
+        removed_edges_str = (
+            "["
+            + ", ".join(
+                (
+                    f"{edge.left_track_id}-{edge.right_track_id}:"
+                    f"{edge.shared_history_key_count}"
+                )
+                for edge in summary.removed_edges
+            )
+            + "]"
+            if summary.removed_edges
+            else "[]"
+        )
+        projected_after = list(summary.projected_after_by_subcluster)
+        print(
+            "OVERLOAD_SPLIT "
+            f"scan={scan_index} "
+            f"cluster={summary.original_cluster_id} "
+            f"track_ids={list(summary.original_track_ids)} "
+            f"projected_before={summary.projected_before} "
+            f"threshold={summary.projected_threshold} "
+            f"split_ops={len(summary.removed_edges)} "
+            f"stop={summary.stopping_reason} "
+            f"removed_edges={removed_edges_str} "
+            f"subclusters={[list(c) for c in summary.resulting_subclusters]} "
+            f"projected_after={projected_after}"
+        )
+
     def _cluster_leaf_options(
         self,
         track_ids: tuple[int, ...],
@@ -1455,6 +1736,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             map_global=map_global,
             feasible_combinations=feasible_combinations,
             evaluated_combinations=combinations_evaluated,
+            overload_split_origin_cluster_id=cluster.overload_split_origin_cluster_id,
         )
 
     def _rebuild_cluster_globals(
@@ -1465,7 +1747,27 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         if not clusters:
             return [], RebuildStats()
 
-        snapshots = [self._rebuild_one_cluster(cluster, ctx) for cluster in clusters]
+        clusters_for_rebuild_raw: list[_ClusterWorkItem] = []
+        split_summaries: list[_OverloadSplitSummary] = []
+        for cluster in clusters:
+            subclusters, split_summary = self._maybe_split_cluster_under_overload(
+                cluster=cluster
+            )
+            clusters_for_rebuild_raw.extend(subclusters)
+            if split_summary is not None:
+                split_summaries.append(split_summary)
+                self._log_overload_split_summary(
+                    scan_index=ctx.scan_index,
+                    summary=split_summary,
+                )
+
+        clusters_for_rebuild = [
+            replace(cluster, cluster_id=cluster_id)
+            for cluster_id, cluster in enumerate(clusters_for_rebuild_raw)
+        ]
+        snapshots = [
+            self._rebuild_one_cluster(cluster, ctx) for cluster in clusters_for_rebuild
+        ]
         return (
             snapshots,
             RebuildStats(
@@ -1474,6 +1776,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 feasible_combinations=sum(s.feasible_combinations for s in snapshots),
                 rebuilt_globals_stored=sum(len(s.rebuilt_globals) for s in snapshots),
                 nscan_disagreement_total=0,
+                overload_split_clusters=len(split_summaries),
+                overload_split_operations=sum(
+                    len(summary.removed_edges) for summary in split_summaries
+                ),
             ),
         )
 
@@ -1497,6 +1803,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> None:
         """Prune each cluster tree to leaves supported by retained rebuilt globals."""
         for snapshot in cluster_snapshots:
+            # Overload-decomposed clusters are approximate; keep their current
+            # frontiers to avoid over-pruning branches that may be needed once
+            # severed weak links reconnect in later scans.
+            if snapshot.overload_split_origin_cluster_id is not None:
+                continue
+
             # Keep k=0 behavior non-destructive for compatibility/debug edge cases.
             if not snapshot.rebuilt_globals:
                 continue
@@ -1877,8 +2189,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     def _display_cluster_rebuilds(self) -> None:
         for snapshot in self._last_cluster_snapshots:
+            split_from = snapshot.overload_split_origin_cluster_id
+            split_tag = "" if split_from is None else f" split_from={split_from}"
             print(
                 f"cluster={snapshot.cluster_id} tracks={list(snapshot.track_ids)} "
+                f"{split_tag}"
                 f"globals={len(snapshot.rebuilt_globals)} "
                 f"comb_eval={snapshot.evaluated_combinations} "
                 f"comb_feas={snapshot.feasible_combinations} "
@@ -1954,6 +2269,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             feasible_combinations=rebuild_stats.feasible_combinations,
             rebuilt_globals_stored=rebuild_stats.rebuilt_globals_stored,
             nscan_disagreement_total=rebuild_stats.nscan_disagreement_total,
+            overload_split_clusters=rebuild_stats.overload_split_clusters,
+            overload_split_operations=rebuild_stats.overload_split_operations,
             nscan_boundary_scan_index=nscan_boundary_scan_index,
             nscan_tracks_in_scope=nscan_tracks_in_scope,
             nscan_tracks_committed=nscan_tracks_committed,

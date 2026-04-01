@@ -80,6 +80,7 @@ class ClusterRebuildSnapshot:
     map_global: GlobalHypothesis | None
     feasible_combinations: int
     evaluated_combinations: int
+    overload_split_origin_cluster_id: int | None = None
     map_pruning_child_by_track_id: dict[int, int] = field(default_factory=dict)
     disagreement_count: int = 0
 

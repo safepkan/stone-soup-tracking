@@ -24,6 +24,8 @@ class RebuildStats:
     feasible_combinations: int = 0
     rebuilt_globals_stored: int = 0
     nscan_disagreement_total: int = 0
+    overload_split_clusters: int = 0
+    overload_split_operations: int = 0
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,8 @@ class ScanStats:
     feasible_combinations: int
     rebuilt_globals_stored: int
     nscan_disagreement_total: int
+    overload_split_clusters: int
+    overload_split_operations: int
     nscan_boundary_scan_index: int
     nscan_tracks_in_scope: int
     nscan_tracks_committed: int
@@ -68,6 +72,8 @@ def print_scan_stats(
         f"comb_eval={scan_stats.combinations_evaluated} "
         f"comb_feas={scan_stats.feasible_combinations} "
         f"rebuilt_globals={scan_stats.rebuilt_globals_stored} "
+        f"split_clusters={scan_stats.overload_split_clusters} "
+        f"split_ops={scan_stats.overload_split_operations} "
         f"nscan boundary={scan_stats.nscan_boundary_scan_index} "
         f"in_scope={scan_stats.nscan_tracks_in_scope} "
         f"committed_now={scan_stats.nscan_tracks_committed} "
@@ -128,6 +134,8 @@ def print_summary_stats(
     comb_eval = [s.combinations_evaluated for s in stats]
     comb_feas = [s.feasible_combinations for s in stats]
     rebuilt = [s.rebuilt_globals_stored for s in stats]
+    split_clusters = [s.overload_split_clusters for s in stats]
+    split_ops = [s.overload_split_operations for s in stats]
     disagree = [s.nscan_disagreement_total for s in stats]
 
     birth_created = [s.birth_tracks_created for s in stats]
@@ -162,7 +170,9 @@ def print_summary_stats(
         f"count med={median(clusters):.1f} max={max(clusters)} "
         f"comb_eval med={median(comb_eval):.1f} max={max(comb_eval)} "
         f"comb_feas med={median(comb_feas):.1f} max={max(comb_feas)} "
-        f"globals med={median(rebuilt):.1f} max={max(rebuilt)}"
+        f"globals med={median(rebuilt):.1f} max={max(rebuilt)} "
+        f"split_clusters med={median(split_clusters):.1f} max={max(split_clusters)} "
+        f"split_ops med={median(split_ops):.1f} max={max(split_ops)}"
     )
     print(
         "SUMMARY timing "

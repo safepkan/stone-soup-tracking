@@ -1,5 +1,27 @@
 # TO-MHT Current State
 
+## Update (2026-04-01): narrow overload cluster decomposition under projected-combination pressure
+
+A focused overload-mitigation approximation was added without changing the core
+track-oriented architecture:
+
+- exact conflict graph build is unchanged (full-history detection-key overlap)
+- exact exhaustive solve is unchanged for manageable clusters
+- when a cluster's projected Cartesian leaf-product exceeds
+  `overload_split_projected_combination_threshold` (default `500000`), the
+  tracker now iteratively removes the weakest conflict edge and recomputes
+  connected components
+- weakest edge criterion is pure count of shared full-history detection keys
+  (`len(shared_history_keys)`), with deterministic tie-break by `(left_track_id,right_track_id)`
+- resulting subclusters are then solved exactly and independently
+- this pass is controlled by:
+  - `overload_split_enabled` (default `True`)
+  - `overload_split_projected_combination_threshold` (default `500000`)
+  - `overload_split_max_edge_removals_per_cluster` (default `None`)
+- split instrumentation is emitted per affected original cluster as
+  `OVERLOAD_SPLIT ...` log lines, and per-scan stats now include
+  `split_clusters` and `split_ops`
+
 ## Update (2026-04-01): local cap relaxed to pure safety-valve range
 
 With post-solve supported-leaf pruning now in place, the default local pre-solve
