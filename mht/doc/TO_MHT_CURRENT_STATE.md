@@ -1,5 +1,24 @@
 # TO-MHT Current State
 
+## Update (2026-04-01): narrow historical-conflict relaxation safety-net
+
+To handle approximation-induced infeasible reunited clusters after overload
+splitting, a narrow historical-relaxation pass was added:
+
+- exact feasibility is attempted first (unchanged behavior for feasible clusters)
+- only when exact feasibility is zero, the tracker computes relaxed keys as:
+  - keys forced in every active leaf of a track
+  - restricted to keys already present in that track root history and at/older
+    than the current N-scan boundary
+  - relaxed only if such a key is shared by more than one track in the cluster
+- feasibility is rerun while ignoring overlaps on those relaxed keys only
+- all other overlaps remain strictly enforced
+- compact runtime logging now emits `HIST_RELAX ...` when this path triggers
+- per-scan stats now include:
+  - `hist_relax_attempts`
+  - `hist_relax_ok`
+  - `hist_relax_keys`
+
 ## Update (2026-04-01): narrow overload cluster decomposition under projected-combination pressure
 
 A focused overload-mitigation approximation was added without changing the core

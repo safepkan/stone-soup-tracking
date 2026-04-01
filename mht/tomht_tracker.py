@@ -107,6 +107,9 @@ class TOMHTParams:
     overload_split_enabled: bool = True
     overload_split_projected_combination_threshold: int | None = 500_000
     overload_split_max_edge_removals_per_cluster: int | None = None
+    # Narrow safety-net: if an exact cluster is infeasible, allow relaxation only
+    # for forced historical keys that are already shared across tracks.
+    historical_conflict_relaxation_enabled: bool = True
 
     # Scoring / numerical behavior.
     scoring_mode: str = "beta_ratio"
@@ -199,6 +202,16 @@ class _OverloadSplitSummary:
     resulting_subclusters: tuple[tuple[int, ...], ...]
     projected_after_by_subcluster: tuple[int, ...]
     stopping_reason: str
+
+
+@dataclass(frozen=True)
+class _ClusterRebuildResult:
+    """Cluster rebuild result with narrow historical-relaxation bookkeeping."""
+
+    snapshot: ClusterRebuildSnapshot
+    historical_relaxation_attempted: bool = False
+    historical_relaxation_succeeded: bool = False
+    historical_relaxed_key_count: int = 0
 
 
 # ============================================================================
@@ -1638,35 +1651,95 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         return "; ".join(parts)
 
-    def _rebuild_one_cluster(
+    @staticmethod
+    def _format_detection_key_sample(
+        keys: set[DetectionKey],
+        *,
+        max_items: int = 6,
+    ) -> str:
+        if not keys:
+            return "[]"
+        ordered = sorted(keys)
+        if len(ordered) <= max_items:
+            return str(ordered)
+        head = ordered[:max_items]
+        return f"{head}...(+{len(ordered) - max_items})"
+
+    @staticmethod
+    def _forced_detection_history_keys(
+        leaves: list[TrackHypothesisNode],
+    ) -> set[DetectionKey]:
+        """Return detection keys present in every active leaf for one track tree."""
+        forced = set(leaves[0].detection_history_keys)
+        for leaf in leaves[1:]:
+            forced &= set(leaf.detection_history_keys)
+        return forced
+
+    def _historical_relaxed_conflict_keys_for_cluster(
         self,
+        *,
+        cluster: _ClusterWorkItem,
+        leaf_options: list[list[TrackHypothesisNode]],
+        ctx: ScanContext,
+    ) -> set[DetectionKey]:
+        """Return forced committed historical keys shared by multiple tracks."""
+        boundary_scan_index = int(ctx.scan_index) - int(self.params.ns_scan_window)
+        key_track_count: dict[DetectionKey, int] = {}
+        for idx, track_id in enumerate(cluster.track_ids):
+            leaves = leaf_options[idx]
+            forced_keys = self._forced_detection_history_keys(leaves)
+            tree = self.track_trees_by_track_id[track_id]
+            root = self._nodes_by_id[tree.root_node_id]
+            root_keys = set(root.detection_history_keys)
+            forced_committed_keys = {
+                key
+                for key in (forced_keys & root_keys)
+                if int(key[0]) <= boundary_scan_index
+            }
+            for key in forced_committed_keys:
+                key_track_count[key] = key_track_count.get(key, 0) + 1
+
+        return {key for key, count in key_track_count.items() if count > 1}
+
+    def _log_historical_relaxation(
+        self,
+        *,
         cluster: _ClusterWorkItem,
         ctx: ScanContext,
-    ) -> ClusterRebuildSnapshot:
-        """Exhaustively enumerate and score feasible globals for one cluster."""
-        leaf_options = self._cluster_leaf_options(cluster.track_ids)
-        projected_combinations = self._projected_combination_count(leaf_options)
-        projected_cap = self.params.max_projected_cluster_combinations
-        if projected_cap is not None and projected_combinations > int(projected_cap):
-            raise RuntimeError(
-                "Cluster rebuild projected Cartesian combinations exceed guardrail: "
-                f"cluster={cluster.cluster_id} "
-                f"projected={projected_combinations} "
-                f"cap={int(projected_cap)}"
-            )
-
-        cluster_universe: set[DetectionKey] = set()
-        for keys in cluster.current_scan_det_keys_by_track_id.values():
-            cluster_universe |= keys
-        unused_score_context = self._build_cluster_unused_score_context(
-            cluster_universe=cluster_universe,
-            ctx=ctx,
+        relaxed_keys: set[DetectionKey],
+        feasible_before: int,
+        feasible_after: int,
+    ) -> None:
+        """Emit compact instrumentation for historical-conflict relaxation events."""
+        print(
+            "HIST_RELAX "
+            f"scan={ctx.scan_index} "
+            f"cluster={cluster.cluster_id} "
+            f"track_ids={list(cluster.track_ids)} "
+            f"relaxed_keys={len(relaxed_keys)} "
+            "relaxed_sample="
+            f"{self._format_detection_key_sample(relaxed_keys)} "
+            f"feasible_before={feasible_before} "
+            f"feasible_after={feasible_after} "
+            f"status={'enabled' if feasible_after > 0 else 'failed'}"
         )
 
+    def _enumerate_cluster_globals(
+        self,
+        *,
+        cluster: _ClusterWorkItem,
+        leaf_options: list[list[TrackHypothesisNode]],
+        ctx: ScanContext,
+        cluster_universe: set[DetectionKey],
+        unused_score_context: _ClusterUnusedScoreContext | None,
+        relaxed_conflict_keys: frozenset[DetectionKey],
+    ) -> tuple[list[tuple[float, int, GlobalHypothesis]], int, int]:
+        """Enumerate feasible globals with optional relaxed historical conflicts."""
         top_k_heap: list[tuple[float, int, GlobalHypothesis]] = []
         combinations_evaluated = 0
         feasible_combinations = 0
         k = int(self.params.max_global_hypotheses)
+        relaxed_keys_set = set(relaxed_conflict_keys)
 
         for picked in product(*leaf_options):
             combinations_evaluated += 1
@@ -1675,11 +1748,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             feasible = True
             used_keys: set[DetectionKey] = set()
             for leaf in selected:
-                overlap = used_keys & set(leaf.detection_history_keys)
+                leaf_keys = set(leaf.detection_history_keys)
+                overlap = (used_keys & leaf_keys) - relaxed_keys_set
                 if overlap:
                     feasible = False
                     break
-                used_keys |= set(leaf.detection_history_keys)
+                used_keys |= leaf_keys
             if not feasible:
                 continue
 
@@ -1700,7 +1774,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 score_context=unused_score_context,
                 scan_index=ctx.scan_index,
             )
-
             candidate = GlobalHypothesis(
                 leaf_nodes_by_track_id=leaf_nodes_by_track_id,
                 log_weight=float(leaf_score_sum + unused_term),
@@ -1712,31 +1785,122 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 k=k,
             )
 
+        return top_k_heap, combinations_evaluated, feasible_combinations
+
+    def _rebuild_one_cluster(
+        self,
+        cluster: _ClusterWorkItem,
+        ctx: ScanContext,
+    ) -> _ClusterRebuildResult:
+        """Exhaustively enumerate and score feasible globals for one cluster."""
+        leaf_options = self._cluster_leaf_options(cluster.track_ids)
+        projected_combinations = self._projected_combination_count(leaf_options)
+        projected_cap = self.params.max_projected_cluster_combinations
+        if projected_cap is not None and projected_combinations > int(projected_cap):
+            raise RuntimeError(
+                "Cluster rebuild projected Cartesian combinations exceed guardrail: "
+                f"cluster={cluster.cluster_id} "
+                f"projected={projected_combinations} "
+                f"cap={int(projected_cap)}"
+            )
+
+        cluster_universe: set[DetectionKey] = set()
+        for keys in cluster.current_scan_det_keys_by_track_id.values():
+            cluster_universe |= keys
+        unused_score_context = self._build_cluster_unused_score_context(
+            cluster_universe=cluster_universe,
+            ctx=ctx,
+        )
+
+        (
+            top_k_heap,
+            combinations_evaluated,
+            feasible_combinations,
+        ) = self._enumerate_cluster_globals(
+            cluster=cluster,
+            leaf_options=leaf_options,
+            ctx=ctx,
+            cluster_universe=cluster_universe,
+            unused_score_context=unused_score_context,
+            relaxed_conflict_keys=frozenset(),
+        )
+
+        historical_relaxation_attempted = False
+        historical_relaxation_succeeded = False
+        relaxed_historical_keys: set[DetectionKey] = set()
+        if (
+            feasible_combinations == 0
+            and self.params.historical_conflict_relaxation_enabled
+        ):
+            relaxed_historical_keys = (
+                self._historical_relaxed_conflict_keys_for_cluster(
+                    cluster=cluster,
+                    leaf_options=leaf_options,
+                    ctx=ctx,
+                )
+            )
+            if relaxed_historical_keys:
+                historical_relaxation_attempted = True
+                (
+                    top_k_heap,
+                    relaxed_combinations_evaluated,
+                    feasible_combinations,
+                ) = self._enumerate_cluster_globals(
+                    cluster=cluster,
+                    leaf_options=leaf_options,
+                    ctx=ctx,
+                    cluster_universe=cluster_universe,
+                    unused_score_context=unused_score_context,
+                    relaxed_conflict_keys=frozenset(relaxed_historical_keys),
+                )
+                combinations_evaluated += relaxed_combinations_evaluated
+                historical_relaxation_succeeded = feasible_combinations > 0
+                self._log_historical_relaxation(
+                    cluster=cluster,
+                    ctx=ctx,
+                    relaxed_keys=relaxed_historical_keys,
+                    feasible_before=0,
+                    feasible_after=feasible_combinations,
+                )
+
         if feasible_combinations == 0:
             dbg = self._infeasible_cluster_debug_summary(
                 cluster=cluster,
                 leaf_options=leaf_options,
                 ctx=ctx,
             )
+            relaxation_dbg = ""
+            if relaxed_historical_keys:
+                relaxation_dbg = (
+                    "; "
+                    f"relaxed_historical_keys={len(relaxed_historical_keys)} "
+                    "relaxed_sample="
+                    f"{self._format_detection_key_sample(relaxed_historical_keys)}"
+                )
             raise RuntimeError(
                 "Cluster rebuild found no feasible combination. "
                 "Expected at least one feasible joint assignment. "
-                f"{dbg}"
+                f"{dbg}{relaxation_dbg}"
             )
 
         kept_globals = self._finalize_top_k_globals(top_k_heap)
         map_global = kept_globals[0] if kept_globals else None
 
-        return ClusterRebuildSnapshot(
-            cluster_id=cluster.cluster_id,
-            track_ids=cluster.track_ids,
-            current_scan_conflict_det_keys=frozenset(cluster_universe),
-            conflict_links=cluster.conflict_links,
-            rebuilt_globals=kept_globals,
-            map_global=map_global,
-            feasible_combinations=feasible_combinations,
-            evaluated_combinations=combinations_evaluated,
-            overload_split_origin_cluster_id=cluster.overload_split_origin_cluster_id,
+        return _ClusterRebuildResult(
+            snapshot=ClusterRebuildSnapshot(
+                cluster_id=cluster.cluster_id,
+                track_ids=cluster.track_ids,
+                current_scan_conflict_det_keys=frozenset(cluster_universe),
+                conflict_links=cluster.conflict_links,
+                rebuilt_globals=kept_globals,
+                map_global=map_global,
+                feasible_combinations=feasible_combinations,
+                evaluated_combinations=combinations_evaluated,
+                overload_split_origin_cluster_id=cluster.overload_split_origin_cluster_id,
+            ),
+            historical_relaxation_attempted=historical_relaxation_attempted,
+            historical_relaxation_succeeded=historical_relaxation_succeeded,
+            historical_relaxed_key_count=len(relaxed_historical_keys),
         )
 
     def _rebuild_cluster_globals(
@@ -1765,9 +1929,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             replace(cluster, cluster_id=cluster_id)
             for cluster_id, cluster in enumerate(clusters_for_rebuild_raw)
         ]
-        snapshots = [
+        rebuild_results = [
             self._rebuild_one_cluster(cluster, ctx) for cluster in clusters_for_rebuild
         ]
+        snapshots = [result.snapshot for result in rebuild_results]
         return (
             snapshots,
             RebuildStats(
@@ -1779,6 +1944,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 overload_split_clusters=len(split_summaries),
                 overload_split_operations=sum(
                     len(summary.removed_edges) for summary in split_summaries
+                ),
+                historical_relaxation_attempts=sum(
+                    1
+                    for result in rebuild_results
+                    if result.historical_relaxation_attempted
+                ),
+                historical_relaxation_successes=sum(
+                    1
+                    for result in rebuild_results
+                    if result.historical_relaxation_succeeded
+                ),
+                historical_relaxed_keys_total=sum(
+                    result.historical_relaxed_key_count for result in rebuild_results
                 ),
             ),
         )
@@ -2271,6 +2449,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             nscan_disagreement_total=rebuild_stats.nscan_disagreement_total,
             overload_split_clusters=rebuild_stats.overload_split_clusters,
             overload_split_operations=rebuild_stats.overload_split_operations,
+            historical_relaxation_attempts=rebuild_stats.historical_relaxation_attempts,
+            historical_relaxation_successes=rebuild_stats.historical_relaxation_successes,
+            historical_relaxed_keys_total=rebuild_stats.historical_relaxed_keys_total,
             nscan_boundary_scan_index=nscan_boundary_scan_index,
             nscan_tracks_in_scope=nscan_tracks_in_scope,
             nscan_tracks_committed=nscan_tracks_committed,

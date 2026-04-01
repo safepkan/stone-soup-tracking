@@ -1,5 +1,19 @@
 # TO-MHT Next Steps
 
+## Update (2026-04-01): historical-conflict relaxation safety-net implemented
+
+Implemented (narrow pass):
+
+- if a cluster is exact-infeasible, apply a targeted historical-conflict
+  relaxation and retry feasibility
+- relaxed keys are only forced historical keys shared by multiple tracks in that
+  cluster (forced across active leaves, present in root history, and at/older
+  than current N-scan boundary)
+- overlap checks remain strict for all non-relaxed keys
+- compact runtime instrumentation emits `HIST_RELAX ...`
+- scan stats now expose `hist_relax_attempts`, `hist_relax_ok`, and
+  `hist_relax_keys`
+
 ## Update (2026-04-01): overload cluster splitting mitigation implemented
 
 Implemented (narrow pass):
