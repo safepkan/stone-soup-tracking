@@ -92,11 +92,14 @@ class TOMHTParams:
     # Local expansion / lifecycle controls.
     max_children_per_track: int = 5
     # Optional per-tree frontier cap applied after local expansion.
-    max_leaves_per_track_tree: int | None = 50
+    max_leaves_per_track_tree: int | None = 8
     max_missed: int = 5
 
     # Rebuilt-global storage cap (debug/inspection cap, not persistent beam state).
     max_global_hypotheses: int = 20
+    # Optional hard cap for one cluster's projected Cartesian leaf combinations.
+    # If exceeded, cluster rebuild fails explicitly (no adaptive trimming/retry).
+    max_projected_cluster_combinations: int | None = None
 
     # Scoring / numerical behavior.
     scoring_mode: str = "beta_ratio"
@@ -110,6 +113,9 @@ class TOMHTParams:
     max_births_per_scan: int = 2
     birth_log_penalty: float = 8.0
     unused_det_log_penalty: float = 0.2
+    # Birth load guards: skip births once frontier growth is already high.
+    birth_skip_if_active_trees_above: int | None = 40
+    birth_skip_if_active_leaves_above: int | None = 200
 
     # Birth sanity guards.
     birth_max_abs_pos: float = 1e5
@@ -156,6 +162,14 @@ class _ClusterWorkItem:
     conflict_links: tuple[tuple[int, int, tuple[DetectionKey, ...]], ...]
 
 
+@dataclass(frozen=True)
+class _ClusterUnusedScoreContext:
+    """Precomputed cluster-local context for unused-detection scoring."""
+
+    local_ctx: ScanContext
+    local_slot_by_global_det_index: dict[int, int]
+
+
 # ============================================================================
 # Tracker Implementation
 # ============================================================================
@@ -188,9 +202,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ASSOC_MISS = -2
 
     hypothesiser: PDAHypothesiser = Property(
+        PDAHypothesiser,
         doc="Hypothesiser used to branch per-track hypotheses."
     )
     updater: Updater = Property(
+        Updater,
         doc="Updater used to generate posteriors from selected hypotheses."
     )
 
@@ -852,6 +868,24 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             if i not in used_current_scan_det_indices
         ]
 
+    def _birth_guardrail_block_reason(self) -> str | None:
+        """Return a reason when simple load guards should block internal births."""
+        active_trees = len(self.track_trees_by_track_id)
+        active_leaves = sum(
+            len(tree.active_leaf_node_ids)
+            for tree in self.track_trees_by_track_id.values()
+        )
+
+        trees_cap = self.params.birth_skip_if_active_trees_above
+        if trees_cap is not None and active_trees > int(trees_cap):
+            return f"active tree count above cap ({active_trees}>{int(trees_cap)})"
+
+        leaves_cap = self.params.birth_skip_if_active_leaves_above
+        if leaves_cap is not None and active_leaves > int(leaves_cap):
+            return f"active leaf count above cap ({active_leaves}>{int(leaves_cap)})"
+
+        return None
+
     def _run_internal_births(self, ctx: ScanContext) -> BirthStats:
         """Create simple internal birth trees from Step-2 residual detections."""
         residual_det_indices = self._residual_detection_indices_after_step2(ctx)
@@ -865,13 +899,30 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 birth_tracks_kept=0,
             )
 
-        self._last_unused_detections = []
         if not residual_detections:
+            self._last_unused_detections = []
             return BirthStats(
                 residual_detections_considered=0,
                 birth_tracks_created=0,
                 birth_tracks_kept=0,
             )
+
+        birth_block_reason = self._birth_guardrail_block_reason()
+        if birth_block_reason is not None:
+            self._last_unused_detections = residual_detections
+            if self.params.debug_display_births:
+                print(
+                    "\nINTERNAL_BIRTH_GUARDRAIL "
+                    f"t={ctx.timestamp} reason={birth_block_reason} "
+                    f"residual={len(residual_detections)}"
+                )
+            return BirthStats(
+                residual_detections_considered=len(residual_detections),
+                birth_tracks_created=0,
+                birth_tracks_kept=0,
+            )
+
+        self._last_unused_detections = []
 
         born = list(
             self.initiator.initiate(OrderedSet(residual_detections), ctx.timestamp)
@@ -1027,16 +1078,15 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
         return out
 
-    def _score_unused_cluster_current_scan_term(
+    def _build_cluster_unused_score_context(
         self,
         *,
         cluster_universe: set[DetectionKey],
-        selected_used_current_scan_keys: set[DetectionKey],
         ctx: ScanContext,
-    ) -> float:
-        """Compute explicit per-combination cluster-local unused-detection term."""
+    ) -> _ClusterUnusedScoreContext | None:
+        """Build one reusable cluster-local context for unused-detection scoring."""
         if not cluster_universe:
-            return 0.0
+            return None
 
         det_indices = sorted(
             det_idx
@@ -1044,7 +1094,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             if scan_idx == ctx.scan_index
         )
         if not det_indices:
-            return 0.0
+            return None
 
         detections_subset = [ctx.detections[idx] for idx in det_indices]
         local_det_index_by_obj = {
@@ -1061,15 +1111,43 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             global_det_idx: local_idx
             for local_idx, global_det_idx in enumerate(det_indices)
         }
+        return _ClusterUnusedScoreContext(
+            local_ctx=local_ctx,
+            local_slot_by_global_det_index=local_slot_by_global_det_index,
+        )
+
+    def _score_unused_cluster_current_scan_term(
+        self,
+        *,
+        selected_used_current_scan_keys: set[DetectionKey],
+        score_context: _ClusterUnusedScoreContext | None,
+        scan_index: int,
+    ) -> float:
+        """Compute explicit per-combination cluster-local unused-detection term."""
+        if score_context is None:
+            return 0.0
+
         used_local_slots = {
-            local_slot_by_global_det_index[det_idx]
-            for (scan_idx, det_idx) in selected_used_current_scan_keys
-            if scan_idx == ctx.scan_index and det_idx in local_slot_by_global_det_index
+            score_context.local_slot_by_global_det_index[det_idx]
+            for (key_scan_idx, det_idx) in selected_used_current_scan_keys
+            if (
+                key_scan_idx == scan_index
+                and det_idx in score_context.local_slot_by_global_det_index
+            )
         }
         return self.scoring_model.score_unused_detections(
             used_det_keys=used_local_slots,
-            ctx=local_ctx,
+            ctx=score_context.local_ctx,
         )
+
+    @staticmethod
+    def _projected_combination_count(
+        leaf_options: list[list[TrackHypothesisNode]],
+    ) -> int:
+        projected = 1
+        for leaves in leaf_options:
+            projected *= len(leaves)
+        return projected
 
     def _cluster_leaf_options(
         self,
@@ -1132,6 +1210,49 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         return tuple(item[2] for item in top_k_heap)
 
+    def _infeasible_cluster_debug_summary(
+        self,
+        *,
+        cluster: _ClusterWorkItem,
+        leaf_options: list[list[TrackHypothesisNode]],
+        ctx: ScanContext,
+    ) -> str:
+        """Build compact debug context for a cluster with no feasible combinations."""
+        parts: list[str] = []
+        parts.append(f"scan_index={ctx.scan_index}")
+        parts.append(f"cluster_id={cluster.cluster_id}")
+        parts.append(f"track_ids={list(cluster.track_ids)}")
+
+        leaf_count_by_track_id = {
+            track_id: len(leaf_options[idx])
+            for idx, track_id in enumerate(cluster.track_ids)
+        }
+        parts.append(f"leaf_counts={leaf_count_by_track_id}")
+
+        # Pairwise overlap counts on full detection histories indicate how "hard"
+        # the incompatibilities are between tree frontiers.
+        pairwise_overlap_counts: list[str] = []
+        for i, left_track_id in enumerate(cluster.track_ids):
+            left_leaves = leaf_options[i]
+            for j, right_track_id in enumerate(cluster.track_ids[i + 1 :], start=i + 1):
+                right_leaves = leaf_options[j]
+                conflicting_pairs = 0
+                for left_leaf in left_leaves:
+                    left_hist = set(left_leaf.detection_history_keys)
+                    for right_leaf in right_leaves:
+                        if left_hist & set(right_leaf.detection_history_keys):
+                            conflicting_pairs += 1
+                total_pairs = len(left_leaves) * len(right_leaves)
+                pairwise_overlap_counts.append(
+                    f"{left_track_id}-{right_track_id}:{conflicting_pairs}/{total_pairs}"
+                )
+        if pairwise_overlap_counts:
+            parts.append(
+                "pairwise_conflicts={" + ", ".join(pairwise_overlap_counts) + "}"
+            )
+
+        return "; ".join(parts)
+
     def _rebuild_one_cluster(
         self,
         cluster: _ClusterWorkItem,
@@ -1139,9 +1260,23 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> ClusterRebuildSnapshot:
         """Exhaustively enumerate and score feasible globals for one cluster."""
         leaf_options = self._cluster_leaf_options(cluster.track_ids)
+        projected_combinations = self._projected_combination_count(leaf_options)
+        projected_cap = self.params.max_projected_cluster_combinations
+        if projected_cap is not None and projected_combinations > int(projected_cap):
+            raise RuntimeError(
+                "Cluster rebuild projected Cartesian combinations exceed guardrail: "
+                f"cluster={cluster.cluster_id} "
+                f"projected={projected_combinations} "
+                f"cap={int(projected_cap)}"
+            )
+
         cluster_universe: set[DetectionKey] = set()
         for keys in cluster.current_scan_det_keys_by_track_id.values():
             cluster_universe |= keys
+        unused_score_context = self._build_cluster_unused_score_context(
+            cluster_universe=cluster_universe,
+            ctx=ctx,
+        )
 
         top_k_heap: list[tuple[float, int, GlobalHypothesis]] = []
         combinations_evaluated = 0
@@ -1176,9 +1311,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 if int(key[0]) == ctx.scan_index and key in cluster_universe
             }
             unused_term = self._score_unused_cluster_current_scan_term(
-                cluster_universe=cluster_universe,
                 selected_used_current_scan_keys=used_current_scan_keys,
-                ctx=ctx,
+                score_context=unused_score_context,
+                scan_index=ctx.scan_index,
             )
 
             candidate = GlobalHypothesis(
@@ -1193,9 +1328,15 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
 
         if feasible_combinations == 0:
+            dbg = self._infeasible_cluster_debug_summary(
+                cluster=cluster,
+                leaf_options=leaf_options,
+                ctx=ctx,
+            )
             raise RuntimeError(
                 "Cluster rebuild found no feasible combination. "
-                "Expected at least one feasible joint assignment."
+                "Expected at least one feasible joint assignment. "
+                f"{dbg}"
             )
 
         kept_globals = self._finalize_top_k_globals(top_k_heap)

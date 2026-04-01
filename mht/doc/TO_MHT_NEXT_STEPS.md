@@ -13,6 +13,15 @@ Phase D has now been implemented in code as the primary tracker architecture:
 - simple internal births from Step-2 residual detections and external starts as new single-node trees
 - practical per-tree active-leaf cap added (`max_leaves_per_track_tree`) to keep exhaustive-enumeration runtime bounded in longer scenario runs
 
+## Update (2026-04-01): narrow tractability controls tightened
+
+Without changing the Phase D architecture:
+
+- per-tree active-leaf default was tightened to `max_leaves_per_track_tree=8`
+- internal births gained explicit load guards for active tree/leaf counts
+- cluster-local unused-detection scoring now reuses one prebuilt cluster context
+- optional hard projected-combination guardrail can now stop oversized cluster rebuilds explicitly
+
 This planning document is therefore now mainly a reference/checklist for follow-up refinements, not a future architectural target.
 
 ## Next architectural phase

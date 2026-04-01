@@ -1,5 +1,14 @@
 # TO-MHT Current State
 
+## Update (2026-04-01): narrow tractability guardrails pass
+
+A narrow tractability pass was added on top of the Phase D architecture:
+
+- default `max_leaves_per_track_tree` was reduced (`8`, down from `50`)
+- internal births now have explicit load guards (`birth_skip_if_active_trees_above`, `birth_skip_if_active_leaves_above`) and are skipped when frontier size is already high
+- cluster-local unused-detection scoring context is now built once per cluster and reused for all feasible combinations
+- optional hard projected-combination guardrail was added (`max_projected_cluster_combinations`) and raises explicitly if exceeded
+
 ## Update (2026-03-31): Phase D architecture in place
 
 The tracker has now been moved to the track-oriented Phase D architecture:
