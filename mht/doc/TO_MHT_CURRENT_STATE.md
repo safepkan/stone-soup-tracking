@@ -1,5 +1,23 @@
 # TO-MHT Current State
 
+## Update (2026-04-01): local cap relaxed to pure safety-valve range
+
+With post-solve supported-leaf pruning now in place, the default local pre-solve
+leaf cap was relaxed:
+
+- `max_leaves_per_track_tree` default is now `100` (up from `8`)
+- intent remains a pre-solve tractability/safety valve, not primary pruning logic
+- added opt-in pruning-feasibility validation (`TOMHT_DEBUG_VALIDATE_PRUNING_FEASIBILITY=1`) that checks cluster feasibility after local pruning, post-solve supported-leaf pruning, and post-N-scan pruning
+- cluster formation now uses full active-leaf historical detection-key overlap (not current-scan-only overlap) so decomposition matches the solver feasibility criterion
+
+## Update (2026-04-01): post-solve supported-leaf pruning refinement
+
+A narrow pruning refinement was added:
+
+- after each cluster rebuild retains top-K globals, each cluster tree now keeps only leaf nodes that appear in at least one retained rebuilt global for that cluster
+- per-tree local leaf capping (`max_leaves_per_track_tree`) is now treated as a pre-solve safety/tractability valve, not the primary pruning semantics
+- pruning remains cluster-local and driven by retained per-cluster rebuilt globals
+
 ## Update (2026-04-01): narrow tractability guardrails pass
 
 A narrow tractability pass was added on top of the Phase D architecture:

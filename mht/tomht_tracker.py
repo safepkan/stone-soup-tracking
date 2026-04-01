@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import datetime
 import heapq
+import os
 import resource
 import sys
 import time as wall_clock
@@ -91,8 +92,8 @@ class TOMHTParams:
 
     # Local expansion / lifecycle controls.
     max_children_per_track: int = 5
-    # Optional per-tree frontier cap applied after local expansion.
-    max_leaves_per_track_tree: int | None = 8
+    # Optional pre-solve per-tree frontier cap used only as a safety valve.
+    max_leaves_per_track_tree: int | None = 100
     max_missed: int = 5
 
     # Rebuilt-global storage cap (debug/inspection cap, not persistent beam state).
@@ -193,21 +194,21 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     5. Recompute measurement-exclusivity clusters from current trees.
     6. Rebuild feasible globals per cluster via exhaustive enumeration and choose
        MAP per cluster.
-    7. Merge cluster MAP selections into full-scan MAP, then apply MAP-only
+    7. Post-solve prune each cluster tree frontier to leaves supported by at
+       least one retained rebuilt top-K global for that cluster.
+    8. Merge cluster MAP selections into full-scan MAP, then apply MAP-only
        N-scan tree pruning.
-    8. Keep last-scan debug snapshots and return MAP output tracks.
+    9. Keep last-scan debug snapshots and return MAP output tracks.
     """
 
     ASSOC_PAD = -1
     ASSOC_MISS = -2
 
     hypothesiser: PDAHypothesiser = Property(
-        PDAHypothesiser,
-        doc="Hypothesiser used to branch per-track hypotheses."
+        PDAHypothesiser, doc="Hypothesiser used to branch per-track hypotheses."
     )
     updater: Updater = Property(
-        Updater,
-        doc="Updater used to generate posteriors from selected hypotheses."
+        Updater, doc="Updater used to generate posteriors from selected hypotheses."
     )
 
     _last_nscan_boundary_scan_index: int | None
@@ -306,11 +307,20 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             det_index_by_obj=det_index_by_obj,
         )
 
+        self._maybe_validate_pruning_feasibility(
+            stage="pre_local_expansion",
+            ctx=ctx,
+        )
+
         # 1) Expand every tree locally.
         self._expand_all_track_trees(ctx)
 
         # 2) Simple lifecycle handling.
         self._remove_empty_trees()
+        self._maybe_validate_pruning_feasibility(
+            stage="post_local_pruning",
+            ctx=ctx,
+        )
 
         # 3) Internal births from Step-2 residual detections.
         birth_stats = self._run_internal_births(ctx)
@@ -321,10 +331,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             cluster_work, ctx
         )
 
+        # 5) Post-solve cluster-local supported-leaf pruning from rebuilt top-K.
+        self._apply_post_solve_supported_leaf_pruning(cluster_snapshots)
+        self._maybe_validate_pruning_feasibility(
+            stage="post_supported_leaf_pruning",
+            ctx=ctx,
+        )
+
         map_global = self._merge_cluster_map_globals(cluster_snapshots)
         self._last_map_global = map_global
 
-        # 5) MAP-only N-scan pruning on explicit trees + disagreement stats.
+        # 6) MAP-only N-scan pruning on explicit trees + disagreement stats.
         (
             nscan_boundary_scan_index,
             nscan_tracks_in_scope,
@@ -336,6 +353,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
         )
+        self._maybe_validate_pruning_feasibility(
+            stage="post_n_scan_pruning",
+            ctx=ctx,
+        )
 
         rebuild_stats = replace(
             rebuild_stats,
@@ -346,10 +367,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         # Keep one full-scan MAP global in compatibility slot for old inspection paths.
         self.global_hypotheses = [map_global]
 
-        # 6) Reclaim node storage not reachable from surviving roots/leaves/commitments.
+        # 7) Reclaim node storage not reachable from surviving roots/leaves/commitments.
         self._cleanup_unreachable_nodes()
 
-        # 7) Post-scan instrumentation.
+        # 8) Post-scan instrumentation.
         scan_wall_ms = (wall_clock.perf_counter_ns() - scan_wall_start_ns) / 1e6
         maxrss_mb = self._get_process_maxrss_mb()
         node_count_total = len(self._nodes_by_id)
@@ -758,7 +779,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         return out
 
     def _expand_one_track_tree(self, tree: TrackTree, ctx: ScanContext) -> None:
-        """Expand all active leaves in one persistent track tree."""
+        """Expand all active leaves in one tree, then apply pre-solve cap guardrail."""
         new_leaf_ids: set[int] = set()
 
         for leaf_id in sorted(tree.active_leaf_node_ids):
@@ -769,19 +790,28 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                     continue
                 new_leaf_ids.add(cand.child_node.node_id)
 
-        max_leaves = self.params.max_leaves_per_track_tree
-        if max_leaves is not None and len(new_leaf_ids) > max_leaves:
-            ranked = sorted(
-                (self._nodes_by_id[node_id] for node_id in new_leaf_ids),
-                key=lambda node: (
-                    float(node.accumulated_log_score),
-                    -int(node.node_id),
-                ),
-                reverse=True,
-            )
-            new_leaf_ids = {node.node_id for node in ranked[: int(max_leaves)]}
+        tree.active_leaf_node_ids = self._apply_pre_solve_leaf_cap_guardrail(
+            new_leaf_ids
+        )
 
-        tree.active_leaf_node_ids = new_leaf_ids
+    def _apply_pre_solve_leaf_cap_guardrail(
+        self,
+        leaf_node_ids: set[int],
+    ) -> set[int]:
+        """Apply optional local leaf capping only as a pre-solve tractability valve."""
+        max_leaves = self.params.max_leaves_per_track_tree
+        if max_leaves is None or len(leaf_node_ids) <= max_leaves:
+            return leaf_node_ids
+
+        ranked = sorted(
+            (self._nodes_by_id[node_id] for node_id in leaf_node_ids),
+            key=lambda node: (
+                float(node.accumulated_log_score),
+                -int(node.node_id),
+            ),
+            reverse=True,
+        )
+        return {node.node_id for node in ranked[: int(max_leaves)]}
 
     def _expand_all_track_trees(self, ctx: ScanContext) -> None:
         """Run local expansion for all current persistent track trees."""
@@ -1004,13 +1034,30 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 keys.add(leaf.used_det_key)
         return keys
 
+    def _history_conflict_keys_for_tree(
+        self,
+        tree: TrackTree,
+    ) -> set[DetectionKey]:
+        """Return all detection-history keys present in this tree's active leaves."""
+        keys: set[DetectionKey] = set()
+        for leaf_id in tree.active_leaf_node_ids:
+            leaf = self._nodes_by_id[leaf_id]
+            keys |= set(leaf.detection_history_keys)
+        return keys
+
     def _build_track_clusters(self, ctx: ScanContext) -> list[_ClusterWorkItem]:
-        """Build current independent clusters from shared current-scan detections."""
+        """Build independent clusters from shared active-leaf history detections."""
         track_ids = sorted(self.track_trees_by_track_id.keys())
         if not track_ids:
             return []
 
-        keys_by_track: dict[int, set[DetectionKey]] = {
+        history_keys_by_track: dict[int, set[DetectionKey]] = {
+            track_id: self._history_conflict_keys_for_tree(
+                self.track_trees_by_track_id[track_id],
+            )
+            for track_id in track_ids
+        }
+        current_scan_keys_by_track: dict[int, set[DetectionKey]] = {
             track_id: self._current_scan_candidate_keys_for_tree(
                 self.track_trees_by_track_id[track_id],
                 ctx.scan_index,
@@ -1022,7 +1069,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         conflict_links: list[tuple[int, int, tuple[DetectionKey, ...]]] = []
         for i, left_track_id in enumerate(track_ids):
             for right_track_id in track_ids[i + 1 :]:
-                shared = keys_by_track[left_track_id] & keys_by_track[right_track_id]
+                shared = (
+                    history_keys_by_track[left_track_id]
+                    & history_keys_by_track[right_track_id]
+                )
                 if not shared:
                     continue
                 adjacency[left_track_id].add(right_track_id)
@@ -1070,7 +1120,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                     cluster_id=cluster_id,
                     track_ids=comp_track_ids,
                     current_scan_det_keys_by_track_id={
-                        track_id: set(keys_by_track[track_id])
+                        track_id: set(current_scan_keys_by_track[track_id])
                         for track_id in comp_track_ids
                     },
                     conflict_links=comp_links,
@@ -1139,6 +1189,60 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             used_det_keys=used_local_slots,
             ctx=score_context.local_ctx,
         )
+
+    @staticmethod
+    def _pruning_feasibility_validation_enabled() -> bool:
+        raw = os.getenv("TOMHT_DEBUG_VALIDATE_PRUNING_FEASIBILITY")
+        if raw is None:
+            return False
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _has_any_feasible_cluster_combination(
+        leaf_options: list[list[TrackHypothesisNode]],
+    ) -> bool:
+        """Return whether at least one cluster leaf-product combination is feasible."""
+        prepared = [
+            [(leaf, set(leaf.detection_history_keys)) for leaf in leaves]
+            for leaves in leaf_options
+        ]
+        for picked in product(*prepared):
+            used_keys: set[DetectionKey] = set()
+            feasible = True
+            for _, leaf_keys in picked:
+                if used_keys & leaf_keys:
+                    feasible = False
+                    break
+                used_keys |= leaf_keys
+            if feasible:
+                return True
+        return False
+
+    def _maybe_validate_pruning_feasibility(
+        self,
+        *,
+        stage: str,
+        ctx: ScanContext,
+    ) -> None:
+        """Debug-only guard: fail fast if any cluster is infeasible after pruning."""
+        if not self._pruning_feasibility_validation_enabled():
+            return
+        if not self.track_trees_by_track_id:
+            return
+
+        clusters = self._build_track_clusters(ctx)
+        for cluster in clusters:
+            leaf_options = self._cluster_leaf_options(cluster.track_ids)
+            if self._has_any_feasible_cluster_combination(leaf_options):
+                continue
+            dbg = self._infeasible_cluster_debug_summary(
+                cluster=cluster,
+                leaf_options=leaf_options,
+                ctx=ctx,
+            )
+            raise RuntimeError(
+                "Pruning feasibility check failed. " f"stage={stage}; {dbg}"
+            )
 
     @staticmethod
     def _projected_combination_count(
@@ -1372,6 +1476,45 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 nscan_disagreement_total=0,
             ),
         )
+
+    @staticmethod
+    def _supported_leaf_ids_by_track_from_rebuilt_globals(
+        snapshot: ClusterRebuildSnapshot,
+    ) -> dict[int, set[int]]:
+        """Collect cluster leaf IDs that appear in at least one retained rebuilt global."""
+        supported_by_track_id: dict[int, set[int]] = {
+            track_id: set() for track_id in snapshot.track_ids
+        }
+        for rebuilt_global in snapshot.rebuilt_globals:
+            for track_id, leaf_node in rebuilt_global.leaf_nodes_by_track_id.items():
+                if track_id in supported_by_track_id:
+                    supported_by_track_id[track_id].add(int(leaf_node.node_id))
+        return supported_by_track_id
+
+    def _apply_post_solve_supported_leaf_pruning(
+        self,
+        cluster_snapshots: list[ClusterRebuildSnapshot],
+    ) -> None:
+        """Prune each cluster tree to leaves supported by retained rebuilt globals."""
+        for snapshot in cluster_snapshots:
+            # Keep k=0 behavior non-destructive for compatibility/debug edge cases.
+            if not snapshot.rebuilt_globals:
+                continue
+
+            supported_by_track_id = (
+                self._supported_leaf_ids_by_track_from_rebuilt_globals(snapshot)
+            )
+            for track_id in snapshot.track_ids:
+                tree = self.track_trees_by_track_id.get(track_id)
+                if tree is None:
+                    continue
+                supported_leaf_ids = supported_by_track_id.get(track_id, set())
+                if not supported_leaf_ids:
+                    raise RuntimeError(
+                        "Post-solve supported-leaf pruning found no retained leaves "
+                        f"for cluster={snapshot.cluster_id} track_id={track_id}."
+                    )
+                tree.active_leaf_node_ids = set(supported_leaf_ids)
 
     @staticmethod
     def _merge_cluster_map_globals(

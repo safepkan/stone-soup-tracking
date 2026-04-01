@@ -1,5 +1,22 @@
 # TO-MHT Next Steps
 
+## Update (2026-04-01): local cap relaxed to pure safety-valve range
+
+Following the post-solve supported-leaf pruning refinement:
+
+- default `max_leaves_per_track_tree` was relaxed to `100` (from `8`)
+- local capping remains a pre-solve safety valve, not the primary pruning basis
+- added opt-in pruning-feasibility validation (`TOMHT_DEBUG_VALIDATE_PRUNING_FEASIBILITY=1`) to identify the first pruning stage that leaves a cluster infeasible
+- clustering now uses full active-leaf historical detection-key overlap so cluster decomposition matches the solver conflict criterion
+
+## Update (2026-04-01): post-solve supported-leaf pruning refinement
+
+A narrow pruning refinement was added on top of the committed Phase D rewrite:
+
+- after per-cluster top-K rebuild, each tree in that cluster now keeps only leaf nodes that appear in at least one retained rebuilt global for that cluster
+- local per-tree leaf capping (`max_leaves_per_track_tree`) remains in place only as a pre-solve safety valve
+- pruning remains cluster-local; no cross-cluster merge step was added for pruning
+
 ## Implementation status (2026-03-31)
 
 Phase D has now been implemented in code as the primary tracker architecture:
@@ -11,7 +28,7 @@ Phase D has now been implemented in code as the primary tracker architecture:
 - MAP-only N-scan tree pruning with disagreement statistics from rebuilt alternatives
 - simple `max_missed` leaf/tree lifecycle deletion
 - simple internal births from Step-2 residual detections and external starts as new single-node trees
-- practical per-tree active-leaf cap added (`max_leaves_per_track_tree`) to keep exhaustive-enumeration runtime bounded in longer scenario runs
+- practical per-tree active-leaf cap added (`max_leaves_per_track_tree`) as a pre-solve safety valve to keep exhaustive-enumeration runtime bounded in longer scenario runs
 
 ## Update (2026-04-01): narrow tractability controls tightened
 
