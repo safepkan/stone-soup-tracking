@@ -6,6 +6,15 @@ This document describes the tracker as it exists after the Phase D track-oriente
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
+## Update (2026-04-02): tracker readability-only cleanup
+
+Implemented in `mht/tomht_tracker.py` without behavior changes:
+
+- clearer internal section/subsection grouping aligned to the runtime pipeline,
+- tighter role-focused docstrings on helper methods,
+- small local naming/comment cleanups for readability,
+- removal of stale wording in one safety-valve comment.
+
 ---
 
 ## Bottom line

@@ -94,8 +94,8 @@ class TOMHTParams:
     # Local expansion / lifecycle controls.
     max_children_per_track: int = 5
     # Optional pre-solve per-tree frontier cap used only as a safety valve.
-    # TODO(phase-d lifecycle): review safe local cap semantics under overload
-    # decomposition; current value is intentionally conservative/high.
+    # The high default keeps this in a tractability guardrail role, not as the
+    # primary pruning mechanism.
     max_leaves_per_track_tree: int | None = 500
     # Base miss threshold used for post-N-scan whole-track termination.
     # Effective threshold uses an N-scan-aware floor (see helper below).
@@ -253,6 +253,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     8. Merge cluster MAP selections into full-scan MAP, then apply MAP-only
        N-scan tree pruning and whole-track miss-based lifecycle.
     9. Keep last-scan debug snapshots and return MAP output tracks.
+
+    Behavior notes for readability:
+    - Exact behavior: cluster feasibility checks and exclusivity constraints use
+      full detection-history keys on active leaves.
+    - Safety valves: pre-solve per-tree leaf capping and birth load guards.
+    - Approximation paths: overload cluster decomposition and optional narrow
+      historical-conflict relaxation.
+    - Inspection/debug retention: last-scan cluster snapshots and scan stats.
     """
 
     ASSOC_PAD = -1
@@ -595,12 +603,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         return (ts_key, len(vec_key), vec_key)
 
     def _sorted_detections(self, detections: Iterable[Detection]) -> list[Detection]:
+        """Return a deterministic list copy of scan detections."""
         det_list = list(detections)
         det_list.sort(key=self._det_sort_key)
         return det_list
 
     @staticmethod
     def _get_process_maxrss_mb() -> float:
+        """Return process peak RSS in MB with platform-normalized units."""
         ru = resource.getrusage(resource.RUSAGE_SELF)
         if sys.platform == "darwin":
             return float(ru.ru_maxrss) / (1024.0 * 1024.0)
@@ -610,6 +620,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _current_scan_det_indices_from_keys(
         keys: Iterable[DetectionKey], scan_index: int
     ) -> set[int]:
+        """Return detection indices from keys that belong to ``scan_index``."""
         return {det_idx for (key_scan, det_idx) in keys if key_scan == scan_index}
 
     # =========================================================================
@@ -617,11 +628,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # =========================================================================
 
     def _allocate_node_id(self) -> int:
+        """Allocate the next stable node ID in this tracker instance."""
         node_id = self._next_node_id
         self._next_node_id += 1
         return node_id
 
     def _register_node(self, node: TrackHypothesisNode) -> TrackHypothesisNode:
+        """Store one node in the persistent node table and return it."""
         self._nodes_by_id[node.node_id] = node
         return node
 
@@ -708,6 +721,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         hits: int,
         root_source: str,
     ) -> TrackHypothesisNode:
+        """Create a root node wrapper for births/external starts."""
         return self._create_track_hypothesis_node(
             track_id=track_id,
             parent=None,
@@ -788,12 +802,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> list[LocalChildCandidate]:
         """Build retained local continuation candidates for one active leaf."""
         track = reconstruct_track_from_leaf_node(leaf_node)
-        multi = self.hypothesiser.hypothesise(track, ctx.detections, ctx.timestamp)
-        singles = list(multi)
+        multi_hypotheses = self.hypothesiser.hypothesise(
+            track, ctx.detections, ctx.timestamp
+        )
+        hypotheses = list(multi_hypotheses)
 
         hyp_scores = self.scoring_model.score_track_hypotheses(
             track=track,
-            hypotheses=singles,
+            hypotheses=hypotheses,
             ctx=ctx,
         )
 
@@ -819,9 +835,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 return (p, -1)
             return (p, -ctx.det_index_by_obj.get(id(hyp.measurement), 10**9))
 
-        singles_sorted = sorted(singles, key=_sort_key, reverse=True)
-        kept = singles_sorted[: self.params.max_children_per_track]
-        miss = next((h for h in singles_sorted if not h), None)
+        sorted_hypotheses = sorted(hypotheses, key=_sort_key, reverse=True)
+        kept = sorted_hypotheses[: self.params.max_children_per_track]
+        miss = next((h for h in sorted_hypotheses if not h), None)
         if miss is not None and miss not in kept:
             kept.append(miss)
 
@@ -890,6 +906,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # =========================================================================
 
     def _active_leaf_nodes(self) -> list[TrackHypothesisNode]:
+        """Return all active leaves across all persistent track trees."""
         out: list[TrackHypothesisNode] = []
         for tree in self.track_trees_by_track_id.values():
             out.extend(
@@ -904,6 +921,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         scan_index: int,
         det_index_by_obj: dict[int, int],
     ) -> DetectionKey | None:
+        """Best-effort extraction of a current-scan used detection key for a birth."""
         try:
             last = tr.states[-1]
             hyp = getattr(last, "hypothesis", None)
@@ -918,6 +936,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             return None
 
     def _birth_is_sane(self, tr: Track) -> bool:
+        """Apply simple numeric sanity checks before accepting an internal birth."""
         st = tr.states[-1]
         sv = np.asarray(st.state_vector, dtype=float)
 
@@ -943,6 +962,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         return True
 
     def _residual_detection_indices_after_step2(self, ctx: ScanContext) -> list[int]:
+        """Return current-scan detection indices unused after local expansion."""
         used_current_scan_det_indices: set[int] = set()
         for leaf in self._active_leaf_nodes():
             used_current_scan_det_indices |= self._current_scan_det_indices_from_keys(
@@ -1011,36 +1031,39 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         self._last_unused_detections = []
 
-        born = list(
+        initiated_tracks = list(
             self.initiator.initiate(OrderedSet(residual_detections), ctx.timestamp)
         )
-        birth_tracks_created = len(born)
+        birth_tracks_created = len(initiated_tracks)
 
         # Keep this phase intentionally simple: numeric sanity + fixed cap.
-        born = [tr for tr in born if self._birth_is_sane(tr)]
-        if len(born) > self.params.max_births_per_scan:
-            born = born[: self.params.max_births_per_scan]
-        birth_tracks_kept = len(born)
+        kept_birth_tracks = [
+            track for track in initiated_tracks if self._birth_is_sane(track)
+        ]
+        if len(kept_birth_tracks) > self.params.max_births_per_scan:
+            kept_birth_tracks = kept_birth_tracks[: self.params.max_births_per_scan]
+        birth_tracks_kept = len(kept_birth_tracks)
 
-        if self.params.debug_display_births and born:
+        if self.params.debug_display_births and kept_birth_tracks:
             print(f"\nInternal births at {ctx.timestamp}: kept={birth_tracks_kept}")
-            for tr in born[: self.params.debug_births_max]:
-                state = tr.states[-1].state_vector
+            for track in kept_birth_tracks[: self.params.debug_births_max]:
+                # Debug-only display retained for quick replay inspection.
+                state = track.states[-1].state_vector
                 print(f"  birth_state={self._fmt_state_xyvxvy(state)}")
 
-        for tr in born:
+        for birth_track in kept_birth_tracks:
             track_id = self._next_track_id
             self._next_track_id += 1
-            state = tr.states[-1]
+            state = birth_track.states[-1]
             used_key = self._birth_used_key(
-                tr,
+                birth_track,
                 scan_index=ctx.scan_index,
                 det_index_by_obj=ctx.det_index_by_obj,
             )
-            age = max(len(tr), 1)
+            age = max(len(birth_track), 1)
             hits = 1 if used_key is not None else 0
             root_log_delta = self.scoring_model.score_birth(
-                birth_track=tr,
+                birth_track=birth_track,
                 used_det_key=(None if used_key is None else int(used_key[1])),
                 ctx=ctx,
             )
@@ -1076,11 +1099,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # Per-Scan Clustering + Global Rebuild
     # =========================================================================
 
+    # --- Cluster graph construction from current tree frontiers ---
+
     def _current_scan_candidate_keys_for_tree(
         self,
         tree: TrackTree,
         scan_index: int,
     ) -> set[DetectionKey]:
+        """Return current-scan detection keys present in one tree frontier."""
         keys: set[DetectionKey] = set()
         for leaf_id in tree.active_leaf_node_ids:
             leaf = self._nodes_by_id[leaf_id]
@@ -1223,6 +1249,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             local_slot_by_global_det_index=local_slot_by_global_det_index,
         )
 
+    # --- Solver guardrails / debug-only feasibility checks ---
+
     def _score_unused_cluster_current_scan_term(
         self,
         *,
@@ -1249,6 +1277,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     @staticmethod
     def _pruning_feasibility_validation_enabled() -> bool:
+        """Return whether debug-only pruning feasibility validation is enabled."""
         raw = os.getenv("TOMHT_DEBUG_VALIDATE_PRUNING_FEASIBILITY")
         if raw is None:
             return False
@@ -1305,6 +1334,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _projected_combination_count(
         leaf_options: list[list[TrackHypothesisNode]],
     ) -> int:
+        """Return projected Cartesian product size for one leaf-option set."""
         projected = 1
         for leaves in leaf_options:
             projected *= len(leaves)
@@ -1332,9 +1362,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         left_track_id: int,
         right_track_id: int,
     ) -> tuple[int, int]:
+        """Return canonical undirected edge ordering for track-id pairs."""
         if left_track_id <= right_track_id:
             return (left_track_id, right_track_id)
         return (right_track_id, left_track_id)
+
+    # --- Approximation path: overload split before exact subcluster rebuild ---
 
     @staticmethod
     def _connected_components_from_pairs(
@@ -1532,6 +1565,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         scan_index: int,
         summary: _OverloadSplitSummary,
     ) -> None:
+        """Print one compact overload-split instrumentation line."""
         removed_edges_str = (
             "["
             + ", ".join(
@@ -1560,10 +1594,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             f"projected_after={projected_after}"
         )
 
+    # --- Exact cluster rebuild helpers ---
+
     def _cluster_leaf_options(
         self,
         track_ids: tuple[int, ...],
     ) -> list[list[TrackHypothesisNode]]:
+        """Materialize sorted active-leaf options for each track in a cluster."""
         out: list[list[TrackHypothesisNode]] = []
         for track_id in track_ids:
             tree = self.track_trees_by_track_id[track_id]
@@ -1670,6 +1707,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         *,
         max_items: int = 6,
     ) -> str:
+        """Return compact stable formatting for detection-key debug samples."""
         if not keys:
             return "[]"
         ordered = sorted(keys)
@@ -1921,6 +1959,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         clusters: list[_ClusterWorkItem],
         ctx: ScanContext,
     ) -> tuple[list[ClusterRebuildSnapshot], RebuildStats]:
+        """Rebuild all clusters and aggregate per-scan rebuild instrumentation."""
         if not clusters:
             return [], RebuildStats()
 
@@ -1973,6 +2012,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 ),
             ),
         )
+
+    # --- Post-solve pruning + full-scan MAP merge ---
 
     @staticmethod
     def _supported_leaf_ids_by_track_from_rebuilt_globals(
@@ -2210,8 +2251,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             updated_snapshots,
         )
 
+    # =========================================================================
+    # Post-N-Scan Whole-Track Miss Lifecycle
+    # =========================================================================
+
     @staticmethod
     def _normalized_track_miss_termination_mode(mode_raw: str) -> str:
+        """Normalize and validate track-level miss termination mode."""
         mode = str(mode_raw).strip().lower()
         valid = {"all_active_leaves", "map_leaf", "global_k_leaves"}
         if mode not in valid:
@@ -2467,6 +2513,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         nscan_tracks_committed: int,
         birth_stats: BirthStats,
     ) -> None:
+        """Build/store per-scan stats and emit optional debug displays."""
         self._maybe_display_scan_debug_output(ctx)
         scan_stats = self._build_scan_stats(
             ctx=ctx,
@@ -2487,6 +2534,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._maybe_display_scan_stats(timestamp=ctx.timestamp, scan_stats=scan_stats)
 
     def _maybe_display_scan_debug_output(self, ctx: ScanContext) -> None:
+        """Emit optional per-scan debug displays before stats logging."""
         if self.params.debug_display_detections:
             print(f"\nDetections at timestamp {ctx.timestamp}:")
             for det in ctx.detections:
@@ -2497,6 +2545,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             self._display_cluster_rebuilds()
 
     def _display_cluster_rebuilds(self) -> None:
+        """Print retained rebuilt globals for last scan (inspection only)."""
         for snapshot in self._last_cluster_snapshots:
             split_from = snapshot.overload_split_origin_cluster_id
             split_tag = "" if split_from is None else f" split_from={split_from}"
@@ -2517,6 +2566,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         detections: list[Detection],
         scan_index: int,
     ) -> tuple[int, int, int, dict[int, int], float]:
+        """Compute lightweight MAP-level counters for scan stats reporting."""
         map_snapshot = self.get_map_hypothesis_snapshot()
         map_tracks = 0
         map_used = 0
@@ -2562,6 +2612,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         nscan_tracks_committed: int,
         birth_stats: BirthStats,
     ) -> ScanStats:
+        """Assemble one immutable per-scan ScanStats record."""
         map_tracks, map_used, map_unused, map_miss_hist, map_mean_hit_rate = (
             self._map_stats_for_current_map(ctx.detections, ctx.scan_index)
         )
@@ -2602,6 +2653,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         timestamp: datetime.datetime,
         scan_stats: ScanStats,
     ) -> None:
+        """Emit optional human-readable scan stats summary output."""
         if not self.params.debug_display_scan_stats:
             return
         nscan_snapshot = self.get_n_scan_commitment_snapshot()
@@ -2614,6 +2666,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     @staticmethod
     def _fmt_state_xyvxvy(state_vector) -> str:
+        """Format `[x,vx,y,vy]` state vectors for compact debug output."""
         sv = np.asarray(state_vector, dtype=float)
         x = float(sv[0, 0])
         vx = float(sv[1, 0])
