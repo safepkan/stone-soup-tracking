@@ -1,361 +1,345 @@
 # TO-MHT Current State
 
-## Update (2026-04-02): post-N-scan whole-track miss lifecycle + higher local leaf cap
+## Snapshot date
 
-Lifecycle handling was narrowed and moved to a safer point in the scan flow:
+This document describes the tracker as it exists after the Phase D track-oriented transition and the subsequent replay-hardening passes completed on **2026-04-02**.
 
-- per-branch miss-based pruning during local expansion was removed
-- miss-based termination is now whole-track only, applied after N-scan pruning
-- whole-track miss criterion is configurable via
-  `track_miss_termination_mode`:
-  - `all_active_leaves`
-  - `map_leaf` (default)
-  - `global_k_leaves`
-- miss threshold uses `max(max_missed, ns_scan_window + 1)`
-- default local pre-solve leaf cap was raised to `max_leaves_per_track_tree=500`
-  (from `100`) as a safety-valve increase
-
-## Update (2026-04-02): runtime status snapshot
-
-On the full CPI replay (through end-of-file), scan time is currently very
-heavy-tailed: median `~31 ms`, p90 `~714 ms`, p95 `~1191 ms`, max `~4576 ms`.
-The long scans are concentrated where clusters merge and still yield large
-`comb_eval`/`comb_feas` counts (even with overload splitting + historical
-relaxation), so runtime optimization of those high-combinatoric scans remains a
-clear next focus area.
-
-## Update (2026-04-02): miss-budget floor tied to N-scan window (superseded)
-
-A narrow lifecycle stopgap was added in local expansion:
-
-- effective miss cap is now `max(max_missed, ns_scan_window + 1)`
-- this keeps miss-tolerated alternatives alive at least through the current
-  N-scan horizon and avoids dropping branches before horizon-based resolution
-- intent is pragmatic robustness; broader lifecycle/termination redesign is
-  still pending
-
-## Update (2026-04-01): default N-scan window increased
-
-The default MAP-only N-scan window was increased:
-
-- `TOMHTParams.ns_scan_window`: `3` -> `6`
-
-## Update (2026-04-01): narrow historical-conflict relaxation safety-net
-
-To handle approximation-induced infeasible reunited clusters after overload
-splitting, a narrow historical-relaxation pass was added:
-
-- exact feasibility is attempted first (unchanged behavior for feasible clusters)
-- only when exact feasibility is zero, the tracker computes relaxed keys as:
-  - keys forced in every active leaf of a track
-  - restricted to keys already present in that track root history and at/older
-    than the current N-scan boundary
-  - relaxed only if such a key is shared by more than one track in the cluster
-- feasibility is rerun while ignoring overlaps on those relaxed keys only
-- all other overlaps remain strictly enforced
-- compact runtime logging now emits `HIST_RELAX ...` when this path triggers
-- per-scan stats now include:
-  - `hist_relax_attempts`
-  - `hist_relax_ok`
-  - `hist_relax_keys`
-
-## Update (2026-04-01): narrow overload cluster decomposition under projected-combination pressure
-
-A focused overload-mitigation approximation was added without changing the core
-track-oriented architecture:
-
-- exact conflict graph build is unchanged (full-history detection-key overlap)
-- exact exhaustive solve is unchanged for manageable clusters
-- when a cluster's projected Cartesian leaf-product exceeds
-  `overload_split_projected_combination_threshold` (default `500000`), the
-  tracker now iteratively removes the weakest conflict edge and recomputes
-  connected components
-- weakest edge criterion is pure count of shared full-history detection keys
-  (`len(shared_history_keys)`), with deterministic tie-break by `(left_track_id,right_track_id)`
-- resulting subclusters are then solved exactly and independently
-- this pass is controlled by:
-  - `overload_split_enabled` (default `True`)
-  - `overload_split_projected_combination_threshold` (default `500000`)
-  - `overload_split_max_edge_removals_per_cluster` (default `None`)
-- split instrumentation is emitted per affected original cluster as
-  `OVERLOAD_SPLIT ...` log lines, and per-scan stats now include
-  `split_clusters` and `split_ops`
-
-## Update (2026-04-01): local cap relaxed to pure safety-valve range
-
-With post-solve supported-leaf pruning now in place, the default local pre-solve
-leaf cap was relaxed:
-
-- `max_leaves_per_track_tree` default is now `100` (up from `8`)
-- intent remains a pre-solve tractability/safety valve, not primary pruning logic
-- added opt-in pruning-feasibility validation (`TOMHT_DEBUG_VALIDATE_PRUNING_FEASIBILITY=1`) that checks cluster feasibility after local pruning, post-solve supported-leaf pruning, and post-N-scan pruning
-- cluster formation now uses full active-leaf historical detection-key overlap (not current-scan-only overlap) so decomposition matches the solver feasibility criterion
-
-## Update (2026-04-01): post-solve supported-leaf pruning refinement
-
-A narrow pruning refinement was added:
-
-- after each cluster rebuild retains top-K globals, each cluster tree now keeps only leaf nodes that appear in at least one retained rebuilt global for that cluster
-- per-tree local leaf capping (`max_leaves_per_track_tree`) is now treated as a pre-solve safety/tractability valve, not the primary pruning semantics
-- pruning remains cluster-local and driven by retained per-cluster rebuilt globals
-
-## Update (2026-04-01): narrow tractability guardrails pass
-
-A narrow tractability pass was added on top of the Phase D architecture:
-
-- default `max_leaves_per_track_tree` was reduced (`8`, down from `50`)
-- internal births now have explicit load guards (`birth_skip_if_active_trees_above`, `birth_skip_if_active_leaves_above`) and are skipped when frontier size is already high
-- cluster-local unused-detection scoring context is now built once per cluster and reused for all feasible combinations
-- optional hard projected-combination guardrail was added (`max_projected_cluster_combinations`) and raises explicitly if exceeded
-
-## Update (2026-03-31): Phase D architecture in place
-
-The tracker has now been moved to the track-oriented Phase D architecture:
-
-- persistent explicit track trees are now the primary scan-to-scan state
-- globals are rebuilt per scan/per cluster from current active leaves
-- previous scan global lists are no longer the persistent search frontier
-- MAP-only N-scan pruning is applied directly on explicit trees
-- measurement-exclusivity clustering is explicit and recomputed each scan
-- internal births and external starts are represented as new trees under the simplified Phase D assumptions
-- an explicit per-tree frontier cap (`max_leaves_per_track_tree`) is now used to keep the first exhaustive solver implementation tractable on longer runs
-
-This document is the **current-state snapshot for the first ISAC handoff release**.
-
-It describes the state of the code that was presented in the workshop and handed off into the ISAC sandbox area for initial integration work. It is intentionally a **snapshot document**, not a roadmap and not a full design history.
-
-## Bottom line
-
-The current implementation is:
-
-- usable enough for first handoff and initial integration,
-- structurally much improved compared with the earlier copied-`Track` / history-tail version,
-- Stone Soup-facing at the public API boundary,
-- explicit in its node-based track-hypothesis representation,
-- but **not yet a true track-oriented TO-MHT** in the stricter sense described in the workshop.
-
-The key remaining architectural gap is:
-
-- the tracker still carries an explicit **current frontier of global hypotheses** from one update to the next,
-- rather than treating track trees / track hypotheses as the main persistent state and rebuilding globals from the current track set at each scan.
-
-That distinction is now understood clearly and is expected to drive the next architectural phase.
+It is a **current-state snapshot**, not a roadmap and not a full design history.
 
 ---
 
-## What is solid in the current handoff release
+## Bottom line
 
-### 1. Public API and integration boundary
+The tracker is now a **true track-oriented TO-MHT implementation** in the practical sense used in this codebase:
 
-The intended public tracker surface is now clear and usable for integration:
+- persistent state is explicit `TrackTree` objects and their active leaves,
+- globals are rebuilt per cluster on every scan from current leaves,
+- the previous scan's explicit global list is **not** the persistent search frontier,
+- MAP-only N-scan pruning operates directly on explicit trees,
+- and current output tracks are reconstructed from retained leaf-node lineage.
+
+This is stated both in the tracker module header and in the public tracker class docstring. The code now treats track trees as the primary scan-to-scan state, with rebuilt globals retained only as last-scan inspection/debug artifacts.
+
+The current implementation is therefore:
+
+- structurally aligned with the intended track-oriented TO-MHT direction,
+- usable for replay-based experimentation and continued integration work,
+- reasonably robust on recorded replay through end-of-file,
+- but still **performance-limited** in large merged-cluster situations and still reliant on a few explicit approximation/safety-net mechanisms.
+
+---
+
+## Public API and integration boundary
+
+The intended operational public surface remains:
 
 - `update_tracker(time, detections) -> (time, tracks)`
 - `tracks`
 - `add_external_starts(time, starts)`
 - `get_unused_detections()`
+
+The tracker also exposes read-only inspection helpers such as:
+
 - `get_map_hypothesis_snapshot()`
 - `get_map_output_tracks()`
 - `get_n_scan_commitment_snapshot()`
-- `get_tomht_track_id(track)`
+- `get_last_cluster_snapshots()`
+- `get_track_tree_snapshot()`
+- `print_summary_stats()`
 
-The external interface is Stone Soup-oriented:
+The external interface remains Stone Soup-oriented:
 
-- detections are Stone Soup `Detection`
-- output tracks are Stone Soup `Track`
-- hypothesiser and updater are Stone Soup-facing
-- the tracker follows Stone Soup tracker usage patterns closely enough for initial integration work
-
-### 2. Explicit node-based track hypotheses
-
-The internal representation now has an explicit track-hypothesis node model:
-
-- `TrackHypothesisNode` is the canonical internal branching unit
-- each node has:
-  - stable `track_id`
-  - stable `node_id`
-  - same-track `parent`
-  - `scan_index` / `timestamp`
-  - per-step state payload
-  - association identity / used detection key
-  - per-step score contribution
-  - cached counters / provenance fields
-
-This is a substantial structural improvement over the earlier design where global hypotheses carried copied `Track` objects more directly.
-
-### 3. Globals reference leaf nodes
-
-`GlobalHypothesis` now stores:
-
-- `track_id -> leaf node`
-- cumulative `log_weight`
-
-So:
-
-- ancestry is structural,
-- branch identity is node-based,
-- dedupe is structural,
-- and current MAP output can be reconstructed from leaf-node lineage.
-
-### 4. Explicit ancestor-based N-scan commitment
-
-N-scan commitment is now explicit and per-track:
-
-- commitment is evaluated after global pruning
-- boundary is `b = k - N`
-- commitment is based on exact ancestor-node identity at that boundary
-- commitment bookkeeping is inspectable through a read-only snapshot helper
-
-This is a real correction relative to the earlier history-tail approximation.
-
-### 5. External starts are supported
-
-The tracker supports externally confirmed starts:
-
-- `add_external_starts(time, starts)` inserts starts after the corresponding `update_tracker(...)`
-- starts enter the same node-based structural system as other track hypotheses
-- this is the most relevant near-term birth/start path for the ISAC use case
-
-### 6. Replay integration and basic validation exist
-
-The tracker has already been exercised through:
-
-- simple synthetic scenarios,
-- local replay integration through a Stone Soup adapter,
-- output comparison / repeatability checks,
-- debug instrumentation,
-- memory monitoring.
-
-A conservative post-commit ancestry cleanup pass was added and materially improved retained-node growth and replay memory behavior, while preserving logical outputs.
+- detections are Stone Soup `Detection`,
+- output tracks are Stone Soup `Track`,
+- hypothesiser and updater remain the Stone Soup boundary objects,
+- output `Track` metadata is now an explicit TOMHT-owned projection from the current leaf node rather than arbitrary propagated metadata.
 
 ---
 
-## What is still transitional or conceptually awkward
+## Core architecture
 
-### 1. Not yet a true track-oriented TO-MHT update
+### Persistent state
 
-This is now the main architectural caveat.
+Persistent scan-to-scan state now consists primarily of:
 
-The implementation has moved toward TO-MHT structurally, but the update mechanics still work by carrying an explicit current set of global hypotheses forward from scan to scan and expanding those.
+- explicit `TrackTree` objects keyed by logical `track_id`,
+- persistent `TrackHypothesisNode` objects linked by same-track parent/child structure,
+- each tree's current root and active leaf set,
+- N-scan commitment bookkeeping,
+- and minimal long-lived stats/counters.
 
-So the current tracker is best described as:
+`TrackHypothesisNode` is the canonical per-step hypothesis unit. Nodes are mutable in this phase to support direct child-link maintenance through `child_node_ids`. Each node carries:
 
-- **node-based and much closer to a proper TO-MHT structurally**
-- but still retaining some **global-hypothesis-oriented mechanics**
+- stable `track_id`
+- stable `node_id`
+- same-track `parent`
+- `scan_index` / `timestamp`
+- state payload
+- used detection key / association label
+- local and accumulated score
+- cached age / hit / miss counters
+- root provenance fields such as `root_source` and `birth_scan_index`.
 
-More specifically:
+`TrackTree` is now explicit and persistent, with:
 
-- globals are still part of the persistent scan-to-scan state,
-- expansion is still phrased as expansion of current globals,
-- structural dedupe is still needed because different parent globals can converge to the same successor leaf configuration.
+- `track_id`
+- `root_node_id`
+- `active_leaf_node_ids`
+- `root_source`.
 
-This is no longer viewed as the desired long-term architecture.
+### Per-scan transient / last-scan state
 
-### 2. Track trees are still implicit
+Per scan, the tracker rebuilds:
 
-There is currently no explicit `TrackTree` structure.
+- clusters from current active-leaf history overlap,
+- cluster-local rebuilt globals,
+- cluster MAP selections,
+- overload-split summaries when triggered,
+- and scan statistics.
 
-Instead:
-
-- same-track ancestry is represented by `parent` links on nodes,
-- the tracker implicitly treats those same-track chains as track trees / families,
-- but there is no explicit root/leaf container for one logical track.
-
-That was acceptable for the first handoff, but is expected to change in the next architectural phase.
-
-### 3. Stone Soup `Track` reconstruction is still a compatibility boundary
-
-Temporary or reconstructed Stone Soup `Track` objects are still used for:
-
-- hypothesiser compatibility,
-- updater compatibility,
-- output generation,
-- some inspection/debug paths.
-
-This is acceptable for now, but it is still an adapter boundary rather than the clean end-state.
-
-### 4. Scoring is still pragmatic
-
-Current scoring is still based on pragmatic assumptions:
-
-- extracting probability-like information from hypothesiser outputs,
-- using a beta-ratio style scoring model,
-- heuristic handling for births / unused detections.
-
-This is considered acceptable for the handoff release, but not a settled final scoring design.
-
-### 5. Internal births remain secondary and somewhat provisional
-
-Internal births still exist and function, but:
-
-- they are not the important near-term path for ISAC,
-- they are not the main focus of the architecture,
-- their treatment is more heuristic than principled.
-
-The external-start path is the more important operational path for the current integration story.
-
-### 6. Lifecycle / deletion is not yet properly designed
-
-Lifecycle handling remains incomplete:
-
-- `max_missed` now feeds a whole-track miss termination threshold applied
-  post-N-scan (with `max(max_missed, ns_scan_window + 1)` floor),
-- termination scope is configurable (`all_active_leaves` / `map_leaf` /
-  `global_k_leaves`),
-- but there is no clean long-term deletion/lifecycle model yet,
-- and multi-sensor miss handling remains a future design topic.
-
-### 7. Physical cleanup is conservative only
-
-The current ancestry cleanup pass is narrow and conservative:
-
-- it reclaims unreachable node-registry entries,
-- but does not implement committed-prefix compaction,
-- does not materialize committed history separately,
-- and does not yet represent a broader node lifecycle policy.
+These rebuilt artifacts are retained only as **last-scan inspection/debug snapshots**, not as the persistent search frontier. The compatibility slot `self.global_hypotheses` now contains only the latest merged MAP global for older inspection paths, not a scan-to-scan beam frontier.
 
 ---
 
-## What this first handoff should be understood as
+## Current per-scan pipeline
 
-This release should be understood as:
+The tracker class docstring now describes the pipeline as:
 
-- a **stable-enough integration starting point**
-- with a **clear public API**
-- and a **much cleaner internal representation than before**
+1. sort detections deterministically,
+2. expand active leaves in every persistent tree,
+3. drop empty trees,
+4. optionally create internal birth trees from detections unused by the union of surviving active leaves,
+5. recompute clusters from current trees,
+6. rebuild feasible globals per cluster by exhaustive enumeration, with optional overload splitting first,
+7. post-solve prune each cluster tree frontier to leaves supported by retained rebuilt globals,
+8. merge cluster MAP selections into full-scan MAP, apply MAP-only N-scan pruning, then apply whole-track miss lifecycle,
+9. keep last-scan debug snapshots and return MAP output tracks.
 
-But it should **not** be understood as:
-
-- the final tracker architecture,
-- the final TO-MHT update mechanics,
-- the final scoring design,
-- or the final lifecycle / performance story.
-
-The purpose of this handoff is:
-
-- let the ISAC side start wiring the tracker into their pipeline,
-- validate assumptions and expose integration issues early,
-- and give both sides a concrete implementation to work from while the architecture continues to evolve.
+This is the main runtime story the code now implements.
 
 ---
 
-## Current design interpretation
+## Current rebuild / pruning / commitment behavior
 
-The clearest current interpretation is:
+### Local expansion
 
-- **conceptually**, proper TO-MHT should persist track trees / track hypotheses and rebuild globals from the current surviving track set at each scan,
-- **currently**, the implementation has adopted explicit node-based track hypotheses and explicit ancestor-based N-scan commitment,
-- but still evolves an explicit scan-to-scan frontier of global hypotheses.
+Local expansion is still Stone Soup-boundary-driven:
 
-That is now the main architectural distinction to keep in mind when discussing the current handoff release.
+- for each active leaf, reconstruct a compatibility `Track`,
+- call the hypothesiser,
+- score local hypotheses through the scoring model,
+- create child nodes for kept hypotheses,
+- always keep a miss hypothesis if the hypothesiser returned one,
+- then apply an optional per-tree local leaf cap.
+
+### Local leaf cap
+
+`max_leaves_per_track_tree` is now explicitly treated as a **pre-solve safety valve**, not the main pruning semantics. Its default has been raised to `500` to keep it in that “safety-valve only” role.
+
+### Clustering
+
+Clusters are built from **full active-leaf historical detection-key overlap**, not current-scan-only overlap. This was an important correctness fix: clustering and solver feasibility now use consistent full-history detection-key semantics. Detection keys use the format `(scan_index, det_index)`.
+
+### Global rebuild
+
+For each cluster, the tracker currently uses:
+
+- exhaustive Cartesian enumeration across active leaf sets,
+- full-history exclusivity checks,
+- an explicit per-combination cluster-local unused-detection term,
+- streaming top-K retention of rebuilt globals,
+- and cluster-local MAP extraction.
+
+`max_global_hypotheses` is now only a **retained rebuilt-global cap for debug/snapshot storage**, not a persistent beam width carried scan-to-scan.
+
+### Post-solve supported-leaf pruning
+
+After each cluster rebuild, each non-overload-split cluster tree keeps only leaves that appear in at least one retained rebuilt global for that cluster. This is now the main pruning mechanism that keeps active leaf frontiers globally informed.
+
+### MAP-only N-scan pruning
+
+N-scan pruning remains MAP-only:
+
+- boundary is `b = scan_index - ns_scan_window`,
+- the child of the current root on the MAP path is promoted to be the new root,
+- siblings are removed structurally,
+- and disagreement statistics are computed against alternative rebuilt globals.
+
+The default N-scan window is now `6`.
+
+### Whole-track miss lifecycle
+
+Per-branch miss-based pruning during local expansion has been removed.
+
+Miss handling now happens as **whole-track termination after N-scan pruning**, using:
+
+- configurable `track_miss_termination_mode`
+  - `all_active_leaves`
+  - `map_leaf` (default)
+  - `global_k_leaves`
+- threshold `max(max_missed, ns_scan_window + 1)`
+
+This was a significant cleanup relative to earlier branch-local miss handling.
 
 ---
 
-## Immediate implications for the next phase
+## Current approximation / safety-net mechanisms
 
-The next architectural phase is therefore expected to focus on:
+The tracker now contains several explicit approximation/safety-net mechanisms that are part of the current operational semantics.
 
-- explicit track trees,
-- clearer separation between persistent and transient state,
-- rebuilding globals from current track hypotheses instead of carrying old globals forward directly,
-- cleaner pruning/cluster/solver structure,
-- and preserving the current public API where practical.
+### 1. Overload cluster splitting
+
+When a cluster's projected Cartesian combinations exceed `overload_split_projected_combination_threshold` (default `500000`), the tracker can approximately decompose that cluster by:
+
+- building the exact conflict graph first,
+- iteratively severing the weakest conflict edge,
+- recomputing connected components,
+- and solving resulting subclusters independently.
+
+Weakest-edge criterion is the pure count of shared **full-history** detection keys, with deterministic tie-break. This approximation is instrumented through `OVERLOAD_SPLIT ...` logging and per-scan split counters.
+
+### 2. Historical-conflict relaxation
+
+If a cluster is still exact-infeasible, the tracker may apply a **narrow historical-conflict relaxation**:
+
+- only keys forced in every active leaf of a track,
+- only keys also present in that track's root history,
+- only keys at or older than the current N-scan boundary,
+- and only when shared by more than one track in the cluster.
+
+Feasibility is then retried while ignoring overlaps on those specific historical keys only. All other exclusivity remains strict. This path is instrumented through `HIST_RELAX ...` logging and per-scan counters.
+
+### 3. Internal birth load guards
+
+Internal births remain intentionally simple and secondary. They are still based on the constructor-supplied initiator and Step-2 residual detections, but births can be skipped once active tree or leaf counts exceed configured thresholds.
+
+These mechanisms are pragmatic, not final. They should be understood as explicit robustness/tractability measures for current replay use, not a final principled solution to large-cluster or extended-target behavior.
+
+---
+
+## Scoring state
+
+Scoring remains based on the default beta-ratio-style model in `tomht_scoring.py` unless an explicit alternative scoring model is supplied.
+
+Current default behavior:
+
+- scores local track hypotheses using PDA-style β-ratio approximations,
+- scores unused detections through a clutter-density-derived per-unused term,
+- applies a fixed birth penalty for births,
+- logs scoring diagnostics at tracker construction time.
+
+This scoring is still best understood as **pragmatic and serviceable**, not final.
+
+---
+
+## Output / observability
+
+Output tracks are reconstructed from leaf-node lineage through `reconstruct_track_from_leaf_node(...)`.
+
+Returned `Track` metadata is now an explicit projection from the current leaf node, including:
+
+- stable logical `track_id`
+- `node_id`
+- `age`
+- `hits`
+- `missed_count`
+- `last_det_key`
+- `last_det_hit`
+- `root_source`
+- `birth_scan_index`.
+
+Per-scan and summary instrumentation now reports:
+
+- active trees / leaves
+- cluster counts
+- evaluated / feasible combinations
+- rebuilt globals stored
+- overload split counters
+- historical relaxation counters
+- N-scan commitment counts
+- birth statistics
+- MAP track usage
+- scan wall time
+- memory / node counts.
+
+This instrumentation has been important for replay diagnosis and is now part of the tracker’s practical observability story.
+
+---
+
+## Replay/runtime status
+
+The current code can now complete the full recorded replay to end-of-file, which was the immediate near-term robustness goal. The remaining issue is no longer correctness instability, but runtime concentration in high-combinatoric merged-cluster scans.
+
+Current runtime snapshot from the existing `CURRENT_STATE` notes:
+
+- median scan time: ~31 ms
+- p90: ~714 ms
+- p95: ~1191 ms
+- max: ~4576 ms
+
+The long scans are concentrated where clusters merge and still produce large `comb_eval` / `comb_feas` counts even after overload splitting and historical relaxation.
+
+So the tracker is now in a state that is:
+
+- robust enough for replay-based experimentation,
+- producing reasonable output on the recorded dataset checkpoint,
+- but still clearly in need of runtime optimization for heavy merged-cluster scans.
+
+---
+
+## What is solid now
+
+The following now look solid enough to treat as the current base architecture:
+
+- explicit `TrackTree` + `TrackHypothesisNode` persistent state,
+- scan-to-scan persistence through trees rather than globals,
+- full-history `(scan_index, det_index)` detection-key semantics,
+- per-scan rebuilt cluster globals,
+- post-solve supported-leaf pruning,
+- MAP-only N-scan pruning directly on trees,
+- whole-track post-N-scan miss lifecycle,
+- Stone Soup boundary compatibility,
+- replay integration and end-to-end recorded replay completion.
+
+---
+
+## What remains provisional / future-work territory
+
+The following are still provisional or explicitly not the final word:
+
+### 1. Runtime / solver story
+The current rebuild step is still exhaustive enumeration. Large merged clusters remain expensive even with overload splitting. A more scalable K-best global solver remains a clear future optimization target.
+
+### 2. Overload splitting semantics
+Overload splitting is useful and explicit, but still an approximation. It can later induce committed historical overlap, which is why historical relaxation exists. This is acceptable for now, but not conceptually final.
+
+### 3. Historical-relaxation safety net
+Historical conflict relaxation is narrow and pragmatic. It is a good safety net, but not the final principled treatment of approximation-induced overlap.
+
+### 4. Internal births
+Internal births remain simple, heuristic, and secondary. The external-start path is still the more important operational start path for integration work.
+
+### 5. Scoring design
+The beta-ratio scoring model remains pragmatic rather than fully settled.
+
+### 6. False starts / tracking quality tuning
+Replay output is now usable enough that false starts and similar quality issues can be revisited later, but they are not the main current blocker.
+
+---
+
+## Recommended interpretation of the current checkpoint
+
+This checkpoint should be understood as:
+
+- a **real track-oriented TO-MHT implementation**
+- with a coherent persistent-tree / rebuilt-global architecture
+- that now survives the target recorded replay end-to-end
+- and is suitable for continued replay-based evaluation and cleanup work
+
+But it should also be understood as:
+
+- still pragmatically tuned,
+- still carrying a few explicit approximation/safety-net paths,
+- and still performance-limited on large merged clusters.
+
+That is a good place to begin a cleanup/consolidation phase before the next round of deeper work.
