@@ -80,7 +80,8 @@ class TOMHTParams:
     """Flat tracker configuration for the track-oriented TO-MHT implementation.
 
     Stable operational controls:
-    - per-leaf local branching and miss tolerance,
+    - per-leaf local branching and local frontier safety-valves,
+    - whole-track miss termination after N-scan pruning,
     - MAP-only N-scan pruning window,
     - optional debug/stat visibility toggles.
 
@@ -93,8 +94,18 @@ class TOMHTParams:
     # Local expansion / lifecycle controls.
     max_children_per_track: int = 5
     # Optional pre-solve per-tree frontier cap used only as a safety valve.
-    max_leaves_per_track_tree: int | None = 100
+    # TODO(phase-d lifecycle): review safe local cap semantics under overload
+    # decomposition; current value is intentionally conservative/high.
+    max_leaves_per_track_tree: int | None = 500
+    # Base miss threshold used for post-N-scan whole-track termination.
+    # Effective threshold uses an N-scan-aware floor (see helper below).
     max_missed: int = 5
+    # Whole-track miss termination mode applied after N-scan pruning.
+    # - "all_active_leaves": terminate only if all active leaves exceed threshold
+    # - "map_leaf": terminate if MAP leaf exceeds threshold
+    # - "global_k_leaves": terminate if all retained rebuilt-global leaves exceed
+    #   threshold (fallback to active leaves if unavailable after N-scan)
+    track_miss_termination_mode: str = "map_leaf"
 
     # Rebuilt-global storage cap (debug/inspection cap, not persistent beam state).
     max_global_hypotheses: int = 20
@@ -117,7 +128,7 @@ class TOMHTParams:
     prob_gate: float = 0.99
 
     # MAP-only N-scan pruning: boundary is b = k - N.
-    ns_scan_window: int = 3
+    ns_scan_window: int = 6
 
     # Internal birth handling (kept intentionally simple in this phase).
     max_births_per_scan: int = 2
@@ -230,8 +241,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     Core per-scan pipeline order:
     1. Sort detections deterministically.
     2. Expand active leaves in every persistent ``TrackTree``.
-    3. Apply simple lifecycle filtering (drop leaves with miss budget exceeded,
-       drop trees with no surviving active leaves).
+    3. Apply simple local filtering (drop trees with no surviving active leaves).
     4. Optionally create internal birth trees from detections unused by the union
        of surviving active leaves after Step 3.
     5. Recompute measurement-exclusivity clusters from current trees.
@@ -241,7 +251,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     7. Post-solve prune each cluster tree frontier to leaves supported by at
        least one retained rebuilt top-K global for that cluster.
     8. Merge cluster MAP selections into full-scan MAP, then apply MAP-only
-       N-scan tree pruning.
+       N-scan tree pruning and whole-track miss-based lifecycle.
     9. Keep last-scan debug snapshots and return MAP output tracks.
     """
 
@@ -383,7 +393,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
         map_global = self._merge_cluster_map_globals(cluster_snapshots)
-        self._last_map_global = map_global
 
         # 6) MAP-only N-scan pruning on explicit trees + disagreement stats.
         (
@@ -397,6 +406,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
         )
+        map_global = self._apply_post_n_scan_track_miss_lifecycle(
+            map_global=map_global,
+            cluster_snapshots=cluster_snapshots,
+            scan_index=scan_index,
+        )
         self._maybe_validate_pruning_feasibility(
             stage="post_n_scan_pruning",
             ctx=ctx,
@@ -409,6 +423,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._last_cluster_snapshots = cluster_snapshots
 
         # Keep one full-scan MAP global in compatibility slot for old inspection paths.
+        self._last_map_global = map_global
         self.global_hypotheses = [map_global]
 
         # 7) Reclaim node storage not reachable from surviving roots/leaves/commitments.
@@ -830,8 +845,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             leaf = self._nodes_by_id[leaf_id]
             candidates = self._candidates_for_track_leaf(leaf, ctx)
             for cand in candidates:
-                if int(cand.child_node.missed_count) > self.params.max_missed:
-                    continue
                 new_leaf_ids.add(cand.child_node.node_id)
 
         tree.active_leaf_node_ids = self._apply_pre_solve_leaf_cap_guardrail(
@@ -2196,6 +2209,124 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             disagreement_total,
             updated_snapshots,
         )
+
+    @staticmethod
+    def _normalized_track_miss_termination_mode(mode_raw: str) -> str:
+        mode = str(mode_raw).strip().lower()
+        valid = {"all_active_leaves", "map_leaf", "global_k_leaves"}
+        if mode not in valid:
+            raise ValueError(
+                "Invalid TOMHTParams.track_miss_termination_mode. "
+                f"Expected one of {sorted(valid)}, got {mode_raw!r}."
+            )
+        return mode
+
+    def _effective_track_miss_threshold(self) -> int:
+        """Track-level miss termination threshold with N-scan safety floor."""
+        return max(
+            int(self.params.max_missed),
+            int(self.params.ns_scan_window) + 1,
+        )
+
+    def _track_miss_termination_leaves(
+        self,
+        *,
+        track_id: int,
+        tree: TrackTree,
+        mode: str,
+        map_global: GlobalHypothesis,
+        cluster_snapshots: list[ClusterRebuildSnapshot],
+    ) -> list[TrackHypothesisNode]:
+        """Return leaves to evaluate for whole-track miss termination."""
+        root = self._nodes_by_id[tree.root_node_id]
+
+        if mode == "map_leaf":
+            map_leaf = map_global.leaf_nodes_by_track_id.get(track_id)
+            if map_leaf is not None and self._is_descendant_of(
+                node=map_leaf,
+                ancestor=root,
+            ):
+                return [map_leaf]
+
+        if mode == "global_k_leaves":
+            candidate_node_ids: set[int] = set()
+            for snapshot in cluster_snapshots:
+                if track_id not in snapshot.track_ids:
+                    continue
+                for rebuilt_global in snapshot.rebuilt_globals:
+                    leaf = rebuilt_global.leaf_nodes_by_track_id.get(track_id)
+                    if leaf is not None:
+                        candidate_node_ids.add(int(leaf.node_id))
+
+            candidate_leaves: list[TrackHypothesisNode] = []
+            for node_id in sorted(candidate_node_ids):
+                leaf = self._nodes_by_id.get(node_id)
+                if leaf is None:
+                    continue
+                if self._is_descendant_of(node=leaf, ancestor=root):
+                    candidate_leaves.append(leaf)
+            if candidate_leaves:
+                return candidate_leaves
+
+        # Default and safe fallback for empty map/global-k sets.
+        return [
+            self._nodes_by_id[node_id] for node_id in sorted(tree.active_leaf_node_ids)
+        ]
+
+    def _filter_map_global_to_live_trees(
+        self,
+        map_global: GlobalHypothesis,
+    ) -> GlobalHypothesis:
+        """Drop map entries for tracks that no longer have active trees."""
+        filtered_nodes = {
+            track_id: leaf
+            for track_id, leaf in map_global.leaf_nodes_by_track_id.items()
+            if track_id in self.track_trees_by_track_id
+        }
+        return GlobalHypothesis(
+            leaf_nodes_by_track_id=filtered_nodes,
+            log_weight=float(map_global.log_weight),
+        )
+
+    def _apply_post_n_scan_track_miss_lifecycle(
+        self,
+        *,
+        map_global: GlobalHypothesis,
+        cluster_snapshots: list[ClusterRebuildSnapshot],
+        scan_index: int,
+    ) -> GlobalHypothesis:
+        """Apply whole-track miss termination after N-scan pruning."""
+        del scan_index  # reserved for potential future diagnostics.
+        mode = self._normalized_track_miss_termination_mode(
+            self.params.track_miss_termination_mode
+        )
+        threshold = self._effective_track_miss_threshold()
+
+        terminated_track_ids: list[int] = []
+        for track_id, tree in sorted(self.track_trees_by_track_id.items()):
+            leaves = self._track_miss_termination_leaves(
+                track_id=track_id,
+                tree=tree,
+                mode=mode,
+                map_global=map_global,
+                cluster_snapshots=cluster_snapshots,
+            )
+            if not leaves:
+                continue
+            if all(int(leaf.missed_count) >= threshold for leaf in leaves):
+                terminated_track_ids.append(track_id)
+
+        if terminated_track_ids:
+            for track_id in terminated_track_ids:
+                self.track_trees_by_track_id.pop(track_id, None)
+            print(
+                "TRACK_LIFECYCLE "
+                f"mode={mode} miss_threshold={threshold} "
+                f"terminated={terminated_track_ids}"
+            )
+
+        self._remove_empty_trees()
+        return self._filter_map_global_to_live_trees(map_global)
 
     # =========================================================================
     # Node Retention / Cleanup

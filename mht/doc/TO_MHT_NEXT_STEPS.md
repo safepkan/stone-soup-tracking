@@ -1,5 +1,32 @@
 # TO-MHT Next Steps
 
+## Update (2026-04-02): whole-track miss lifecycle moved post-N-scan
+
+Implemented:
+
+- removed per-branch miss pruning in local expansion
+- added post-N-scan whole-track miss termination with configurable mode:
+  - `all_active_leaves`
+  - `map_leaf` (default)
+  - `global_k_leaves`
+- whole-track miss threshold now uses `max(max_missed, ns_scan_window + 1)`
+- increased `max_leaves_per_track_tree` default to `500` (from `100`) as a
+  higher pre-solve safety valve
+
+## Update (2026-04-02): narrow miss-budget floor guardrail implemented (superseded)
+
+Implemented:
+
+- local expansion now uses `effective_max_missed = max(max_missed, ns_scan_window + 1)`
+- this is a temporary robustness guardrail to avoid pruning miss-branches below
+  the active N-scan horizon
+
+## Update (2026-04-01): default N-scan window increased
+
+Implemented:
+
+- `TOMHTParams.ns_scan_window` default increased from `3` to `6`
+
 ## Update (2026-04-01): historical-conflict relaxation safety-net implemented
 
 Implemented (narrow pass):

@@ -1,5 +1,45 @@
 # TO-MHT Current State
 
+## Update (2026-04-02): post-N-scan whole-track miss lifecycle + higher local leaf cap
+
+Lifecycle handling was narrowed and moved to a safer point in the scan flow:
+
+- per-branch miss-based pruning during local expansion was removed
+- miss-based termination is now whole-track only, applied after N-scan pruning
+- whole-track miss criterion is configurable via
+  `track_miss_termination_mode`:
+  - `all_active_leaves`
+  - `map_leaf` (default)
+  - `global_k_leaves`
+- miss threshold uses `max(max_missed, ns_scan_window + 1)`
+- default local pre-solve leaf cap was raised to `max_leaves_per_track_tree=500`
+  (from `100`) as a safety-valve increase
+
+## Update (2026-04-02): runtime status snapshot
+
+On the full CPI replay (through end-of-file), scan time is currently very
+heavy-tailed: median `~31 ms`, p90 `~714 ms`, p95 `~1191 ms`, max `~4576 ms`.
+The long scans are concentrated where clusters merge and still yield large
+`comb_eval`/`comb_feas` counts (even with overload splitting + historical
+relaxation), so runtime optimization of those high-combinatoric scans remains a
+clear next focus area.
+
+## Update (2026-04-02): miss-budget floor tied to N-scan window (superseded)
+
+A narrow lifecycle stopgap was added in local expansion:
+
+- effective miss cap is now `max(max_missed, ns_scan_window + 1)`
+- this keeps miss-tolerated alternatives alive at least through the current
+  N-scan horizon and avoids dropping branches before horizon-based resolution
+- intent is pragmatic robustness; broader lifecycle/termination redesign is
+  still pending
+
+## Update (2026-04-01): default N-scan window increased
+
+The default MAP-only N-scan window was increased:
+
+- `TOMHTParams.ns_scan_window`: `3` -> `6`
+
 ## Update (2026-04-01): narrow historical-conflict relaxation safety-net
 
 To handle approximation-induced infeasible reunited clusters after overload
@@ -257,7 +297,10 @@ The external-start path is the more important operational path for the current i
 
 Lifecycle handling remains incomplete:
 
-- `max_missed` currently acts as a per-hypothesis miss budget in expansion logic,
+- `max_missed` now feeds a whole-track miss termination threshold applied
+  post-N-scan (with `max(max_missed, ns_scan_window + 1)` floor),
+- termination scope is configurable (`all_active_leaves` / `map_leaf` /
+  `global_k_leaves`),
 - but there is no clean long-term deletion/lifecycle model yet,
 - and multi-sensor miss handling remains a future design topic.
 
