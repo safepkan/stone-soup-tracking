@@ -32,6 +32,14 @@ Implemented in `mht/runners` and tracker builders:
 - runner helper `load_params_overrides_json(...)` loads and validates a top-level JSON object,
 - loaded overrides are threaded through `run_tomht(...)` and builder helpers to `TOMHTTracker(...,params_overrides=...)`.
 
+## Update (2026-04-02): Stone Soup import-time compatibility fix
+
+Implemented in `mht/tomht_tracker.py`:
+
+- removed duplicate type specification for `hypothesiser`/`updater` class properties,
+- adopted Stone Soup's typed pattern (`field: Type = Property(doc=...)`) so annotations provide property type metadata,
+- this fixes import-time `BaseMeta` errors triggered when both annotation and `Property` type are set.
+
 ## Update (2026-04-02): tracker readability-only cleanup
 
 Implemented in `mht/tomht_tracker.py` without behavior changes:

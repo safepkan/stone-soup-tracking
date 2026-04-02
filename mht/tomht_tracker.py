@@ -304,10 +304,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ASSOC_MISS = -2
 
     hypothesiser: PDAHypothesiser = Property(
-        PDAHypothesiser, doc="Hypothesiser used to branch per-track hypotheses."
+        doc="Hypothesiser used to branch per-track hypotheses."
     )
     updater: Updater = Property(
-        Updater, doc="Updater used to generate posteriors from selected hypotheses."
+        doc="Updater used to generate posteriors from selected hypotheses."
     )
 
     _last_nscan_boundary_scan_index: int | None
