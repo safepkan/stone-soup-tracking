@@ -57,6 +57,21 @@ def _build_tracker() -> TOMHTTracker:
     )
 
 
+def _build_tracker_with_overrides(params_overrides: dict[str, object]) -> TOMHTTracker:
+    return TOMHTTracker(
+        hypothesiser=cast(PDAHypothesiser, _NoopHypothesiser()),
+        updater=cast(Updater, _NoopUpdater()),
+        params=TOMHTParams(
+            debug_display_scan_stats=False,
+            debug_display_hypotheses=False,
+            debug_display_births=False,
+            collect_stats=False,
+        ),
+        params_overrides=params_overrides,
+        scoring_model=_ZeroScoringModel(),
+    )
+
+
 def _external_start(timestamp: datetime.datetime) -> Track:
     state = GaussianState(
         [0.0, 0.0, 0.0, 0.0],
@@ -67,6 +82,26 @@ def _external_start(timestamp: datetime.datetime) -> Track:
 
 
 class TOMHTTrackerExternalStartsTest(unittest.TestCase):
+    def test_constructor_applies_params_overrides(self) -> None:
+        tracker = _build_tracker_with_overrides(
+            {
+                "max_children_per_track": 3,
+                "debug_display_births": True,
+            }
+        )
+
+        self.assertEqual(3, tracker.params.max_children_per_track)
+        self.assertTrue(tracker.params.debug_display_births)
+        self.assertFalse(tracker.params.debug_display_scan_stats)
+
+    def test_constructor_rejects_unknown_params_override_keys(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unknown TOMHTParams override key"):
+            _build_tracker_with_overrides({"not_a_param": 1})
+
+    def test_constructor_rejects_non_string_params_override_keys(self) -> None:
+        with self.assertRaisesRegex(TypeError, "params_overrides keys must be strings"):
+            _build_tracker_with_overrides(cast(dict[str, object], {1: 1}))
+
     def test_tracker_starts_with_empty_map_and_no_trees(self) -> None:
         tracker = _build_tracker()
 

@@ -22,7 +22,7 @@ Track-oriented architecture in this phase:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 import datetime
 import heapq
 import os
@@ -328,9 +328,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         detector: Any | None = None,
         initiator: Initiator | None = None,
         params: TOMHTParams = TOMHTParams(),
+        params_overrides: Mapping[str, Any] | None = None,
         scoring_model: ScoringModel | None = None,
     ) -> None:
         """Construct the tracker with Stone Soup components and TO-MHT params."""
+        params = self._apply_params_overrides(params, params_overrides)
         super().__init__(hypothesiser, updater)
         self.detector = detector
         self.params = params
@@ -375,6 +377,37 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self.last_scan_stats: ScanStats | None = None
         self._stats: list[ScanStats] = []
         self.reset_stats()
+
+    @staticmethod
+    def _apply_params_overrides(
+        params: TOMHTParams,
+        params_overrides: Mapping[str, Any] | None,
+    ) -> TOMHTParams:
+        """Apply JSON-style parameter overrides onto a frozen ``TOMHTParams``."""
+        if params_overrides is None:
+            return params
+        if not isinstance(params_overrides, Mapping):
+            raise TypeError(
+                "params_overrides must be a mapping of TOMHTParams field names to values."
+            )
+        overrides = dict(params_overrides)
+        if not overrides:
+            return params
+        non_string_keys = [key for key in overrides if not isinstance(key, str)]
+        if non_string_keys:
+            non_string_keys_str = ", ".join(repr(key) for key in non_string_keys)
+            raise TypeError(
+                "params_overrides keys must be strings matching TOMHTParams fields; "
+                f"got: {non_string_keys_str}."
+            )
+        valid_keys = {field.name for field in fields(TOMHTParams)}
+        invalid_keys = sorted(set(overrides).difference(valid_keys))
+        if invalid_keys:
+            invalid_keys_str = ", ".join(invalid_keys)
+            raise ValueError(
+                f"Unknown TOMHTParams override key(s): {invalid_keys_str}."
+            )
+        return replace(params, **overrides)
 
     def reset_stats(self) -> None:
         """Clear collected ScanStats and the last per-scan snapshot."""

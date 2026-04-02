@@ -15,6 +15,23 @@ Implemented in `mht/tomht_tracker.py` without behavior changes:
 - extracted optional historical-relaxation retry into a dedicated helper under that solver boundary,
 - kept exhaustive enumeration as the underlying solve implementation.
 
+## Update (2026-04-02): constructor-level TOMHTParams key overrides
+
+Implemented in `mht/tomht_tracker.py`:
+
+- `TOMHTTracker.__init__` now accepts `params_overrides` (`dict`/mapping),
+- override keys are validated against `TOMHTParams` fields and applied via `dataclasses.replace(...)`,
+- unknown keys fail fast with a clear `ValueError`,
+- this enables JSON-driven tracker parameter overrides while preserving immutable `TOMHTParams`.
+
+## Update (2026-04-02): runner CLI JSON override plumbing
+
+Implemented in `mht/runners` and tracker builders:
+
+- `run_tomht_crossing.py` and `run_tomht_bearing_range.py` now accept `--params-override <path>` (JSON file),
+- runner helper `load_params_overrides_json(...)` loads and validates a top-level JSON object,
+- loaded overrides are threaded through `run_tomht(...)` and builder helpers to `TOMHTTracker(...,params_overrides=...)`.
+
 ## Update (2026-04-02): tracker readability-only cleanup
 
 Implemented in `mht/tomht_tracker.py` without behavior changes:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -12,6 +15,7 @@ from mht.runners.tomht_runner import (
     _resolve_external_start_enablement,
     _resolve_external_start_timing,
     _resolve_mode_configuration,
+    load_params_overrides_json,
 )
 from mht.scenarios.bearing_range import (
     create_bearing_range_mht_example,
@@ -230,6 +234,29 @@ class ScenarioExternalStartsTest(unittest.TestCase):
             self.assertEqual(timestamp, start[0].timestamp)
             self.assertEqual("bearing_range", start.metadata["scenario"])
             self.assertEqual(truth_index, start.metadata["scenario_truth_index"])
+
+
+class ParamsOverrideJsonLoadTest(unittest.TestCase):
+    def test_load_params_overrides_json_accepts_top_level_object(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            json_path = Path(tmp_dir) / "params_overrides.json"
+            json_path.write_text(
+                json.dumps({"max_children_per_track": 2, "debug_display_births": True}),
+                encoding="utf-8",
+            )
+
+            loaded = load_params_overrides_json(json_path)
+
+            self.assertEqual(2, loaded["max_children_per_track"])
+            self.assertTrue(loaded["debug_display_births"])
+
+    def test_load_params_overrides_json_rejects_non_object(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            json_path = Path(tmp_dir) / "params_overrides.json"
+            json_path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "top-level object"):
+                load_params_overrides_json(json_path)
 
 
 if __name__ == "__main__":

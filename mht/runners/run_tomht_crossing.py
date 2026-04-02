@@ -9,6 +9,7 @@ if __package__ in (None, ""):
 
 from mht.runners.tomht_runner import (
     TOMHTOperatingMode,
+    load_params_overrides_json,
     run_tomht,
 )
 
@@ -92,9 +93,24 @@ if __name__ == "__main__":
         default=None,
         help="Enable/disable birth debug output (default: tracker default).",
     )
+    parser.add_argument(
+        "--params-override",
+        dest="params_override_json",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a JSON file with TOMHTParams field overrides "
+            "(top-level object: key->value)."
+        ),
+    )
     # VS Code/Jupyter Interactive injects kernel args (for example --f=...).
     # Ignore unknown args so this script works both as CLI and in notebooks.
     args, _unknown = parser.parse_known_args()
+    params_overrides = (
+        load_params_overrides_json(args.params_override_json)
+        if args.params_override_json is not None
+        else None
+    )
 
     run_tomht(
         "crossing",
@@ -107,4 +123,5 @@ if __name__ == "__main__":
         debug_display_scan_stats=args.debug_scan_stats,
         debug_display_hypotheses=args.debug_hypotheses,
         debug_display_births=args.debug_births,
+        params_overrides=params_overrides,
     )

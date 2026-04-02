@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 from stonesoup.hypothesiser.probability import PDAHypothesiser
 from stonesoup.initiator.base import Initiator
 from stonesoup.models.measurement.base import MeasurementModel
@@ -19,6 +21,7 @@ def build_tomht_linear(
     clutter_density: float,
     initiator: Initiator | None = None,
     params: TOMHTParams = TOMHTParams(),
+    params_overrides: Mapping[str, Any] | None = None,
 ) -> TOMHTTracker:
     predictor = KalmanPredictor(transition_model)
     updater = KalmanUpdater(measurement_model)
@@ -29,7 +32,13 @@ def build_tomht_linear(
         prob_gate=params.prob_gate,
         prob_detect=prob_detect,
     )
-    return TOMHTTracker(hypothesiser, updater, initiator=initiator, params=params)
+    return TOMHTTracker(
+        hypothesiser,
+        updater,
+        initiator=initiator,
+        params=params,
+        params_overrides=params_overrides,
+    )
 
 
 def build_tomht_ukf(
@@ -40,6 +49,7 @@ def build_tomht_ukf(
     clutter_density: float,
     initiator: Initiator | None = None,
     params: TOMHTParams = TOMHTParams(),
+    params_overrides: Mapping[str, Any] | None = None,
 ) -> TOMHTTracker:
     predictor = UnscentedKalmanPredictor(transition_model)
     updater = UnscentedKalmanUpdater(measurement_model)
@@ -50,4 +60,10 @@ def build_tomht_ukf(
         prob_gate=params.prob_gate,
         prob_detect=prob_detect,
     )
-    return TOMHTTracker(hypothesiser, updater, initiator=initiator, params=params)
+    return TOMHTTracker(
+        hypothesiser,
+        updater,
+        initiator=initiator,
+        params=params,
+        params_overrides=params_overrides,
+    )

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import datetime
+import json
 import os
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, Mapping
 
 
 def _setup_headless_cache_dirs() -> None:
@@ -228,6 +229,22 @@ def _format_external_start_truth_indices(external_starts) -> str:
     )
 
 
+def load_params_overrides_json(
+    path: str | Path | os.PathLike[str],
+) -> dict[str, Any]:
+    """Load a JSON object that maps TOMHTParams keys to override values."""
+
+    json_path = Path(path)
+    with json_path.open("r", encoding="utf-8") as handle:
+        loaded = json.load(handle)
+    if not isinstance(loaded, dict):
+        raise ValueError(
+            "Parameter override JSON must contain a top-level object "
+            f"(mapping), got {type(loaded).__name__}."
+        )
+    return loaded
+
+
 def run_tomht(
     setup: SetupName,
     *,
@@ -240,6 +257,7 @@ def run_tomht(
     debug_display_scan_stats: bool | None = None,
     debug_display_hypotheses: bool | None = None,
     debug_display_births: bool | None = None,
+    params_overrides: Mapping[str, Any] | None = None,
 ) -> None:
     """Run one TOMHT scenario end-to-end and render or suppress animation output.
 
@@ -343,6 +361,7 @@ def run_tomht(
                     birth_log_penalty=15.0,
                 )
             ),
+            params_overrides=params_overrides,
         )
     else:
         initiator = (
@@ -369,6 +388,7 @@ def run_tomht(
                     prob_gate=0.99,
                 )
             ),
+            params_overrides=params_overrides,
         )
     print(
         "OPERATING_MODE "
