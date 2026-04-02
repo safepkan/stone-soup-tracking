@@ -225,6 +225,43 @@ class _ClusterRebuildResult:
     historical_relaxed_key_count: int = 0
 
 
+@dataclass(frozen=True)
+class _ClusterSolveInput:
+    """Prepared inputs for one internal cluster-solver call."""
+
+    cluster: _ClusterWorkItem
+    ctx: ScanContext
+    leaf_options: list[list[TrackHypothesisNode]]
+    cluster_universe: set[DetectionKey]
+    unused_score_context: _ClusterUnusedScoreContext | None
+
+
+@dataclass(frozen=True)
+class _ClusterSolveOutcome:
+    """Solver outcome with optional historical-relaxation bookkeeping."""
+
+    kept_globals: tuple[GlobalHypothesis, ...]
+    combinations_evaluated: int
+    feasible_combinations: int
+    historical_relaxation_attempted: bool = False
+    historical_relaxation_succeeded: bool = False
+    historical_relaxed_keys: frozenset[DetectionKey] = frozenset()
+
+
+@dataclass(frozen=True)
+class _MapNScanPruningPlan:
+    """Planned MAP-only N-scan choices and diagnostics before mutation."""
+
+    boundary_scan_index: int
+    root_before_by_track_id: dict[int, TrackHypothesisNode]
+    map_choice_by_track_id: dict[int, int]
+    disagreement_total: int
+    updated_snapshots: list[ClusterRebuildSnapshot]
+
+
+type _ClusterTopKHeap = list[tuple[float, int, GlobalHypothesis]]
+
+
 # ============================================================================
 # Tracker Implementation
 # ============================================================================
@@ -1619,7 +1656,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _push_top_k_global(
         self,
         *,
-        top_k_heap: list[tuple[float, int, GlobalHypothesis]],
+        top_k_heap: _ClusterTopKHeap,
         candidate: GlobalHypothesis,
         insertion_order: int,
         k: int,
@@ -1646,7 +1683,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     @staticmethod
     def _finalize_top_k_globals(
-        top_k_heap: list[tuple[float, int, GlobalHypothesis]],
+        top_k_heap: _ClusterTopKHeap,
     ) -> tuple[GlobalHypothesis, ...]:
         """Return retained rebuilt globals sorted best-first."""
         top_k_heap.sort(
@@ -1784,9 +1821,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         cluster_universe: set[DetectionKey],
         unused_score_context: _ClusterUnusedScoreContext | None,
         relaxed_conflict_keys: frozenset[DetectionKey],
-    ) -> tuple[list[tuple[float, int, GlobalHypothesis]], int, int]:
+    ) -> tuple[_ClusterTopKHeap, int, int]:
         """Enumerate feasible globals with optional relaxed historical conflicts."""
-        top_k_heap: list[tuple[float, int, GlobalHypothesis]] = []
+        top_k_heap: _ClusterTopKHeap = []
         combinations_evaluated = 0
         feasible_combinations = 0
         k = int(self.params.max_global_hypotheses)
@@ -1838,6 +1875,121 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         return top_k_heap, combinations_evaluated, feasible_combinations
 
+    def _solve_cluster_exact_exhaustive(
+        self,
+        *,
+        solve_input: _ClusterSolveInput,
+        relaxed_conflict_keys: frozenset[DetectionKey],
+    ) -> tuple[_ClusterTopKHeap, int, int]:
+        """Run one exhaustive cluster-solver pass under fixed conflict rules."""
+        return self._enumerate_cluster_globals(
+            cluster=solve_input.cluster,
+            leaf_options=solve_input.leaf_options,
+            ctx=solve_input.ctx,
+            cluster_universe=solve_input.cluster_universe,
+            unused_score_context=solve_input.unused_score_context,
+            relaxed_conflict_keys=relaxed_conflict_keys,
+        )
+
+    def _raise_cluster_infeasible_error(
+        self,
+        *,
+        solve_input: _ClusterSolveInput,
+        relaxed_historical_keys: set[DetectionKey],
+    ) -> None:
+        """Raise the existing cluster infeasibility error with optional relax debug."""
+        dbg = self._infeasible_cluster_debug_summary(
+            cluster=solve_input.cluster,
+            leaf_options=solve_input.leaf_options,
+            ctx=solve_input.ctx,
+        )
+        relaxation_dbg = ""
+        if relaxed_historical_keys:
+            relaxation_dbg = (
+                "; "
+                f"relaxed_historical_keys={len(relaxed_historical_keys)} "
+                "relaxed_sample="
+                f"{self._format_detection_key_sample(relaxed_historical_keys)}"
+            )
+        raise RuntimeError(
+            "Cluster rebuild found no feasible combination. "
+            "Expected at least one feasible joint assignment. "
+            f"{dbg}{relaxation_dbg}"
+        )
+
+    def _solve_with_optional_historical_relaxation(
+        self,
+        *,
+        solve_input: _ClusterSolveInput,
+    ) -> _ClusterSolveOutcome:
+        """Solve one cluster, retrying once with optional historical relaxation."""
+        (
+            top_k_heap,
+            combinations_evaluated,
+            feasible_combinations,
+        ) = self._solve_cluster_exact_exhaustive(
+            solve_input=solve_input,
+            relaxed_conflict_keys=frozenset(),
+        )
+
+        historical_relaxation_attempted = False
+        historical_relaxation_succeeded = False
+        relaxed_historical_keys: set[DetectionKey] = set()
+        if (
+            feasible_combinations == 0
+            and self.params.historical_conflict_relaxation_enabled
+        ):
+            relaxed_historical_keys = (
+                self._historical_relaxed_conflict_keys_for_cluster(
+                    cluster=solve_input.cluster,
+                    leaf_options=solve_input.leaf_options,
+                    ctx=solve_input.ctx,
+                )
+            )
+            if relaxed_historical_keys:
+                historical_relaxation_attempted = True
+                (
+                    top_k_heap,
+                    relaxed_combinations_evaluated,
+                    feasible_combinations,
+                ) = self._solve_cluster_exact_exhaustive(
+                    solve_input=solve_input,
+                    relaxed_conflict_keys=frozenset(relaxed_historical_keys),
+                )
+                combinations_evaluated += relaxed_combinations_evaluated
+                historical_relaxation_succeeded = feasible_combinations > 0
+                self._log_historical_relaxation(
+                    cluster=solve_input.cluster,
+                    ctx=solve_input.ctx,
+                    relaxed_keys=relaxed_historical_keys,
+                    feasible_before=0,
+                    feasible_after=feasible_combinations,
+                )
+
+        if feasible_combinations == 0:
+            self._raise_cluster_infeasible_error(
+                solve_input=solve_input,
+                relaxed_historical_keys=relaxed_historical_keys,
+            )
+
+        kept_globals = self._finalize_top_k_globals(top_k_heap)
+        return _ClusterSolveOutcome(
+            kept_globals=kept_globals,
+            combinations_evaluated=combinations_evaluated,
+            feasible_combinations=feasible_combinations,
+            historical_relaxation_attempted=historical_relaxation_attempted,
+            historical_relaxation_succeeded=historical_relaxation_succeeded,
+            historical_relaxed_keys=frozenset(relaxed_historical_keys),
+        )
+
+    def _solve_cluster(
+        self,
+        *,
+        solve_input: _ClusterSolveInput,
+    ) -> _ClusterSolveOutcome:
+        """Cluster-solver boundary wrapper for future backend swaps."""
+        return self._solve_with_optional_historical_relaxation(solve_input=solve_input)
+
     def _rebuild_one_cluster(
         self,
         cluster: _ClusterWorkItem,
@@ -1863,79 +2015,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             ctx=ctx,
         )
 
-        (
-            top_k_heap,
-            combinations_evaluated,
-            feasible_combinations,
-        ) = self._enumerate_cluster_globals(
+        solve_input = _ClusterSolveInput(
             cluster=cluster,
-            leaf_options=leaf_options,
             ctx=ctx,
+            leaf_options=leaf_options,
             cluster_universe=cluster_universe,
             unused_score_context=unused_score_context,
-            relaxed_conflict_keys=frozenset(),
         )
-
-        historical_relaxation_attempted = False
-        historical_relaxation_succeeded = False
-        relaxed_historical_keys: set[DetectionKey] = set()
-        if (
-            feasible_combinations == 0
-            and self.params.historical_conflict_relaxation_enabled
-        ):
-            relaxed_historical_keys = (
-                self._historical_relaxed_conflict_keys_for_cluster(
-                    cluster=cluster,
-                    leaf_options=leaf_options,
-                    ctx=ctx,
-                )
-            )
-            if relaxed_historical_keys:
-                historical_relaxation_attempted = True
-                (
-                    top_k_heap,
-                    relaxed_combinations_evaluated,
-                    feasible_combinations,
-                ) = self._enumerate_cluster_globals(
-                    cluster=cluster,
-                    leaf_options=leaf_options,
-                    ctx=ctx,
-                    cluster_universe=cluster_universe,
-                    unused_score_context=unused_score_context,
-                    relaxed_conflict_keys=frozenset(relaxed_historical_keys),
-                )
-                combinations_evaluated += relaxed_combinations_evaluated
-                historical_relaxation_succeeded = feasible_combinations > 0
-                self._log_historical_relaxation(
-                    cluster=cluster,
-                    ctx=ctx,
-                    relaxed_keys=relaxed_historical_keys,
-                    feasible_before=0,
-                    feasible_after=feasible_combinations,
-                )
-
-        if feasible_combinations == 0:
-            dbg = self._infeasible_cluster_debug_summary(
-                cluster=cluster,
-                leaf_options=leaf_options,
-                ctx=ctx,
-            )
-            relaxation_dbg = ""
-            if relaxed_historical_keys:
-                relaxation_dbg = (
-                    "; "
-                    f"relaxed_historical_keys={len(relaxed_historical_keys)} "
-                    "relaxed_sample="
-                    f"{self._format_detection_key_sample(relaxed_historical_keys)}"
-                )
-            raise RuntimeError(
-                "Cluster rebuild found no feasible combination. "
-                "Expected at least one feasible joint assignment. "
-                f"{dbg}{relaxation_dbg}"
-            )
-
-        kept_globals = self._finalize_top_k_globals(top_k_heap)
-        map_global = kept_globals[0] if kept_globals else None
+        solve_outcome = self._solve_cluster(solve_input=solve_input)
+        map_global = (
+            solve_outcome.kept_globals[0] if solve_outcome.kept_globals else None
+        )
 
         return _ClusterRebuildResult(
             snapshot=ClusterRebuildSnapshot(
@@ -1943,15 +2033,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 track_ids=cluster.track_ids,
                 current_scan_conflict_det_keys=frozenset(cluster_universe),
                 conflict_links=cluster.conflict_links,
-                rebuilt_globals=kept_globals,
+                rebuilt_globals=solve_outcome.kept_globals,
                 map_global=map_global,
-                feasible_combinations=feasible_combinations,
-                evaluated_combinations=combinations_evaluated,
+                feasible_combinations=solve_outcome.feasible_combinations,
+                evaluated_combinations=solve_outcome.combinations_evaluated,
                 overload_split_origin_cluster_id=cluster.overload_split_origin_cluster_id,
             ),
-            historical_relaxation_attempted=historical_relaxation_attempted,
-            historical_relaxation_succeeded=historical_relaxation_succeeded,
-            historical_relaxed_key_count=len(relaxed_historical_keys),
+            historical_relaxation_attempted=(
+                solve_outcome.historical_relaxation_attempted
+            ),
+            historical_relaxation_succeeded=(
+                solve_outcome.historical_relaxation_succeeded
+            ),
+            historical_relaxed_key_count=len(solve_outcome.historical_relaxed_keys),
         )
 
     def _rebuild_cluster_globals(
@@ -2150,42 +2244,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         return map_choice_for_cluster, disagreement_count
 
-    def _apply_map_n_scan_pruning(
+    def _annotate_cluster_snapshots_with_map_pruning_disagreement(
         self,
         *,
-        scan_index: int,
-        map_global: GlobalHypothesis,
         cluster_snapshots: list[ClusterRebuildSnapshot],
-    ) -> tuple[int, int, int, int, list[ClusterRebuildSnapshot]]:
-        """Apply MAP-only N-scan root-child promotion and disagreement bookkeeping."""
-        boundary_scan_index = int(scan_index) - int(self.params.ns_scan_window)
-        self._last_nscan_boundary_scan_index = boundary_scan_index
-        self._last_nscan_tracks_in_scope = 0
-        self._last_nscan_committed_ancestor_by_track_id = {}
-
-        if boundary_scan_index < 0 or not self.track_trees_by_track_id:
-            return boundary_scan_index, 0, 0, 0, cluster_snapshots
-
-        root_before_by_track_id: dict[int, TrackHypothesisNode] = {
-            track_id: self._nodes_by_id[tree.root_node_id]
-            for track_id, tree in self.track_trees_by_track_id.items()
-        }
-
-        map_choice_by_track_id: dict[int, int] = {}
-        for track_id, tree in sorted(self.track_trees_by_track_id.items()):
-            root_before = root_before_by_track_id[track_id]
-            if int(root_before.scan_index) >= boundary_scan_index:
-                continue
-            map_leaf = map_global.leaf_nodes_by_track_id.get(track_id)
-            if map_leaf is None:
-                continue
-            child = self._child_of_root_on_path(root=root_before, leaf=map_leaf)
-            if child is None:
-                continue
-            map_choice_by_track_id[track_id] = child.node_id
-
-        self._last_nscan_tracks_in_scope = len(map_choice_by_track_id)
-
+        root_before_by_track_id: dict[int, TrackHypothesisNode],
+        map_choice_by_track_id: dict[int, int],
+    ) -> tuple[list[ClusterRebuildSnapshot], int]:
+        """Attach per-cluster MAP pruning choices and disagreement diagnostics."""
         updated_snapshots: list[ClusterRebuildSnapshot] = []
         disagreement_total = 0
         for snapshot in cluster_snapshots:
@@ -2204,13 +2270,61 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                     disagreement_count=disagreement_count,
                 )
             )
+        return updated_snapshots, disagreement_total
 
+    def _plan_map_n_scan_pruning(
+        self,
+        *,
+        boundary_scan_index: int,
+        map_global: GlobalHypothesis,
+        cluster_snapshots: list[ClusterRebuildSnapshot],
+    ) -> _MapNScanPruningPlan:
+        """Plan MAP child commits and disagreement diagnostics without mutation."""
+        root_before_by_track_id: dict[int, TrackHypothesisNode] = {
+            track_id: self._nodes_by_id[tree.root_node_id]
+            for track_id, tree in self.track_trees_by_track_id.items()
+        }
+
+        map_choice_by_track_id: dict[int, int] = {}
+        for track_id, tree in sorted(self.track_trees_by_track_id.items()):
+            root_before = root_before_by_track_id[track_id]
+            if int(root_before.scan_index) >= boundary_scan_index:
+                continue
+            map_leaf = map_global.leaf_nodes_by_track_id.get(track_id)
+            if map_leaf is None:
+                continue
+            child = self._child_of_root_on_path(root=root_before, leaf=map_leaf)
+            if child is None:
+                continue
+            map_choice_by_track_id[track_id] = child.node_id
+
+        updated_snapshots, disagreement_total = (
+            self._annotate_cluster_snapshots_with_map_pruning_disagreement(
+                cluster_snapshots=cluster_snapshots,
+                root_before_by_track_id=root_before_by_track_id,
+                map_choice_by_track_id=map_choice_by_track_id,
+            )
+        )
+        return _MapNScanPruningPlan(
+            boundary_scan_index=boundary_scan_index,
+            root_before_by_track_id=root_before_by_track_id,
+            map_choice_by_track_id=map_choice_by_track_id,
+            disagreement_total=disagreement_total,
+            updated_snapshots=updated_snapshots,
+        )
+
+    def _apply_planned_map_n_scan_pruning(
+        self,
+        *,
+        plan: _MapNScanPruningPlan,
+    ) -> int:
+        """Apply one precomputed N-scan pruning plan to trees and bookkeeping."""
         committed_count = 0
-        for track_id, chosen_child_id in map_choice_by_track_id.items():
+        for track_id, chosen_child_id in plan.map_choice_by_track_id.items():
             current_tree = self.track_trees_by_track_id.get(track_id)
             if current_tree is None:
                 continue
-            root_before = root_before_by_track_id[track_id]
+            root_before = plan.root_before_by_track_id[track_id]
             chosen_child = self._nodes_by_id[chosen_child_id]
 
             current_tree.root_node_id = chosen_child.node_id
@@ -2230,8 +2344,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
             self._last_nscan_committed_ancestor_by_track_id[track_id] = chosen_child
             prev_boundary = self._committed_boundary_by_track_id.get(track_id)
-            if prev_boundary is None or boundary_scan_index > prev_boundary:
-                self._committed_boundary_by_track_id[track_id] = boundary_scan_index
+            if prev_boundary is None or plan.boundary_scan_index > prev_boundary:
+                self._committed_boundary_by_track_id[track_id] = (
+                    plan.boundary_scan_index
+                )
                 self._committed_ancestor_by_track_id[track_id] = chosen_child
             committed_count += 1
 
@@ -2243,12 +2359,37 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             }
 
         self._remove_empty_trees()
+        return committed_count
+
+    def _apply_map_n_scan_pruning(
+        self,
+        *,
+        scan_index: int,
+        map_global: GlobalHypothesis,
+        cluster_snapshots: list[ClusterRebuildSnapshot],
+    ) -> tuple[int, int, int, int, list[ClusterRebuildSnapshot]]:
+        """Apply MAP-only N-scan root-child promotion and disagreement bookkeeping."""
+        boundary_scan_index = int(scan_index) - int(self.params.ns_scan_window)
+        self._last_nscan_boundary_scan_index = boundary_scan_index
+        self._last_nscan_tracks_in_scope = 0
+        self._last_nscan_committed_ancestor_by_track_id = {}
+
+        if boundary_scan_index < 0 or not self.track_trees_by_track_id:
+            return boundary_scan_index, 0, 0, 0, cluster_snapshots
+
+        plan = self._plan_map_n_scan_pruning(
+            boundary_scan_index=boundary_scan_index,
+            map_global=map_global,
+            cluster_snapshots=cluster_snapshots,
+        )
+        self._last_nscan_tracks_in_scope = len(plan.map_choice_by_track_id)
+        committed_count = self._apply_planned_map_n_scan_pruning(plan=plan)
         return (
             boundary_scan_index,
-            len(map_choice_by_track_id),
+            len(plan.map_choice_by_track_id),
             committed_count,
-            disagreement_total,
-            updated_snapshots,
+            plan.disagreement_total,
+            plan.updated_snapshots,
         )
 
     # =========================================================================

@@ -6,6 +6,15 @@ This document describes the tracker as it exists after the Phase D track-oriente
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
+## Update (2026-04-02): targeted structural cleanup pass
+
+Implemented in `mht/tomht_tracker.py` without behavior changes:
+
+- split MAP-only N-scan pruning into an explicit planning stage and a mutation/application stage,
+- added a conservative internal cluster-solve boundary via private solve input/output structures and a `_solve_cluster(...)` wrapper,
+- extracted optional historical-relaxation retry into a dedicated helper under that solver boundary,
+- kept exhaustive enumeration as the underlying solve implementation.
+
 ## Update (2026-04-02): tracker readability-only cleanup
 
 Implemented in `mht/tomht_tracker.py` without behavior changes:

@@ -1,5 +1,14 @@
 # TO-MHT Next Steps
 
+## Update (2026-04-02): targeted structural cleanup pass
+
+Implemented (behavior-preserving):
+
+- MAP-only N-scan pruning was split into planning vs mutation helpers
+- cluster rebuild now goes through a conservative internal solver boundary
+- optional historical-relaxation retry was extracted under that boundary while
+  keeping exhaustive enumeration as the solver backend
+
 ## Update (2026-04-02): whole-track miss lifecycle moved post-N-scan
 
 Implemented:
