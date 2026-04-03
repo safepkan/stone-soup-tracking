@@ -48,7 +48,7 @@ GitHub Actions CI is configured in `.github/workflows/ci.yml`.
 
 It runs on:
 
-- every `push`
+- every `push` to `main`
 - every `pull_request`
 
 Current CI job:
