@@ -303,12 +303,22 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ASSOC_PAD = -1
     ASSOC_MISS = -2
 
-    hypothesiser: PDAHypothesiser = Property(
-        doc="Hypothesiser used to branch per-track hypotheses."
-    )
-    updater: Updater = Property(
-        doc="Updater used to generate posteriors from selected hypotheses."
-    )
+    # Stone Soup 1.8 under Python 3.14 can miss PEP-563 style class annotations
+    # when resolving Property types, so keep explicit cls there.
+    if sys.version_info >= (3, 14):
+        hypothesiser = Property(
+            PDAHypothesiser, doc="Hypothesiser used to branch per-track hypotheses."
+        )
+        updater = Property(
+            Updater, doc="Updater used to generate posteriors from selected hypotheses."
+        )
+    else:
+        hypothesiser: PDAHypothesiser = Property(
+            doc="Hypothesiser used to branch per-track hypotheses."
+        )
+        updater: Updater = Property(
+            doc="Updater used to generate posteriors from selected hypotheses."
+        )
 
     _last_nscan_boundary_scan_index: int | None
     _last_nscan_tracks_in_scope: int

@@ -2,9 +2,18 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the Phase D track-oriented transition and the subsequent replay-hardening passes completed on **2026-04-02**.
+This document describes the tracker as it exists after the Phase D track-oriented transition and the subsequent replay-hardening passes completed on **2026-04-03**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
+
+## Update (2026-04-03): Stone Soup 1.8 / Python 3.14 property-type compatibility
+
+Implemented in `mht/tomht_tracker.py`:
+
+- `TOMHTTracker` now declares `hypothesiser`/`updater` `Property(...)` fields with a Python-version gate:
+- for Python `>=3.14`, uses explicit `Property(Type,doc=...)` form,
+- for Python `<3.14`, keeps annotation-driven `field: Type = Property(doc=...)` form,
+- this preserves import compatibility across Stone Soup `1.7`/`1.8` and avoids the `Type was not specified for property ...` failure seen under Python 3.14.
 
 ## Update (2026-04-02): targeted structural cleanup pass
 
@@ -38,7 +47,8 @@ Implemented in `mht/tomht_tracker.py`:
 
 - removed duplicate type specification for `hypothesiser`/`updater` class properties,
 - adopted Stone Soup's typed pattern (`field: Type = Property(doc=...)`) so annotations provide property type metadata,
-- this fixes import-time `BaseMeta` errors triggered when both annotation and `Property` type are set.
+- this fixes import-time `BaseMeta` errors triggered when both annotation and `Property` type are set,
+- Python 3.14/Stone Soup 1.8 follow-up is covered by the 2026-04-03 update above.
 
 ## Update (2026-04-02): tracker readability-only cleanup
 
