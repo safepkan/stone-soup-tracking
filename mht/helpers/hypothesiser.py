@@ -21,6 +21,14 @@ def _as_float_mat(x) -> np.ndarray:
     return np.asarray(x, dtype=float)
 
 
+def _as_float_scalar(x) -> float:
+    """Convert scalar-like ndarray/matrix outputs to a Python float."""
+    a = np.asarray(x, dtype=float)
+    if a.size != 1:
+        raise ValueError(f"Expected scalar-compatible value, got shape {a.shape}")
+    return float(a.reshape(()))
+
+
 class RobustPDAHypothesiser:
     """PDA-style hypothesiser that tolerates near-singular/indefinite covariances."""
 
@@ -50,7 +58,7 @@ class RobustPDAHypothesiser:
     @staticmethod
     def _logpdf(x: np.ndarray, cov: np.ndarray, logdet: float) -> float:
         d = x.shape[0]
-        maha = float(x.T @ np.linalg.solve(cov, x))
+        maha = _as_float_scalar(x.T @ np.linalg.solve(cov, x))
         return -0.5 * (d * np.log(2.0 * np.pi) + logdet + maha)
 
     def hypothesise(self, track: Track, detections, timestamp, **kwargs):
@@ -74,7 +82,7 @@ class RobustPDAHypothesiser:
         for det in detections:
             z = _as_float_col(det.state_vector)
             innov = z - mean
-            maha = float(innov.T @ np.linalg.solve(cov, innov))
+            maha = _as_float_scalar(innov.T @ np.linalg.solve(cov, innov))
             if maha > gate_thresh:
                 continue
 

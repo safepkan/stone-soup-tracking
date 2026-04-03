@@ -15,6 +15,14 @@ Implemented in `mht/tomht_tracker.py`:
 - for Python `<3.14`, keeps annotation-driven `field: Type = Property(doc=...)` form,
 - this preserves import compatibility across Stone Soup `1.7`/`1.8` and avoids the `Type was not specified for property ...` failure seen under Python 3.14.
 
+## Update (2026-04-03): robust scalar conversion in custom hypothesiser
+
+Implemented in `mht/helpers/hypothesiser.py`:
+
+- added a helper that converts scalar-like ndarray/matrix outputs to a Python `float` via explicit shape/size handling,
+- replaced direct `float(...)` conversion of quadratic forms in both gating and log-pdf paths,
+- this avoids NumPy/Python-version dependent `TypeError: only 0-dimensional arrays can be converted to Python scalars` seen in bearing-range smoke runs under Python 3.12 CI.
+
 ## Update (2026-04-02): targeted structural cleanup pass
 
 Implemented in `mht/tomht_tracker.py` without behavior changes:
