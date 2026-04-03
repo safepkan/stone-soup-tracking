@@ -42,6 +42,23 @@ Dependabot is configured in `.github/dependabot.yml` to open weekly PRs for:
 - Python dependencies (`pip`)
 - GitHub Actions workflow dependencies
 
+## CI
+
+GitHub Actions CI is configured in `.github/workflows/ci.yml`.
+
+It runs on:
+
+- every `push`
+- every `pull_request`
+
+Current CI job:
+
+- Ubuntu 24.04 runner
+- Python 3.12
+- dependency install from `requirements.txt`
+- `python pre_commit.py --no-dirty`
+- `make smoke`
+
 ## Testing
 
 Unit tests for the TO-MHT work live under `mht/tests`.
