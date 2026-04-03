@@ -32,6 +32,16 @@ make smoke ENV=.venv312
 This is useful for periodic Python 3.12 compatibility checks while keeping your
 main development environment separate.
 
+## Dependency Updates
+
+Direct runtime and dev dependencies are pinned in `pyproject.toml` so the
+repo states explicit tested versions.
+
+Dependabot is configured in `.github/dependabot.yml` to open weekly PRs for:
+
+- Python dependencies (`pip`)
+- GitHub Actions workflow dependencies
+
 ## Testing
 
 Unit tests for the TO-MHT work live under `mht/tests`.
