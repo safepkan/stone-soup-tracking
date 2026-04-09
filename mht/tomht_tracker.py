@@ -45,6 +45,7 @@ from stonesoup.predictor.base import Predictor
 from stonesoup.types.detection import Detection
 from stonesoup.types.state import State
 from stonesoup.types.track import Track
+from stonesoup.types.update import Update
 from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.updater.base import Updater
 
@@ -1222,6 +1223,79 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         return True
 
+    def _birth_holding_track(self, birth: Track) -> Track:
+        """Return the initiator holding-track metadata when available."""
+        holding = birth.metadata.get("holding_track", None)
+        return holding if isinstance(holding, Track) else birth
+
+    def _birth_support_points(self, birth: Track) -> int:
+        """Return update-count support for one birth candidate."""
+        holding = self._birth_holding_track(birth)
+        return sum(1 for state in holding.states if isinstance(state, Update))
+
+    def _birth_support_age_misses(self, birth: Track) -> tuple[int, int, int]:
+        """Return support/age/miss summary for one birth candidate."""
+        holding = self._birth_holding_track(birth)
+        age = len(holding)
+        support = self._birth_support_points(birth)
+        misses = max(age - support, 0)
+        return support, age, misses
+
+    def _birth_covar_trace(self, birth: Track) -> float:
+        """Return covariance-trace quality proxy for one birth candidate."""
+        state = birth.states[-1]
+        cov = getattr(state, "covar", None)
+        if cov is None:
+            return float("inf")
+        cov_arr = np.asarray(cov, dtype=float)
+        if cov_arr.ndim != 2 or cov_arr.shape[0] != cov_arr.shape[1]:
+            return float("inf")
+        trace_val = float(np.trace(cov_arr))
+        if not np.isfinite(trace_val):
+            return float("inf")
+        return trace_val
+
+    def _birth_track_sort_key(
+        self,
+        tr: Track,
+        *,
+        scan_index: int,
+        det_index_by_obj: dict[int, int],
+    ) -> tuple[float, ...]:
+        """Return deterministic heuristic ranking key for internal births."""
+        used_key = self._birth_used_key(
+            tr,
+            scan_index=scan_index,
+            det_index_by_obj=det_index_by_obj,
+        )
+        support, age, misses = self._birth_support_age_misses(tr)
+        cov_trace = self._birth_covar_trace(tr)
+
+        st = tr.states[-1]
+        sv = np.asarray(st.state_vector, dtype=float).reshape(-1)
+
+        def _state_component(idx: int) -> float:
+            if idx >= sv.size:
+                return float("inf")
+            value = float(sv[idx])
+            if not np.isfinite(value):
+                return float("inf")
+            return value
+
+        used_idx = float(10**9 if used_key is None else int(used_key[1]))
+        return (
+            float(-support),
+            float(misses),
+            float(age),
+            cov_trace,
+            used_idx,
+            _state_component(0),  # x
+            _state_component(1),  # vx
+            _state_component(2),  # y
+            _state_component(3),  # vy
+            float(len(tr.states)),
+        )
+
     def _residual_detection_indices_after_step2(self, ctx: ScanContext) -> list[int]:
         """Return current-scan detection indices unused after local expansion."""
         used_current_scan_det_indices: set[int] = set()
@@ -1297,10 +1371,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         birth_tracks_created = len(initiated_tracks)
 
-        # Keep this phase intentionally simple: numeric sanity + fixed cap.
+        # Apply heuristic quality ranking before per-scan cap.
         kept_birth_tracks = [
             track for track in initiated_tracks if self._birth_is_sane(track)
         ]
+        # Initiators return sets; make cap selection deterministic across runs.
+        kept_birth_tracks.sort(
+            key=lambda track: self._birth_track_sort_key(
+                track,
+                scan_index=ctx.scan_index,
+                det_index_by_obj=ctx.det_index_by_obj,
+            )
+        )
         if len(kept_birth_tracks) > self.params.max_births_per_scan:
             kept_birth_tracks = kept_birth_tracks[: self.params.max_births_per_scan]
         birth_tracks_kept = len(kept_birth_tracks)

@@ -6,6 +6,14 @@ This document describes the tracker as it exists after the Phase D track-oriente
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
+## Update (2026-04-09): internal-birth determinism fix
+
+Implemented in `mht/tomht_tracker.py`:
+
+- internal birth candidates are now sorted with a deterministic key before `max_births_per_scan` is applied,
+- key order uses support/misses/age/covariance heuristics first, then deterministic tie-break fields,
+- this removes process-level nondeterminism caused by slicing directly from Stone Soup initiator outputs (which are returned as `set`).
+
 ## Update (2026-04-09): transitional constructor boundary cleanup
 
 Implemented in `mht/tomht_tracker.py`, `mht/runners/tomht_runner.py`, and `mht/tomht_scoring.py`:
