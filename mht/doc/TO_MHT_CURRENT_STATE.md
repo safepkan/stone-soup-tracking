@@ -6,6 +6,15 @@ This document describes the tracker as it exists after the Phase D track-oriente
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
+## Update (2026-04-09): internal-birth carry-over review from pre-transition implementation
+
+Reviewed old vs current birth handling in mht/tomht_tracker.py and related code. No behavior changes implemented in this review; notes captured for later cleanup/roadmap work:
+
+Residual policy: current TO-MHT births use detections unused by the union of all active leaves. This is conservative but preserves a strong no-conflict invariant for internal births and residual-based external starts. Pre-transition code used a less pessimistic residual notion tied to top-k/global support. A future revisit should weigh birth opportunity against the current clean exclusivity guarantee.
+Birth inclusion semantics: current TO-MHT path inserts surviving capped birth candidates directly as new trees. Pre-transition code represented births more as weighted alternatives inside the hypothesis flow. A more uncertain/probationary birth mechanism may be worth revisiting later, but this would be a real design change rather than a direct carry-over.
+Birth candidate observability: pre-transition debug output exposed richer candidate-ranking detail before/after capping. Similar observability may be useful again for tuning and diagnosis in the current architecture.
+Birth impact statistics: pre-transition birth stats do not map directly to the new tree-based architecture, but TO-MHT-native follow-up metrics may be useful later, for example survival after rebuild / after N scans / until first commitment.
+
 ## Update (2026-04-09): internal-birth determinism fix
 
 Implemented in `mht/tomht_tracker.py`:
