@@ -27,6 +27,15 @@ Implemented in `mht/tomht_tracker.py`, `mht/runners/tomht_runner.py`, and `mht/t
 - default scoring setup no longer reads values from hypothesiser attributes; it now uses explicit tracker params (`prob_detect`, `prob_gate`, `clutter_density`).
 - tracker construction for crossing/UKF is now inlined in `run_tomht(...)` (the thin `build_tomht_*` wrappers were removed); runner still sets backend defaults via params (`pda` for linear, `robust_pda` for UKF).
 
+## Update (2026-04-09): MAP output history restoration across N-scan pruning
+
+Implemented in `mht/tomht_model.py`, `mht/tomht_tracker.py`, and `mht/tomht_output.py`:
+
+- each `TrackTree` now carries a small committed-prefix state list (`committed_states`),
+- MAP-only N-scan root promotion appends the newly committed pre-promotion root state to that prefix before advancing the unresolved root,
+- public output-track reconstruction now returns `committed prefix + current unresolved leaf lineage`,
+- output metadata projection remains sourced from the active MAP leaf node.
+
 ## Update (2026-04-03): Stone Soup 1.8 / Python 3.14 property-type compatibility
 
 Implemented in `mht/tomht_tracker.py`:
@@ -98,7 +107,7 @@ The tracker is now a **true track-oriented TO-MHT implementation** in the practi
 - globals are rebuilt per cluster on every scan from current leaves,
 - the previous scan's explicit global list is **not** the persistent search frontier,
 - MAP-only N-scan pruning operates directly on explicit trees,
-- and current output tracks are reconstructed from retained leaf-node lineage.
+- and current output tracks are reconstructed from committed prefix history plus retained unresolved leaf-node lineage.
 
 This is stated both in the tracker module header and in the public tracker class docstring. The code now treats track trees as the primary scan-to-scan state, with rebuilt globals retained only as last-scan inspection/debug artifacts.
 
@@ -148,6 +157,7 @@ Persistent scan-to-scan state now consists primarily of:
 - explicit `TrackTree` objects keyed by logical `track_id`,
 - persistent `TrackHypothesisNode` objects linked by same-track parent/child structure,
 - each tree's current root and active leaf set,
+- each tree's committed prefix history before the unresolved root,
 - N-scan commitment bookkeeping,
 - and minimal long-lived stats/counters.
 

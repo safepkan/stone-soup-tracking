@@ -58,6 +58,7 @@ class TrackTree:
     root_node_id: int
     active_leaf_node_ids: set[int]
     root_source: str
+    committed_states: list[State] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

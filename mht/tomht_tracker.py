@@ -59,7 +59,10 @@ from mht.tomht_model import (
     TrackHypothesisNode,
     TrackTree,
 )
-from mht.tomht_output import reconstruct_track_from_leaf_node
+from mht.tomht_output import (
+    reconstruct_track_from_committed_prefix_and_leaf_node,
+    reconstruct_track_from_leaf_node,
+)
 from mht.tomht_scoring import (
     ScoringModel,
     make_default_scoring_model,
@@ -781,10 +784,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         map_snapshot = self.get_map_hypothesis_snapshot()
         if map_snapshot is None:
             return set()
-        return {
-            reconstruct_track_from_leaf_node(leaf_node)
-            for leaf_node in map_snapshot.leaf_nodes_by_track_id.values()
-        }
+        output_tracks: set[Track] = set()
+        for leaf_node in map_snapshot.leaf_nodes_by_track_id.values():
+            tree = self.track_trees_by_track_id.get(int(leaf_node.track_id))
+            committed_states = [] if tree is None else list(tree.committed_states)
+            output_tracks.add(
+                reconstruct_track_from_committed_prefix_and_leaf_node(
+                    committed_states=committed_states,
+                    leaf_node=leaf_node,
+                )
+            )
+        return output_tracks
 
     def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
         """Return read-only node-native MAP state for inspection/debug."""
@@ -2632,6 +2642,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 continue
             root_before = plan.root_before_by_track_id[track_id]
             chosen_child = self._nodes_by_id[chosen_child_id]
+
+            # Preserve committed output prefix strictly before the new unresolved root.
+            current_tree.committed_states.append(root_before.state)
 
             current_tree.root_node_id = chosen_child.node_id
             chosen_child.parent = None

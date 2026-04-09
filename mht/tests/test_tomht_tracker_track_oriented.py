@@ -321,6 +321,65 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         assert tracker.last_scan_stats is not None
         self.assertGreaterEqual(tracker.last_scan_stats.nscan_disagreement_total, 1)
 
+    def test_map_output_reconstruction_keeps_committed_prefix_across_pruning(
+        self,
+    ) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+        t2 = t1 + datetime.timedelta(seconds=1)
+        t3 = t2 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                ns_scan_window=1,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+
+        hypothesiser.set_options(
+            timestamp=t1, track_id=0, options=[(0, 5.0), (None, 0.0)]
+        )
+        tracker.update_tracker(t1, [_detection(1.0, 1.0, t1)])
+
+        hypothesiser.set_options(
+            timestamp=t2, track_id=0, options=[(0, 5.0), (None, 0.0)]
+        )
+        tracker.update_tracker(t2, [_detection(2.0, 2.0, t2)])
+
+        tree_after_first_prune = tracker.track_trees_by_track_id[0]
+        self.assertEqual(1, len(tree_after_first_prune.committed_states))
+
+        hypothesiser.set_options(
+            timestamp=t3, track_id=0, options=[(0, 5.0), (None, 0.0)]
+        )
+        tracker.update_tracker(t3, [_detection(3.0, 3.0, t3)])
+
+        tree_after_second_prune = tracker.track_trees_by_track_id[0]
+        self.assertEqual(2, len(tree_after_second_prune.committed_states))
+        committed_x = [
+            float(np.asarray(state.state_vector, dtype=float).reshape(-1)[0])
+            for state in tree_after_second_prune.committed_states
+        ]
+        self.assertEqual([0.0, 1.0], committed_x)
+
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        output_x = [
+            float(np.asarray(state.state_vector, dtype=float).reshape(-1)[0])
+            for state in output_track.states
+        ]
+        self.assertEqual([0.0, 1.0, 2.0, 3.0], output_x)
+        self.assertEqual(1, output_x.count(1.0))
+        self.assertEqual(4, len(output_track))
+
     def test_internal_births_use_step2_residual_detections(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
         t1 = t0 + datetime.timedelta(seconds=1)

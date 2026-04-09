@@ -1,6 +1,7 @@
 """Stone Soup output-adapter helpers for TOMHT node-based internals."""
 
 from stonesoup.types.track import Track
+from stonesoup.types.state import State
 
 from mht.tomht_model import TrackHypothesisNode
 
@@ -63,5 +64,18 @@ def reconstruct_track_from_leaf_node(leaf_node: TrackHypothesisNode) -> Track:
     """
     lineage = lineage_from_leaf_node(leaf_node)
     tr = Track([node.state for node in lineage])
+    tr.metadata.update(output_track_metadata_from_leaf_node(leaf_node))
+    return tr
+
+
+def reconstruct_track_from_committed_prefix_and_leaf_node(
+    *,
+    committed_states: list[State],
+    leaf_node: TrackHypothesisNode,
+) -> Track:
+    """Reconstruct output track from committed prefix plus unresolved lineage."""
+    lineage = lineage_from_leaf_node(leaf_node)
+    unresolved_states = [node.state for node in lineage]
+    tr = Track([*committed_states, *unresolved_states])
     tr.metadata.update(output_track_metadata_from_leaf_node(leaf_node))
     return tr
