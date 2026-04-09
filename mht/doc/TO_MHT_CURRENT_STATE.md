@@ -6,14 +6,26 @@ This document describes the tracker as it exists after the Phase D track-oriente
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
+## Update (2026-04-09): likely false-start increase after track-oriented transition
+
+Reviewed current internal-birth / lifecycle semantics against the pre-transition behavior. No behavior changes implemented in this review; notes captured for later cleanup/roadmap work:
+
+- **Birth existence is now effectively mandatory once a birth tree is created.** Surviving internal birth candidates are inserted directly as persistent TrackTrees. In the current rebuild flow, each active tree then contributes one selected leaf in rebuilt globals; there is no old-style “track absent” alternative after insertion.
+- **False starts therefore appear to have become easier to preserve, not just easier to create.** A clutter birth that survives sanity checks and max_births_per_scan is now a real tree that must persist until later lifecycle logic removes it.
+- **Track kill is slower / more permissive than before.** Miss handling now happens post-N-scan at whole-track level, and the effective miss threshold is floored by max(max_missed, ns_scan_window + 1). With current defaults this makes deletion slower than the earlier branch-local miss pruning path.
+- **Default miss termination mode is conservative in ambiguous periods.** The current default track_miss_termination_mode="map_leaf" can allow low-quality trees to linger when MAP still selects a surviving leaf, even if the overall tree is weak.
+- **Scoring may also contribute, but looks secondary to the structural change.** Current false-start behavior is most plausibly explained by the combination of direct birth insertion, mandatory post-birth existence, and slower lifecycle kill; scoring differences remain a possible additional factor rather than the main first suspect.
+- **Operational note:** for the external-start-only ISAC integration path, this is not necessarily an immediate blocker, but it remains a fairly high-priority quality topic for the general internal-birth tracker path.
+- **Practical short-term lever: initiator conservatism is an easy mitigation/diagnostic knob.** A stricter initiator can reduce candidate births without changing tracker semantics and may help separate “too many births created” from “births survive too long.”
+
 ## Update (2026-04-09): internal-birth carry-over review from pre-transition implementation
 
 Reviewed old vs current birth handling in mht/tomht_tracker.py and related code. No behavior changes implemented in this review; notes captured for later cleanup/roadmap work:
 
-Residual policy: current TO-MHT births use detections unused by the union of all active leaves. This is conservative but preserves a strong no-conflict invariant for internal births and residual-based external starts. Pre-transition code used a less pessimistic residual notion tied to top-k/global support. A future revisit should weigh birth opportunity against the current clean exclusivity guarantee.
-Birth inclusion semantics: current TO-MHT path inserts surviving capped birth candidates directly as new trees. Pre-transition code represented births more as weighted alternatives inside the hypothesis flow. A more uncertain/probationary birth mechanism may be worth revisiting later, but this would be a real design change rather than a direct carry-over.
-Birth candidate observability: pre-transition debug output exposed richer candidate-ranking detail before/after capping. Similar observability may be useful again for tuning and diagnosis in the current architecture.
-Birth impact statistics: pre-transition birth stats do not map directly to the new tree-based architecture, but TO-MHT-native follow-up metrics may be useful later, for example survival after rebuild / after N scans / until first commitment.
+- Residual policy: current TO-MHT births use detections unused by the union of all active leaves. This is conservative but preserves a strong no-conflict invariant for internal births and residual-based external starts. Pre-transition code used a less pessimistic residual notion tied to top-k/global support. A future revisit should weigh birth opportunity against the current clean exclusivity guarantee.
+- Birth inclusion semantics: current TO-MHT path inserts surviving capped birth candidates directly as new trees. Pre-transition code represented births more as weighted alternatives inside the hypothesis flow. A more uncertain/probationary birth mechanism may be worth revisiting later, but this would be a real design change rather than a direct carry-over.
+- Birth candidate observability: pre-transition debug output exposed richer candidate-ranking detail before/after capping. Similar observability may be useful again for tuning and diagnosis in the current architecture.
+- Birth impact statistics: pre-transition birth stats do not map directly to the new tree-based architecture, but TO-MHT-native follow-up metrics may be useful later, for example survival after rebuild / after N scans / until first commitment.
 
 ## Update (2026-04-09): internal-birth determinism fix
 
