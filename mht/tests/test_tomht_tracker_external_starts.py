@@ -5,13 +5,17 @@ import unittest
 from typing import cast
 
 import numpy as np
-from stonesoup.hypothesiser.probability import PDAHypothesiser
 from stonesoup.types.detection import Detection
 from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
-from stonesoup.updater.base import Updater
 
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
+
+
+class _NoopPredictor:
+    def predict(self, prior, timestamp=None, **kwargs):
+        del prior, timestamp, kwargs
+        raise RuntimeError("No prediction expected in this test helper")
 
 
 class _NoopHypothesiser:
@@ -50,8 +54,9 @@ def _build_tracker() -> TOMHTTracker:
         collect_stats=False,
     )
     return TOMHTTracker(
-        hypothesiser=cast(PDAHypothesiser, _NoopHypothesiser()),
-        updater=cast(Updater, _NoopUpdater()),
+        predictor=_NoopPredictor(),
+        updater=_NoopUpdater(),
+        hypothesis_generator=_NoopHypothesiser(),
         params=params,
         scoring_model=_ZeroScoringModel(),
     )
@@ -59,8 +64,9 @@ def _build_tracker() -> TOMHTTracker:
 
 def _build_tracker_with_overrides(params_overrides: dict[str, object]) -> TOMHTTracker:
     return TOMHTTracker(
-        hypothesiser=cast(PDAHypothesiser, _NoopHypothesiser()),
-        updater=cast(Updater, _NoopUpdater()),
+        predictor=_NoopPredictor(),
+        updater=_NoopUpdater(),
+        hypothesis_generator=_NoopHypothesiser(),
         params=TOMHTParams(
             debug_display_scan_stats=False,
             debug_display_hypotheses=False,
@@ -100,7 +106,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
 
     def test_constructor_rejects_non_string_params_override_keys(self) -> None:
         with self.assertRaisesRegex(TypeError, "params_overrides keys must be strings"):
-            _build_tracker_with_overrides(cast(dict[str, object], {1: 1}))
+            _build_tracker_with_overrides({1: 1})  # type: ignore[dict-item]
 
     def test_tracker_starts_with_empty_map_and_no_trees(self) -> None:
         tracker = _build_tracker()

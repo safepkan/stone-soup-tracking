@@ -27,11 +27,12 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import animation  # noqa: E402
 
 from stonesoup.plotter import Plotter  # noqa: E402
-
-from mht.helpers.tracker_builders import (  # noqa: E402
-    build_tomht_linear,
-    build_tomht_ukf,
+from stonesoup.predictor.kalman import (  # noqa: E402
+    KalmanPredictor,
+    UnscentedKalmanPredictor,
 )
+from stonesoup.updater.kalman import KalmanUpdater, UnscentedKalmanUpdater  # noqa: E402
+
 from mht.helpers.plotting import plot_tracks_stable_xy  # noqa: E402
 from mht.scenarios.bearing_range import (  # noqa: E402
     create_bearing_range_mht_example,
@@ -44,6 +45,7 @@ from mht.scenarios.crossing_targets import (  # noqa: E402
     tomht_initiator_for_crossing_simple,
 )
 from mht.tomht_tracker import (  # noqa: E402
+    TOMHTTracker,
     TOMHTParams,
 )
 
@@ -347,21 +349,16 @@ def run_tomht(
             if use_initiator
             else None
         )
-        tracker = build_tomht_linear(
-            transition_model,
-            measurement_model,
+        predictor = KalmanPredictor(transition_model)
+        updater = KalmanUpdater(measurement_model)
+        params = TOMHTParams(
             prob_detect=config.prob_detect,
             clutter_density=config.clutter_density,
-            initiator=initiator,
-            params=_apply_debug_overrides(
-                TOMHTParams(
-                    max_children_per_track=5,
-                    max_missed=5,
-                    prob_gate=0.9999,
-                    birth_log_penalty=15.0,
-                )
-            ),
-            params_overrides=params_overrides,
+            hypothesis_backend="pda",
+            max_children_per_track=5,
+            max_missed=5,
+            prob_gate=0.9999,
+            birth_log_penalty=15.0,
         )
     else:
         initiator = (
@@ -371,25 +368,27 @@ def run_tomht(
             if use_initiator
             else None
         )
-        tracker = build_tomht_ukf(
-            transition_model,
-            measurement_model,
+        predictor = UnscentedKalmanPredictor(transition_model)
+        updater = UnscentedKalmanUpdater(measurement_model)
+        params = TOMHTParams(
             prob_detect=config.prob_detect,
             clutter_density=config.clutter_density,
-            initiator=initiator,
-            params=_apply_debug_overrides(
-                TOMHTParams(
-                    max_global_hypotheses=10,
-                    max_children_per_track=3,
-                    max_missed=5,
-                    max_births_per_scan=2,
-                    birth_log_penalty=2.0,
-                    unused_det_log_penalty=4.0,
-                    prob_gate=0.99,
-                )
-            ),
-            params_overrides=params_overrides,
+            hypothesis_backend="robust_pda",
+            max_global_hypotheses=10,
+            max_children_per_track=3,
+            max_missed=5,
+            max_births_per_scan=2,
+            birth_log_penalty=2.0,
+            unused_det_log_penalty=4.0,
+            prob_gate=0.99,
         )
+    tracker = TOMHTTracker(
+        predictor,
+        updater,
+        initiator=initiator,
+        params=_apply_debug_overrides(params),
+        params_overrides=params_overrides,
+    )
     print(
         "OPERATING_MODE "
         f"setup={setup} resolved={mode.value} "

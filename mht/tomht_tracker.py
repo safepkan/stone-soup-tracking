@@ -2,7 +2,7 @@
 
 Typical usage pattern:
 ```python
-tracker = TOMHTTracker(hypothesiser,updater,initiator=initiator,params=params)
+tracker = TOMHTTracker(predictor,updater,initiator=initiator,params=params)
 t,map_tracks = tracker.update_tracker(time,detections)
 tracker.add_external_starts(t,confirmed_starts_at_t)  # optional, same timestamp
 map_tracks = tracker.tracks  # or use ``map_tracks`` from update_tracker()
@@ -29,6 +29,7 @@ import os
 import resource
 import sys
 import time as wall_clock
+import warnings
 from itertools import product
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
@@ -40,12 +41,14 @@ import numpy as np
 from stonesoup.base import Property
 from stonesoup.hypothesiser.probability import PDAHypothesiser
 from stonesoup.initiator.base import Initiator
+from stonesoup.predictor.base import Predictor
 from stonesoup.types.detection import Detection
 from stonesoup.types.state import State
 from stonesoup.types.track import Track
 from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.updater.base import Updater
 
+from mht.helpers.hypothesiser import RobustPDAHypothesiser
 from mht.tomht_model import (
     ClusterRebuildSnapshot,
     DetectionKey,
@@ -125,7 +128,11 @@ class TOMHTParams:
     # Scoring / numerical behavior.
     scoring_mode: str = "beta_ratio"
     log_epsilon: float = 1e-12
+    prob_detect: float = 0.9
     prob_gate: float = 0.99
+    clutter_density: float = 0.0
+    # Transitional knob while constructor API shifts to predictor/updater ownership.
+    hypothesis_backend: str = "pda"
 
     # MAP-only N-scan pruning: boundary is b = k - N.
     ns_scan_window: int = 6
@@ -306,15 +313,15 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # Stone Soup 1.8 under Python 3.14 can miss PEP-563 style class annotations
     # when resolving Property types, so keep explicit cls there.
     if sys.version_info >= (3, 14):
-        hypothesiser = Property(
-            PDAHypothesiser, doc="Hypothesiser used to branch per-track hypotheses."
+        predictor = Property(
+            Predictor, doc="Predictor used by tracker-owned hypothesis generation."
         )
         updater = Property(
             Updater, doc="Updater used to generate posteriors from selected hypotheses."
         )
     else:
-        hypothesiser: PDAHypothesiser = Property(
-            doc="Hypothesiser used to branch per-track hypotheses."
+        predictor: Predictor = Property(
+            doc="Predictor used by tracker-owned hypothesis generation."
         )
         updater: Updater = Property(
             doc="Updater used to generate posteriors from selected hypotheses."
@@ -332,27 +339,73 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     def __init__(
         self,
-        hypothesiser: PDAHypothesiser,
-        updater: Updater,
+        predictor: Predictor | None = None,
+        updater: Updater | None = None,
         *,
+        hypothesis_generator: object | None = None,
+        hypothesiser: PDAHypothesiser | None = None,
         detector: Any | None = None,
         initiator: Initiator | None = None,
         params: TOMHTParams = TOMHTParams(),
         params_overrides: Mapping[str, Any] | None = None,
         scoring_model: ScoringModel | None = None,
     ) -> None:
-        """Construct the tracker with Stone Soup components and TO-MHT params."""
+        """Construct the tracker with Stone Soup components and TO-MHT params.
+
+        Parameters
+        ----------
+        predictor : Predictor | None
+            Tracker-owned predictor. Primary public dependency.
+        updater : Updater | None
+            Updater used for posterior state generation from selected hypotheses.
+            Primary public dependency.
+        hypothesis_generator : object | None
+            Transitional escape hatch for local association generation.
+            Must provide ``hypothesise(track,detections,timestamp)``.
+            This is not a long-term public surface.
+        hypothesiser : PDAHypothesiser | None
+            Deprecated compatibility path for older call sites. Prefer
+            ``hypothesis_generator`` or backend selection via
+            ``TOMHTParams.hypothesis_backend``.
+        detector : Any | None
+            Optional detector used when iterating over the tracker.
+        initiator : Initiator | None
+            Optional initiator for internal birth track creation.
+        params : TOMHTParams
+            Tracker configuration.
+        params_overrides : Mapping[str, Any] | None
+            Optional field-level overrides applied onto ``params``.
+        scoring_model : ScoringModel | None
+            Optional scoring model. If omitted, a default is built from tracker
+            parameters. This hook is expected to evolve as scoring semantics are
+            refined; it should be treated as transitional rather than a stable
+            long-term extension point.
+        """
         params = self._apply_params_overrides(params, params_overrides)
-        super().__init__(hypothesiser, updater)
+        resolved_predictor, resolved_updater, resolved_hypothesis_generator = (
+            self._resolve_hypothesis_generator_dependencies(
+                predictor=predictor,
+                updater=updater,
+                hypothesis_generator=hypothesis_generator,
+                hypothesiser=hypothesiser,
+                params=params,
+            )
+        )
+        super().__init__(
+            predictor=resolved_predictor,
+            updater=resolved_updater,
+        )
+        self.hypothesis_generator = resolved_hypothesis_generator
         self.detector = detector
         self.params = params
         self.initiator = initiator
         if scoring_model is None:
             scoring_model = make_default_scoring_model(
-                hypothesiser=hypothesiser,
                 scoring_mode=params.scoring_mode,
                 log_epsilon=params.log_epsilon,
                 prob_gate=params.prob_gate,
+                prob_detect=params.prob_detect,
+                clutter_density=params.clutter_density,
                 unused_det_log_penalty=params.unused_det_log_penalty,
                 birth_log_penalty=params.birth_log_penalty,
             )
@@ -387,6 +440,135 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self.last_scan_stats: ScanStats | None = None
         self._stats: list[ScanStats] = []
         self.reset_stats()
+
+    @property
+    def hypothesis_generator(self) -> object:
+        """Temporary escape hatch for overriding local hypothesis generation."""
+        return self._hypothesis_generator
+
+    @hypothesis_generator.setter
+    def hypothesis_generator(self, value: object) -> None:
+        """Temporary escape hatch for overriding local hypothesis generation."""
+        if not hasattr(value, "hypothesise"):
+            raise TypeError(
+                "hypothesis_generator must provide a hypothesise(track,detections,timestamp) method."
+            )
+        self._hypothesis_generator = value
+
+    @property
+    def hypothesiser(self):
+        """Deprecated compatibility alias for ``hypothesis_generator``."""
+        return self.hypothesis_generator
+
+    @hypothesiser.setter
+    def hypothesiser(self, value) -> None:
+        """Deprecated compatibility alias for ``hypothesis_generator``."""
+        self.hypothesis_generator = value
+
+    def _resolve_hypothesis_generator_dependencies(
+        self,
+        *,
+        predictor: Predictor | None,
+        updater: Updater | None,
+        hypothesis_generator: object | None,
+        hypothesiser: PDAHypothesiser | None,
+        params: TOMHTParams,
+    ) -> tuple[Predictor, Updater, object]:
+        """Resolve transitional local-hypothesis backend wiring with precedence."""
+        resolved_predictor = predictor
+        resolved_updater = updater
+
+        # Legacy positional compatibility: TOMHTTracker(hypothesiser,updater,...)
+        if (
+            hypothesis_generator is None
+            and hypothesiser is None
+            and predictor is not None
+            and hasattr(predictor, "hypothesise")
+            and not hasattr(predictor, "predict")
+        ):
+            hypothesiser = predictor  # type: ignore[assignment]
+            resolved_predictor = None
+
+        if hypothesis_generator is not None:
+            resolved_hypothesis_generator = hypothesis_generator
+        elif hypothesiser is not None:
+            warnings.warn(
+                "TOMHTTracker(..., hypothesiser=...) is deprecated; pass "
+                "hypothesis_generator=... or rely on params.hypothesis_backend.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            resolved_hypothesis_generator = hypothesiser
+        else:
+            if resolved_predictor is None:
+                raise TypeError(
+                    "predictor is required when hypothesis_generator/hypothesiser "
+                    "is not provided."
+                )
+            if resolved_updater is None:
+                raise TypeError(
+                    "updater is required when hypothesis_generator/hypothesiser "
+                    "is not provided."
+                )
+            resolved_hypothesis_generator = self._build_default_hypothesis_generator(
+                predictor=resolved_predictor,
+                updater=resolved_updater,
+                params=params,
+            )
+
+        if resolved_hypothesis_generator is None or not hasattr(
+            resolved_hypothesis_generator, "hypothesise"
+        ):
+            raise TypeError(
+                "hypothesis_generator must provide a hypothesise(track,detections,timestamp) method."
+            )
+
+        if resolved_predictor is None:
+            resolved_predictor = getattr(
+                resolved_hypothesis_generator, "predictor", None
+            )
+        if resolved_predictor is None:
+            raise TypeError(
+                "predictor is required (or must be available on the provided hypothesis generator)."
+            )
+
+        if resolved_updater is None:
+            resolved_updater = getattr(resolved_hypothesis_generator, "updater", None)
+        if resolved_updater is None:
+            raise TypeError(
+                "updater is required (or must be available on the provided hypothesis generator)."
+            )
+
+        return resolved_predictor, resolved_updater, resolved_hypothesis_generator
+
+    @staticmethod
+    def _build_default_hypothesis_generator(
+        *,
+        predictor: Predictor,
+        updater: Updater,
+        params: TOMHTParams,
+    ) -> object:
+        """Build the transitional default local-hypothesis backend."""
+        if params.hypothesis_backend == "pda":
+            return PDAHypothesiser(
+                predictor,
+                updater,
+                params.clutter_density,
+                prob_gate=params.prob_gate,
+                prob_detect=params.prob_detect,
+            )
+        if params.hypothesis_backend == "robust_pda":
+            return RobustPDAHypothesiser(
+                predictor,
+                updater,
+                params.clutter_density,
+                prob_gate=params.prob_gate,
+                prob_detect=params.prob_detect,
+            )
+        raise ValueError(
+            "Unsupported TOMHTParams.hypothesis_backend="
+            f"{params.hypothesis_backend!r}. Expected one of: 'pda', 'robust_pda'."
+        )
 
     @staticmethod
     def _apply_params_overrides(
@@ -882,9 +1064,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> list[LocalChildCandidate]:
         """Build retained local continuation candidates for one active leaf."""
         track = reconstruct_track_from_leaf_node(leaf_node)
-        multi_hypotheses = self.hypothesiser.hypothesise(
-            track, ctx.detections, ctx.timestamp
-        )
+        hypothesise = getattr(self.hypothesis_generator, "hypothesise")
+        multi_hypotheses = hypothesise(track, ctx.detections, ctx.timestamp)
         hypotheses = list(multi_hypotheses)
 
         hyp_scores = self.scoring_model.score_track_hypotheses(

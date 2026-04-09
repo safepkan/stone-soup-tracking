@@ -6,11 +6,24 @@ This document describes the tracker as it exists after the Phase D track-oriente
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
+## Update (2026-04-09): transitional constructor boundary cleanup
+
+Implemented in `mht/tomht_tracker.py`, `mht/runners/tomht_runner.py`, and `mht/tomht_scoring.py`:
+
+- `TOMHTTracker` now takes `predictor` + `updater` as the primary constructor dependencies.
+- local branching still uses a hypothesis-generator object internally; behavior is intentionally unchanged in this pass.
+- constructor precedence is now:
+  - explicit `hypothesis_generator`,
+  - deprecated `hypothesiser` compatibility path,
+  - internally built backend from `TOMHTParams.hypothesis_backend` (`"pda"` or `"robust_pda"`).
+- default scoring setup no longer reads values from hypothesiser attributes; it now uses explicit tracker params (`prob_detect`, `prob_gate`, `clutter_density`).
+- tracker construction for crossing/UKF is now inlined in `run_tomht(...)` (the thin `build_tomht_*` wrappers were removed); runner still sets backend defaults via params (`pda` for linear, `robust_pda` for UKF).
+
 ## Update (2026-04-03): Stone Soup 1.8 / Python 3.14 property-type compatibility
 
 Implemented in `mht/tomht_tracker.py`:
 
-- `TOMHTTracker` now declares `hypothesiser`/`updater` `Property(...)` fields with a Python-version gate:
+- `TOMHTTracker` declares its Stone Soup `Property(...)` fields with a Python-version gate:
 - for Python `>=3.14`, uses explicit `Property(Type,doc=...)` form,
 - for Python `<3.14`, keeps annotation-driven `field: Type = Property(doc=...)` form,
 - this preserves import compatibility across Stone Soup `1.7`/`1.8` and avoids the `Type was not specified for property ...` failure seen under Python 3.14.
@@ -53,7 +66,7 @@ Implemented in `mht/runners` and tracker builders:
 
 Implemented in `mht/tomht_tracker.py`:
 
-- removed duplicate type specification for `hypothesiser`/`updater` class properties,
+- removed duplicate type specification for tracker class properties,
 - adopted Stone Soup's typed pattern (`field: Type = Property(doc=...)`) so annotations provide property type metadata,
 - this fixes import-time `BaseMeta` errors triggered when both annotation and `Property` type are set,
 - Python 3.14/Stone Soup 1.8 follow-up is covered by the 2026-04-03 update above.
@@ -112,7 +125,8 @@ The external interface remains Stone Soup-oriented:
 
 - detections are Stone Soup `Detection`,
 - output tracks are Stone Soup `Track`,
-- hypothesiser and updater remain the Stone Soup boundary objects,
+- predictor and updater are now the primary tracker constructor boundary objects,
+- local hypothesis generation is still PDA-style in this phase via a transitional backend selector (`hypothesis_backend`) or explicit injection,
 - output `Track` metadata is now an explicit TOMHT-owned projection from the current leaf node rather than arbitrary propagated metadata.
 
 ---

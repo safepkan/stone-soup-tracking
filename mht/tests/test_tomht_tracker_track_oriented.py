@@ -5,12 +5,10 @@ import unittest
 from typing import cast
 
 import numpy as np
-from stonesoup.hypothesiser.probability import PDAHypothesiser
 from stonesoup.initiator.simple import SimpleMeasurementInitiator
 from stonesoup.types.detection import Detection, MissedDetection
 from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
-from stonesoup.updater.base import Updater
 
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
 
@@ -84,6 +82,12 @@ class _ScriptedHypothesiser:
                 )
             )
         return out
+
+
+class _NoopPredictor:
+    def predict(self, prior, timestamp=None, **kwargs):
+        del prior, timestamp, kwargs
+        raise RuntimeError("No prediction expected for scripted hypotheses")
 
 
 class _ScriptedUpdater:
@@ -165,8 +169,9 @@ def _build_tracker(
             collect_stats=False,
         )
     return TOMHTTracker(
-        hypothesiser=cast(PDAHypothesiser, hypothesiser),
-        updater=cast(Updater, updater),
+        predictor=_NoopPredictor(),
+        updater=updater,
+        hypothesis_generator=hypothesiser,
         initiator=initiator,
         params=params,
         scoring_model=_ManualScoringModel(per_unused_penalty=0.5),
@@ -239,6 +244,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
             updater=_ScriptedUpdater(),
             params=TOMHTParams(
                 max_missed=0,
+                ns_scan_window=0,
                 debug_display_scan_stats=False,
                 debug_display_hypotheses=False,
                 debug_display_births=False,

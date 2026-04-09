@@ -113,25 +113,20 @@ class BetaRatioScoringModel:
 
 def make_default_scoring_model(
     *,
-    hypothesiser: object,
     scoring_mode: str,
     log_epsilon: float,
     prob_gate: float,
+    prob_detect: float,
+    clutter_density: float,
     unused_det_log_penalty: float,
     birth_log_penalty: float,
 ) -> ScoringModel:
-    """Build the tracker's default scoring model from hypothesiser parameters."""
+    """Build the tracker's default scoring model from tracker-owned params."""
     if scoring_mode == "beta_ratio":
-        # Try to read clutter density attribute name used by different hyp types.
-        clutter = getattr(hypothesiser, "clutter_density", None)
-        if clutter is None:
-            clutter = getattr(hypothesiser, "clutter_spatial_density", 0.0)
-        prob_detect = getattr(hypothesiser, "prob_detect", 0.9)
-        hyp_prob_gate = getattr(hypothesiser, "prob_gate", prob_gate)
         return BetaRatioScoringModel(
             prob_detect=float(prob_detect),
-            prob_gate=float(hyp_prob_gate),
-            clutter_density=float(clutter) if clutter is not None else 0.0,
+            prob_gate=float(prob_gate),
+            clutter_density=float(clutter_density),
             log_epsilon=log_epsilon,
             fallback_unused_det_log_penalty=unused_det_log_penalty,
             birth_log_penalty=birth_log_penalty,

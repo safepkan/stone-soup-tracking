@@ -316,13 +316,13 @@ The desired scan update should look approximately like this.
 
 For each active leaf in each track tree:
 
-- call the hypothesiser at the new timestamp, as in the current implementation
-- use the hypothesiser/updater boundary exactly as before
+- call the local hypothesis generator at the new timestamp, as in the current implementation
+- in the current transitional API this generator is selected via `TOMHTParams.hypothesis_backend` (or injected explicitly), while `predictor`/`updater` are the public constructor boundary
 - translate returned local hypotheses into child nodes
 - create matched and miss children
 - use the **same local per-track scoring model as before** in this phase unless the rewrite forces a small mechanical cleanup
 
-This phase is still hypothesiser-driven at the Stone Soup boundary; the architectural rewrite is about how the resulting hypotheses are stored and combined.
+This phase is still hypothesis-generator-driven at the local expansion boundary; the architectural rewrite is about how the resulting hypotheses are stored and combined.
 
 ### Step 2: Minimal local pruning and simple lifecycle handling
 
@@ -331,7 +331,7 @@ In the first version, local pruning and lifecycle handling are intentionally sim
 At most:
 
 - cap the number of children per leaf
-- **always keep a miss branch if the hypothesiser returned one**, matching current behavior
+- **always keep a miss branch if the hypothesis generator returned one**, matching current behavior
 - remove any leaf with `missed_count > max_missed` from the active leaf set
 - remove an entire track tree if it has no surviving active leaves
 
