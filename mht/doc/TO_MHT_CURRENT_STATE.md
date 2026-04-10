@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface-cleanup, determinism, and output-history passes completed through **2026-04-09**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface-cleanup, determinism, output-history, and solver-seam passes completed through **2026-04-10**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -26,6 +26,21 @@ The current implementation is therefore:
 - usable for replay-based experimentation and continued integration work,
 - reasonably robust on the main recorded replay through end-of-file,
 - but still **performance-limited** in large merged-cluster situations and still reliant on a few explicit approximation/safety-net mechanisms.
+
+## Update (2026-04-10): explicit cluster-solver contract seam
+
+The exact cluster solve path now has a dedicated solver-facing module:
+
+- `mht/tomht_cluster_solver.py` defines the solver-facing exact problem/result contract and the current exhaustive backend.
+- The tracker prepares solver-facing cluster problems from node/tree state and maps solved leaf IDs back to node-native rebuilt globals.
+- The exact problem contract now explicitly carries:
+  - one leaf option per track choice,
+  - full-history conflict keys for feasibility,
+  - current-scan used-detection sets per leaf,
+  - and the cluster-local unused-detection score hook needed for current objective semantics.
+- Approximation/policy placement is explicit:
+  - overload splitting remains a tracker-side pre-solve policy,
+  - historical-conflict relaxation remains a tracker-side around-solver retry policy.
 
 ---
 

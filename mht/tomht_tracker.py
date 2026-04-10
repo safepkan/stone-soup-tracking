@@ -24,7 +24,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields, replace
 import datetime
-import heapq
 import os
 import resource
 import sys
@@ -50,6 +49,14 @@ from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.updater.base import Updater
 
 from mht.helpers.hypothesiser import RobustPDAHypothesiser
+from mht.tomht_cluster_solver import (
+    ClusterSolver,
+    ClusterSolverLeafOption,
+    ClusterSolverProblem,
+    ClusterSolverResult,
+    ClusterSolverTrackOptions,
+    ExhaustiveClusterSolver,
+)
 from mht.tomht_model import (
     ClusterRebuildSnapshot,
     DetectionKey,
@@ -238,13 +245,21 @@ class _ClusterRebuildResult:
 
 @dataclass(frozen=True)
 class _ClusterSolveInput:
-    """Prepared inputs for one internal cluster-solver call."""
+    """Tracker-side prepared cluster-solve inputs before policy wrappers."""
 
     cluster: _ClusterWorkItem
     ctx: ScanContext
     leaf_options: list[list[TrackHypothesisNode]]
     cluster_universe: set[DetectionKey]
     unused_score_context: _ClusterUnusedScoreContext | None
+
+
+@dataclass(frozen=True)
+class _PreparedClusterSolveProblem:
+    """One solver-facing cluster problem plus leaf-ID mapping back to nodes."""
+
+    problem: ClusterSolverProblem
+    leaf_node_by_leaf_id: dict[int, TrackHypothesisNode]
 
 
 @dataclass(frozen=True)
@@ -270,9 +285,6 @@ class _MapNScanPruningPlan:
     updated_snapshots: list[ClusterRebuildSnapshot]
 
 
-type _ClusterTopKHeap = list[tuple[float, int, GlobalHypothesis]]
-
-
 # ============================================================================
 # Tracker Implementation
 # ============================================================================
@@ -293,9 +305,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     4. Optionally create internal birth trees from detections unused by the union
        of surviving active leaves after Step 3.
     5. Recompute measurement-exclusivity clusters from current trees.
-    6. Rebuild feasible globals per cluster via exhaustive enumeration and choose
-       MAP per cluster; overloaded clusters may first be approximately decomposed
-       by severing weakest full-history conflict edges.
+    6. Rebuild feasible globals per cluster through the exact cluster-solver
+       contract (current backend = exhaustive enumeration) and choose MAP per
+       cluster; overloaded clusters may first be approximately decomposed by
+       severing weakest full-history conflict edges.
     7. Post-solve prune each cluster tree frontier to leaves supported by at
        least one retained rebuilt top-K global for that cluster.
     8. Merge cluster MAP selections into full-scan MAP, then apply MAP-only
@@ -415,6 +428,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
         self.scoring_model = scoring_model
         maybe_log_scoring_diagnostics(self.scoring_model)
+        # Exact cluster-solver backend behind a narrow solver-facing contract.
+        self._cluster_solver: ClusterSolver = ExhaustiveClusterSolver()
 
         self._next_track_id = 0
         self._next_node_id = 0
@@ -1607,9 +1622,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _score_unused_cluster_current_scan_term(
         self,
         *,
-        selected_used_current_scan_keys: set[DetectionKey],
+        selected_used_current_scan_det_indices: frozenset[int],
         score_context: _ClusterUnusedScoreContext | None,
-        scan_index: int,
     ) -> float:
         """Compute explicit per-combination cluster-local unused-detection term."""
         if score_context is None:
@@ -1617,11 +1631,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         used_local_slots = {
             score_context.local_slot_by_global_det_index[det_idx]
-            for (key_scan_idx, det_idx) in selected_used_current_scan_keys
-            if (
-                key_scan_idx == scan_index
-                and det_idx in score_context.local_slot_by_global_det_index
-            )
+            for det_idx in selected_used_current_scan_det_indices
+            if det_idx in score_context.local_slot_by_global_det_index
         }
         return self.scoring_model.score_unused_detections(
             used_det_keys=used_local_slots,
@@ -1969,47 +1980,117 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             out.append(leaves)
         return out
 
-    def _push_top_k_global(
+    def _build_cluster_solver_problem(
         self,
         *,
-        top_k_heap: _ClusterTopKHeap,
-        candidate: GlobalHypothesis,
-        insertion_order: int,
-        k: int,
-    ) -> None:
-        """Streaming top-K maintenance for rebuilt globals.
+        cluster: _ClusterWorkItem,
+        leaf_options: list[list[TrackHypothesisNode]],
+        ctx: ScanContext,
+        cluster_universe: set[DetectionKey],
+        unused_score_context: _ClusterUnusedScoreContext | None,
+        relaxed_conflict_keys: frozenset[DetectionKey],
+    ) -> _PreparedClusterSolveProblem:
+        """Build one solver-facing exact cluster problem from tracker state."""
+        relaxed_key_set = set(relaxed_conflict_keys)
+        leaf_node_by_leaf_id: dict[int, TrackHypothesisNode] = {}
+        track_options: list[ClusterSolverTrackOptions] = []
 
-        Heap entries are ``(log_weight, -insertion_order, global)``.
-        For equal ``log_weight``, this keeps earlier-enumerated combinations and
-        evicts later-enumerated ties, matching the previous stable-sort behavior.
-        """
-        if k <= 0:
-            return
+        for idx, track_id in enumerate(cluster.track_ids):
+            solver_leaf_options: list[ClusterSolverLeafOption] = []
+            for leaf in leaf_options[idx]:
+                leaf_id = int(leaf.node_id)
+                leaf_node_by_leaf_id[leaf_id] = leaf
 
-        entry = (
-            float(candidate.log_weight),
-            -int(insertion_order),
-            candidate,
+                conflict_keys = set(leaf.detection_history_keys)
+                if relaxed_key_set:
+                    conflict_keys -= relaxed_key_set
+
+                used_current_scan_det_indices = frozenset(
+                    det_idx
+                    for (scan_idx, det_idx) in leaf.detection_history_keys
+                    if scan_idx == ctx.scan_index
+                    and (scan_idx, det_idx) in cluster_universe
+                )
+
+                solver_leaf_options.append(
+                    ClusterSolverLeafOption(
+                        leaf_id=leaf_id,
+                        track_id=int(track_id),
+                        accumulated_log_score=float(leaf.accumulated_log_score),
+                        full_history_conflict_keys=frozenset(conflict_keys),
+                        used_current_scan_det_indices=used_current_scan_det_indices,
+                    )
+                )
+
+            track_options.append(
+                ClusterSolverTrackOptions(
+                    track_id=int(track_id),
+                    leaf_options=tuple(solver_leaf_options),
+                )
+            )
+
+        score_unused_current_scan_detections = None
+        if unused_score_context is not None:
+
+            def _score_unused_current_scan_detections(
+                used_current_scan_det_indices: frozenset[int],
+            ) -> float:
+                return self._score_unused_cluster_current_scan_term(
+                    selected_used_current_scan_det_indices=used_current_scan_det_indices,
+                    score_context=unused_score_context,
+                )
+
+            score_unused_current_scan_detections = _score_unused_current_scan_detections
+
+        return _PreparedClusterSolveProblem(
+            problem=ClusterSolverProblem(
+                track_options=tuple(track_options),
+                max_results=int(self.params.max_global_hypotheses),
+                score_unused_current_scan_detections=(
+                    score_unused_current_scan_detections
+                ),
+            ),
+            leaf_node_by_leaf_id=leaf_node_by_leaf_id,
         )
-        if len(top_k_heap) < k:
-            heapq.heappush(top_k_heap, entry)
-            return
-        if entry > top_k_heap[0]:
-            heapq.heapreplace(top_k_heap, entry)
 
     @staticmethod
-    def _finalize_top_k_globals(
-        top_k_heap: _ClusterTopKHeap,
+    def _solver_result_to_globals(
+        *,
+        solver_result: ClusterSolverResult,
+        leaf_node_by_leaf_id: Mapping[int, TrackHypothesisNode],
     ) -> tuple[GlobalHypothesis, ...]:
-        """Return retained rebuilt globals sorted best-first."""
-        top_k_heap.sort(
-            key=lambda item: (
-                float(item[0]),  # log_weight
-                int(-item[1]),  # insertion_order (ascending for tie stability)
-            ),
-            reverse=True,
+        """Map solver-facing leaf IDs back to node-native rebuilt globals."""
+        out: list[GlobalHypothesis] = []
+        for solution in solver_result.solutions:
+            leaf_nodes_by_track_id: dict[int, TrackHypothesisNode] = {}
+            for track_id, leaf_id in solution.selected_leaf_id_by_track_id.items():
+                leaf_node = leaf_node_by_leaf_id.get(int(leaf_id))
+                if leaf_node is None:
+                    raise RuntimeError(
+                        "Cluster solver returned an unknown leaf ID. "
+                        f"track_id={track_id} leaf_id={leaf_id}"
+                    )
+                leaf_nodes_by_track_id[int(track_id)] = leaf_node
+            out.append(
+                GlobalHypothesis(
+                    leaf_nodes_by_track_id=leaf_nodes_by_track_id,
+                    log_weight=float(solution.log_weight),
+                )
+            )
+        return tuple(out)
+
+    def _solve_cluster_exact(
+        self,
+        *,
+        prepared_problem: _PreparedClusterSolveProblem,
+    ) -> tuple[tuple[GlobalHypothesis, ...], ClusterSolverResult]:
+        """Run one exact cluster solve call through the solver interface."""
+        solver_result = self._cluster_solver.solve(prepared_problem.problem)
+        kept_globals = self._solver_result_to_globals(
+            solver_result=solver_result,
+            leaf_node_by_leaf_id=prepared_problem.leaf_node_by_leaf_id,
         )
-        return tuple(item[2] for item in top_k_heap)
+        return kept_globals, solver_result
 
     def _infeasible_cluster_debug_summary(
         self,
@@ -2128,85 +2209,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             f"status={'enabled' if feasible_after > 0 else 'failed'}"
         )
 
-    def _enumerate_cluster_globals(
-        self,
-        *,
-        cluster: _ClusterWorkItem,
-        leaf_options: list[list[TrackHypothesisNode]],
-        ctx: ScanContext,
-        cluster_universe: set[DetectionKey],
-        unused_score_context: _ClusterUnusedScoreContext | None,
-        relaxed_conflict_keys: frozenset[DetectionKey],
-    ) -> tuple[_ClusterTopKHeap, int, int]:
-        """Enumerate feasible globals with optional relaxed historical conflicts."""
-        top_k_heap: _ClusterTopKHeap = []
-        combinations_evaluated = 0
-        feasible_combinations = 0
-        k = int(self.params.max_global_hypotheses)
-        relaxed_keys_set = set(relaxed_conflict_keys)
-
-        for picked in product(*leaf_options):
-            combinations_evaluated += 1
-            selected = list(picked)
-
-            feasible = True
-            used_keys: set[DetectionKey] = set()
-            for leaf in selected:
-                leaf_keys = set(leaf.detection_history_keys)
-                overlap = (used_keys & leaf_keys) - relaxed_keys_set
-                if overlap:
-                    feasible = False
-                    break
-                used_keys |= leaf_keys
-            if not feasible:
-                continue
-
-            feasible_combinations += 1
-            leaf_nodes_by_track_id = {
-                track_id: selected[idx]
-                for idx, track_id in enumerate(cluster.track_ids)
-            }
-            leaf_score_sum = sum(float(leaf.accumulated_log_score) for leaf in selected)
-
-            used_current_scan_keys = {
-                key
-                for key in used_keys
-                if int(key[0]) == ctx.scan_index and key in cluster_universe
-            }
-            unused_term = self._score_unused_cluster_current_scan_term(
-                selected_used_current_scan_keys=used_current_scan_keys,
-                score_context=unused_score_context,
-                scan_index=ctx.scan_index,
-            )
-            candidate = GlobalHypothesis(
-                leaf_nodes_by_track_id=leaf_nodes_by_track_id,
-                log_weight=float(leaf_score_sum + unused_term),
-            )
-            self._push_top_k_global(
-                top_k_heap=top_k_heap,
-                candidate=candidate,
-                insertion_order=feasible_combinations,
-                k=k,
-            )
-
-        return top_k_heap, combinations_evaluated, feasible_combinations
-
-    def _solve_cluster_exact_exhaustive(
-        self,
-        *,
-        solve_input: _ClusterSolveInput,
-        relaxed_conflict_keys: frozenset[DetectionKey],
-    ) -> tuple[_ClusterTopKHeap, int, int]:
-        """Run one exhaustive cluster-solver pass under fixed conflict rules."""
-        return self._enumerate_cluster_globals(
-            cluster=solve_input.cluster,
-            leaf_options=solve_input.leaf_options,
-            ctx=solve_input.ctx,
-            cluster_universe=solve_input.cluster_universe,
-            unused_score_context=solve_input.unused_score_context,
-            relaxed_conflict_keys=relaxed_conflict_keys,
-        )
-
     def _raise_cluster_infeasible_error(
         self,
         *,
@@ -2238,15 +2240,20 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         *,
         solve_input: _ClusterSolveInput,
     ) -> _ClusterSolveOutcome:
-        """Solve one cluster, retrying once with optional historical relaxation."""
-        (
-            top_k_heap,
-            combinations_evaluated,
-            feasible_combinations,
-        ) = self._solve_cluster_exact_exhaustive(
-            solve_input=solve_input,
+        """Solve one cluster, with optional relaxed-key retry around exact solve."""
+        prepared_problem = self._build_cluster_solver_problem(
+            cluster=solve_input.cluster,
+            leaf_options=solve_input.leaf_options,
+            ctx=solve_input.ctx,
+            cluster_universe=solve_input.cluster_universe,
+            unused_score_context=solve_input.unused_score_context,
             relaxed_conflict_keys=frozenset(),
         )
+        kept_globals, solve_result = self._solve_cluster_exact(
+            prepared_problem=prepared_problem
+        )
+        combinations_evaluated = int(solve_result.combinations_evaluated)
+        feasible_combinations = int(solve_result.feasible_combinations)
 
         historical_relaxation_attempted = False
         historical_relaxation_succeeded = False
@@ -2264,15 +2271,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
             if relaxed_historical_keys:
                 historical_relaxation_attempted = True
-                (
-                    top_k_heap,
-                    relaxed_combinations_evaluated,
-                    feasible_combinations,
-                ) = self._solve_cluster_exact_exhaustive(
-                    solve_input=solve_input,
+                relaxed_problem = self._build_cluster_solver_problem(
+                    cluster=solve_input.cluster,
+                    leaf_options=solve_input.leaf_options,
+                    ctx=solve_input.ctx,
+                    cluster_universe=solve_input.cluster_universe,
+                    unused_score_context=solve_input.unused_score_context,
                     relaxed_conflict_keys=frozenset(relaxed_historical_keys),
                 )
-                combinations_evaluated += relaxed_combinations_evaluated
+                kept_globals, relaxed_result = self._solve_cluster_exact(
+                    prepared_problem=relaxed_problem
+                )
+                combinations_evaluated += int(relaxed_result.combinations_evaluated)
+                feasible_combinations = int(relaxed_result.feasible_combinations)
                 historical_relaxation_succeeded = feasible_combinations > 0
                 self._log_historical_relaxation(
                     cluster=solve_input.cluster,
@@ -2288,7 +2299,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 relaxed_historical_keys=relaxed_historical_keys,
             )
 
-        kept_globals = self._finalize_top_k_globals(top_k_heap)
         return _ClusterSolveOutcome(
             kept_globals=kept_globals,
             combinations_evaluated=combinations_evaluated,
@@ -2303,7 +2313,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         *,
         solve_input: _ClusterSolveInput,
     ) -> _ClusterSolveOutcome:
-        """Cluster-solver boundary wrapper for future backend swaps."""
+        """Tracker-side policy wrapper around exact cluster-solver calls."""
         return self._solve_with_optional_historical_relaxation(solve_input=solve_input)
 
     def _rebuild_one_cluster(
@@ -2311,7 +2321,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         cluster: _ClusterWorkItem,
         ctx: ScanContext,
     ) -> _ClusterRebuildResult:
-        """Exhaustively enumerate and score feasible globals for one cluster."""
+        """Solve one exact cluster problem and map solver results to snapshots."""
         leaf_options = self._cluster_leaf_options(cluster.track_ids)
         projected_combinations = self._projected_combination_count(leaf_options)
         projected_cap = self.params.max_projected_cluster_combinations
@@ -2369,7 +2379,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         clusters: list[_ClusterWorkItem],
         ctx: ScanContext,
     ) -> tuple[list[ClusterRebuildSnapshot], RebuildStats]:
-        """Rebuild all clusters and aggregate per-scan rebuild instrumentation."""
+        """Rebuild all clusters with explicit pre-solve overload-split policy."""
         if not clusters:
             return [], RebuildStats()
 
