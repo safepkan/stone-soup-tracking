@@ -1,713 +1,319 @@
 # TO-MHT Next Steps
 
-## Update (2026-04-02): targeted structural cleanup pass
+## Next architectural subphase
 
-Implemented (behavior-preserving):
+**Runtime / cluster-solver scalability, step 1: formalize the cluster-solver interface and move the current exhaustive solver behind it.**
 
-- MAP-only N-scan pruning was split into planning vs mutation helpers
-- cluster rebuild now goes through a conservative internal solver boundary
-- optional historical-relaxation retry was extracted under that boundary while
-  keeping exhaustive enumeration as the solver backend
+This phase is intentionally **about interface definition, problem clarification, and seam cleanup first**, not yet about replacing the solver algorithm itself.
 
-## Update (2026-04-02): whole-track miss lifecycle moved post-N-scan
+The tracker is now at a point where:
 
-Implemented:
+- the track-oriented persistent-state transition is complete enough to treat as the baseline,
+- replay on the main recorded dataset reaches end-of-file,
+- the main remaining technical weakness is runtime concentration in large merged clusters,
+- and the current code already contains a conservative internal cluster-solver seam that can be made more explicit.
 
-- removed per-branch miss pruning in local expansion
-- added post-N-scan whole-track miss termination with configurable mode:
-  - `all_active_leaves`
-  - `map_leaf` (default)
-  - `global_k_leaves`
-- whole-track miss threshold now uses `max(max_missed, ns_scan_window + 1)`
-- increased `max_leaves_per_track_tree` default to `500` (from `100`) as a
-  higher pre-solve safety valve
-
-## Update (2026-04-02): narrow miss-budget floor guardrail implemented (superseded)
-
-Implemented:
-
-- local expansion now uses `effective_max_missed = max(max_missed, ns_scan_window + 1)`
-- this is a temporary robustness guardrail to avoid pruning miss-branches below
-  the active N-scan horizon
-
-## Update (2026-04-01): default N-scan window increased
-
-Implemented:
-
-- `TOMHTParams.ns_scan_window` default increased from `3` to `6`
-
-## Update (2026-04-01): historical-conflict relaxation safety-net implemented
-
-Implemented (narrow pass):
-
-- if a cluster is exact-infeasible, apply a targeted historical-conflict
-  relaxation and retry feasibility
-- relaxed keys are only forced historical keys shared by multiple tracks in that
-  cluster (forced across active leaves, present in root history, and at/older
-  than current N-scan boundary)
-- overlap checks remain strict for all non-relaxed keys
-- compact runtime instrumentation emits `HIST_RELAX ...`
-- scan stats now expose `hist_relax_attempts`, `hist_relax_ok`, and
-  `hist_relax_keys`
-
-## Update (2026-04-01): overload cluster splitting mitigation implemented
-
-Implemented (narrow pass):
-
-- overload-aware approximate decomposition for oversized exact clusters
-- trigger uses projected Cartesian combinations per cluster against
-  `overload_split_projected_combination_threshold` (default `500000`)
-- decomposition removes weakest conflict edges iteratively using pure
-  full-history shared detection-key counts (`len(shared_history_keys)`)
-- resulting connected components are solved exactly as independent subclusters
-- clear runtime instrumentation now reports `OVERLOAD_SPLIT ...` events plus
-  scan-level `split_clusters` / `split_ops` counters
-
-Controls:
-
-- `overload_split_enabled=True`
-- `overload_split_projected_combination_threshold=500000`
-- `overload_split_max_edge_removals_per_cluster=None`
-
-## Update (2026-04-01): local cap relaxed to pure safety-valve range
-
-Following the post-solve supported-leaf pruning refinement:
-
-- default `max_leaves_per_track_tree` was relaxed to `100` (from `8`)
-- local capping remains a pre-solve safety valve, not the primary pruning basis
-- added opt-in pruning-feasibility validation (`TOMHT_DEBUG_VALIDATE_PRUNING_FEASIBILITY=1`) to identify the first pruning stage that leaves a cluster infeasible
-- clustering now uses full active-leaf historical detection-key overlap so cluster decomposition matches the solver conflict criterion
-
-## Update (2026-04-01): post-solve supported-leaf pruning refinement
-
-A narrow pruning refinement was added on top of the committed Phase D rewrite:
-
-- after per-cluster top-K rebuild, each tree in that cluster now keeps only leaf nodes that appear in at least one retained rebuilt global for that cluster
-- local per-tree leaf capping (`max_leaves_per_track_tree`) remains in place only as a pre-solve safety valve
-- pruning remains cluster-local; no cross-cluster merge step was added for pruning
-
-## Implementation status (2026-03-31)
-
-Phase D has now been implemented in code as the primary tracker architecture:
-
-- explicit persistent `TrackTree` state with active leaf frontiers
-- per-scan clustering and rebuilt cluster globals from current leaves
-- exhaustive enumeration solver with explicit per-combination cluster-local unused-detection term
-- `(scan_index, det_index)` detection keys for conflict checking
-- MAP-only N-scan tree pruning with disagreement statistics from rebuilt alternatives
-- simple `max_missed` leaf/tree lifecycle deletion
-- simple internal births from Step-2 residual detections and external starts as new single-node trees
-- practical per-tree active-leaf cap added (`max_leaves_per_track_tree`) as a pre-solve safety valve to keep exhaustive-enumeration runtime bounded in longer scenario runs
-
-## Update (2026-04-01): narrow tractability controls tightened
-
-Without changing the Phase D architecture:
-
-- per-tree active-leaf default was tightened to `max_leaves_per_track_tree=8`
-- internal births gained explicit load guards for active tree/leaf counts
-- cluster-local unused-detection scoring now reuses one prebuilt cluster context
-- optional hard projected-combination guardrail can now stop oversized cluster rebuilds explicitly
-
-This planning document is therefore now mainly a reference/checklist for follow-up refinements, not a future architectural target.
-
-## Next architectural phase
-
-**Phase D: transition to a true track-oriented TO-MHT**
-
-The first handoff release is now complete and available for initial ISAC integration work.
-
-That release is good enough for:
-
-- initial pipeline integration,
-- workshop discussion,
-- replay-based evaluation,
-- and continued collaboration.
-
-However, the workshop, presentation work, and architectural review made the main next step clear:
-
-> move from the current node-based but still partly global-hypothesis-oriented implementation to a **true track-oriented TO-MHT** in which track trees / track hypotheses are the primary persistent state and global hypotheses are rebuilt from the current track set at each update.
-
-This document now serves as the planning document for that transition.
+The immediate next step is therefore to define, in one place and in explicit terms, **what problem the cluster solver is actually solving today** and what the tracker expects back from it.
 
 ---
 
-## 1. Core architectural goal
+## Why this subphase now
 
-### Desired end state
+This is the right first step for the runtime/scalability branch because it delivers several things at once:
 
-At the end of this phase, the tracker should be organized around the following principle:
+- it makes the current solver assumptions explicit,
+- it gives the current exhaustive implementation a clean home behind a formal interface,
+- it reduces the amount of solver-related logic implicitly spread through tracker internals,
+- and it prepares the codebase for later alternative backends without committing prematurely to any specific reformulation or algorithm.
 
-- what persists from one update to the next is primarily the **track-tree / track-hypothesis structure**
-- global hypotheses are **reconstructed at each scan** from the current surviving track hypotheses and their incompatibilities
-- the tracker should no longer treat the previous scan's explicit list of global hypotheses as the main persistent search state
+This also fits the current state of the code well. The tracker already has:
 
-This is the key correction relative to the current handoff release.
+- `_ClusterSolveInput`
+- `_ClusterSolveOutcome`
+- `_solve_cluster(...)`
+- extracted historical-relaxation retry under that boundary
+- and overload splitting wrapped around cluster solving
 
-### Public API stability
-
-The public operational API should remain unchanged through this phase:
-
-- `update_tracker(time, detections) -> (time, tracks)`
-- `tracks`
-- `add_external_starts(time, starts)`
-- `get_unused_detections()`
-
-Public debug / inspection helpers and instrumentation output may change as appropriate to fit the new architecture.
-
-### Why this phase now
-
-Reasons to prioritize this next:
-
-- this is the clearest remaining architectural gap after the first handoff
-- it aligns the implementation more directly with standard TO-MHT descriptions in textbooks/tutorials/papers
-- it should simplify the conceptual model of the tracker
-- it creates a better foundation for pruning, clustering, lifecycle work, and later optimization
-- it should make the implementation easier to reason about and evolve after integration starts
+but the problem definition is still not yet expressed as a stable solver-facing contract.
 
 ---
 
-## 2. Persistent vs transient state
+## Goal of this subphase
 
-This distinction should be made explicit in the redesign.
+At the end of this subphase, the tracker should have:
 
-### Persistent state
+1. a **separate solver module** with a clean solver-facing interface,
+2. a solver-facing problem definition that matches the tracker’s **actual current semantics**,
+3. the current exhaustive K-best solver migrated to that interface with no intended behavior change,
+4. tracker-side preparation and result-mapping logic that is thinner and easier to reason about,
+5. and a clearer distinction between:
+   - the **exact cluster K-best problem**
+   - and the current **approximation/safety-net policies** around it.
 
-The following should persist across scans:
-
-- explicit track trees / track families
-- all unpruned track-hypothesis nodes within those trees
-- root / leaf structure per tree
-- per-node state, score, association, counters, provenance
-- stable logical track IDs
-- N-scan / commitment-related persistent state as needed
-- minimal long-lived tracker statistics / counters
-
-Important clarification for this phase:
-
-- when a local child hypothesis is materialized as a new `TrackHypothesisNode`, it becomes part of the persistent tree structure
-- the primary persistent frontier is therefore the set of current leaf nodes across the track trees, not a persistent list of global hypotheses
-
-### Per-scan transient state
-
-The following should be rebuilt fresh on each update:
-
-- temporary hypothesiser / gating results before node materialization
-- conflict / incompatibility relations among current candidate track hypotheses
-- per-scan track clusters
-- rebuilt cluster-level global hypotheses
-- solver outputs for best / K-best cluster hypotheses
-- temporary score tables and scratch structures
-
-### Conceptually transient but useful for debug / inspection
-
-Some transient structures may be worth keeping available until the next update for inspection:
-
-- clusters from the most recent update
-- why tracks were clustered together
-  - for example shared detections / incompatibility links
-- rebuilt globals from the most recent update
-- current cluster MAP selections
-- current active leaves per track tree
-- full current set of track trees
-- statistics on disagreement between MAP-based pruning and alternative globals
-
-This category should be treated deliberately:
-
-- not persistent in the architecture,
-- but intentionally exposed for debugging / visualization / validation.
+This phase is successful even if runtime is not yet materially improved, provided the solver boundary becomes clear, explicit, and ready for follow-on work.
 
 ---
 
-## 3. Intended target data structures
+## Core design intent
 
-### 3.1 TrackHypothesisNode
+### 1. Express the problem in its natural tracker-facing form
 
-`TrackHypothesisNode` will likely remain the core per-step hypothesis object, but should evolve.
+The solver interface should describe the cluster problem in the form the tracker naturally has available:
 
-Expected changes:
+- a cluster consists of a set of tracks,
+- each track contributes a set of active leaf options,
+- each leaf has a local score,
+- each leaf has a set of full-history conflict keys,
+- each leaf has a set of current-scan used detections,
+- and the solver must return the K best feasible selections of one leaf per track.
 
-- keep:
-  - `track_id`
-  - `node_id`
-  - `parent`
-  - `scan_index`
-  - `timestamp`
-  - `state`
-  - association identity
-  - score contribution / accumulated score inputs as needed
-  - cached counters / provenance
-- add:
-  - child pointers or child IDs
-- likely change:
-  - node mutability, so child links can be maintained directly
-- possibly refine:
-  - score fields if clearer accumulated/local score separation is helpful
-  - miss/lifecycle-related fields once the new architecture is in place
+The contract should be solver-agnostic. It should **not** assume that the backend is exhaustive enumeration, Murty-style assignment, Lagrangian relaxation, or anything else.
 
-### 3.2 Explicit TrackTree / TrackFamily structure
+### 2. Match current tracker semantics, not an idealized future problem
 
-Introduce an explicit track-tree structure.
+The first interface must cover the problem the tracker actually solves **today**, not a simplified problem invented for a future solver.
 
-Likely responsibilities:
+In particular, the current rebuild semantics include:
 
-- stable logical track identity
-- root pointer / root node ID
-- current leaf set
-- maybe direct node registry for that tree
-- metadata / provenance
-- maybe a quick way to inspect active frontier and depth
+- one selected leaf per track,
+- full-history exclusivity via overlapping detection keys,
+- leaf-local accumulated scores,
+- and an explicit per-combination cluster-local unused-detection score term for current-scan detections.
 
-Goal:
+That means the interface should represent both:
 
-- make the “one logical track = one tree/family” idea explicit in code,
-- rather than implicit in node parent chains only.
+- the exact conflict structure used for feasibility,
+- and enough information for the current global score to be reconstructed faithfully.
 
-Note for this phase:
+### 3. Keep approximation paths explicit and separate
 
-- a `TrackTree` does **not** need to carry a separate committed Stone Soup `Track` object yet
-- output/history views can still be reconstructed from tree structure directly
-- reconstructable history is therefore limited to the depth retained in the tree, which is acceptable for this phase
+The current code also includes:
 
-### 3.3 Current tree set
+- overload cluster splitting for oversized exact clusters,
+- and narrow historical-conflict relaxation when exact feasibility fails after approximation-induced overlap.
 
-The tracker should hold an explicit collection of current track trees, for example something like:
+These should be made explicit as **policies around the solver**, not silently folded into the core exact-solver contract.
 
-- `track_trees_by_track_id`
-or equivalent
+The exact solver contract should represent the exact cluster K-best problem. Approximate decomposition and relaxed-feasibility retry should remain explicit wrappers or policies around that contract.
 
-This should become part of the primary persistent tracker state.
-
-### 3.4 Cluster structures
-
-Introduce explicit per-scan cluster concepts.
-
-A cluster should represent a set of track trees that currently interact and therefore must be solved jointly.
-
-Useful contents for a cluster:
-
-- participating track IDs
-- participating leaf hypotheses / candidate track hypotheses
-- shared detections or conflict links that caused clustering
-- rebuilt globals for that cluster
-- cluster MAP selection
-- optional debug/inspection explanation
-
-These clusters do **not** need to persist across scans.
-
-### 3.5 GlobalHypothesis
-
-`GlobalHypothesis` probably still remains useful, but should change role.
-
-Desired role:
-
-- represent a current globally consistent set of selected track hypotheses
-- mainly as a per-scan / per-cluster rebuilt object
-- not as the main persistent scan-to-scan frontier
-
-This is a role change more than necessarily a complete type removal.
+This is one of the main reasons this phase is valuable: it forces the code to say clearly what is “the problem” and what is “a current tractability workaround.”
 
 ---
 
-## 4. Intended update pipeline
+## Intended new structure
 
-The desired scan update should look approximately like this.
+### Separate module
 
-### Step 1: Extend all track trees
+Create a dedicated solver-facing module, for example:
 
-For each active leaf in each track tree:
+- `mht/tomht_cluster_solver.py`
 
-- call the local hypothesis generator at the new timestamp, as in the current implementation
-- in the current transitional API this generator is selected via `TOMHTParams.hypothesis_backend` (or injected explicitly), while `predictor`/`updater` are the public constructor boundary
-- translate returned local hypotheses into child nodes
-- create matched and miss children
-- use the **same local per-track scoring model as before** in this phase unless the rewrite forces a small mechanical cleanup
+or equivalent.
 
-This phase is still hypothesis-generator-driven at the local expansion boundary; the architectural rewrite is about how the resulting hypotheses are stored and combined.
+The exact file name is less important than the separation of responsibility.
 
-### Step 2: Minimal local pruning and simple lifecycle handling
+This module should own:
 
-In the first version, local pruning and lifecycle handling are intentionally simple.
+- solver-facing dataclasses / protocol / abstract base,
+- the current exhaustive backend implementation,
+- and any solver-local helpers needed by that backend.
 
-At most:
+This module should **not** own:
 
-- cap the number of children per leaf
-- **always keep a miss branch if the hypothesis generator returned one**, matching current behavior
-- remove any leaf with `missed_count > max_missed` from the active leaf set
-- remove an entire track tree if it has no surviving active leaves
+- cluster construction from trees,
+- N-scan pruning,
+- birth handling,
+- output reconstruction,
+- or broader tracker lifecycle logic.
 
-This is the simple first-version replacement for the current architecture's per-global drop semantics.
+### Tracker responsibility after the split
 
-Stronger local pruning and broader lifecycle design can be added later if needed.
+The tracker should remain responsible for:
 
-### Step 3: Form independent track clusters
+- building clusters from active tree frontiers,
+- preparing solver input from current tree/leaf state,
+- applying overload splitting before solve when enabled,
+- optionally applying historical-relaxation retry around solve when enabled,
+- mapping returned solver results back to current leaf nodes / rebuilt globals,
+- post-solve supported-leaf pruning,
+- and MAP/global snapshot construction.
 
-Build clusters from current track-tree interactions.
+In other words:
 
-Planned approach:
-
-- collect the set of detections currently used / competed for by each track tree frontier
-- create a graph where track trees are connected if their current candidate sets intersect / conflict
-- extract connected components
-- treat each connected component as an independent cluster for global reconstruction
-
-Important design choices:
-
-- clusters are recomputed on each update
-- they are **not** maintained as persistent tracker objects across scans
-- in this phase, clustering models only **measurement-exclusivity conflicts** induced by shared detections among current candidate track hypotheses
-
-This should simplify the architecture and provide a major performance win in many scenes.
-
-### Step 4: Rebuild globals per cluster
-
-For each cluster:
-
-- construct the current incompatibility / conflict structure among candidate track hypotheses
-- solve for one or more globally consistent leaf selections
-- represent the result in a solver-independent way
-
-The rebuilt globals should now be **derived from the current cluster track hypotheses**, not inherited directly from a persistent old global frontier.
-
-### Step 5: N-scan pruning on explicit track trees
-
-In this first rewrite, N-scan pruning is intentionally based on the **MAP global hypothesis only**.
-
-At pruning depth `N`:
-
-- for each tree old enough to prune, identify the child of the current root that contains the MAP-selected leaf
-- keep that child and promote it to be the new root
-- remove its siblings
-- trees younger than the pruning depth are left unchanged
-
-This is a deliberate simplification for the first version.
-
-To assess whether this is too aggressive in practice, the implementation should collect disagreement statistics between:
-
-- the MAP-selected pruning decision
-- and the alternative rebuilt globals for that cluster
-
-### Step 6: Extract MAP output
-
-Keep output simple initially:
-
-- output MAP only, as today
-- reconstruct output tracks from the selected leaf hypotheses
-- combine cluster outputs into one tracker output set
-
-### Step 7: Keep debug / inspection artifacts from the last update
-
-Retain useful transient structures from the last scan for inspection:
-
-- current trees
-- clusters
-- rebuilt globals
-- cluster explanations
-- current MAP selection
-- pruning disagreement statistics
-
-Debug / instrumentation printing will likely need to change in this phase.
-
-Goal:
-
-- keep a similar level of usefulness for debugging and scenario comparison
-- do not commit in advance to the exact output format
-- make a best effort to provide a reasonable set of per-scan and summary outputs adapted to the new architecture
+- tracker side prepares the problem,
+- solver module solves the exact problem,
+- tracker side interprets the result and applies current policies around it.
 
 ---
 
-## 5. Solver plan
+## Problem contract to make explicit
 
-### 5.1 Solver abstraction first
+The new solver interface should make explicit, at minimum, the following assumptions:
 
-The tracker should not depend directly on one specific global-hypothesis solver implementation.
+### Feasibility
 
-Introduce a wrapper / abstraction layer so the main code can stay independent of:
+A feasible cluster solution:
 
-- exhaustive enumeration in the first implementation
-- pure Python Murty implementation later
-- optimized external Murty implementation later
-- future replacements
+- selects exactly one leaf per track,
+- and no two selected leaves may overlap in full-history detection keys.
 
-### 5.2 Exact first-version optimization problem
+This must remain explicit because current clustering and rebuild feasibility are both based on full-history overlap, not current-scan-only overlap.
 
-Per cluster, define the solver input as:
+### Objective
 
-- a list of track trees in the cluster:
-  - `[track_1, track_2, ..., track_T]`
-- for each track, its current active leaves:
-  - `track_i.leaves = [leaf_i_1, leaf_i_2, ..., leaf_i_Li]`
-- for each leaf:
-  - `leaf.score`
-  - `leaf.detections`, the set of detection identifiers used within the unresolved window / current tree depth relevant to conflict checking
+The current exact cluster objective is not just the sum of per-leaf scores.
 
-Detection identifier format in this phase:
+It also includes the explicit cluster-local unused-detection term derived from current-scan detection usage. The contract should therefore either:
 
-- use `(scan_index, det_index)`-style keys
-- not per-scan indices alone
-- so cross-scan references inside the unresolved window cannot collide
+- include enough information for the solver to compute this exactly,
+- or include a clearly defined callback/context object for that score term.
 
-Decision variable:
+The main requirement is that the current exhaustive backend can be migrated behind the new interface **without changing scoring semantics**.
 
-- choose exactly one active leaf from each surviving track tree in the cluster
+### K-best semantics
 
-Feasibility constraint:
+The solver must:
 
-- a combination of selected leaves is feasible iff for every pair of selected leaves from different tracks:
-  - `leaf_i.detections ∩ leaf_j.detections = ∅`
+- return up to `k` feasible solutions,
+- in descending score order,
+- and preserve deterministic tie behavior as far as the current tracker already intends to do so.
 
-Objective:
+The existing exhaustive/top-K path already has explicit tie handling in parts of the code, so the new contract should not ignore this.
 
-- maximize:
-  - `sum(leaf.score for leaf in selected_leaves)`
-  - **plus** the same style of unused-detection penalty as before, now treated as a per-combination term
+### Result shape
 
-Explicit rule for the unused-detection term in this phase:
+The result should remain decoupled from tree internals:
 
-- compute it **cluster-locally**
-- define each cluster's conflict universe as the **union of current-scan detection keys that appear in any active leaf candidate in that cluster**
-- use only those cluster-local current-scan detections for the unused-detection term
-- for a feasible cluster combination, count which of those cluster-local current-scan detections are unused by that combination
-- add the corresponding penalty to that cluster combination score
-- full-scan score is then the sum of cluster scores
+- return selected leaf IDs or equivalent stable solver-facing identifiers,
+- not direct `TrackHypothesisNode` objects.
 
-Important clarification:
-
-- committed/shared history within a tree contributes the same additive constant to all leaves of that tree, so it does not affect which combination is optimal; it only shifts absolute scores
-- the unused-detection term is not forced into per-leaf scores in this phase; it remains an explicit per-combination/global-style term
-
-### 5.3 First implementation: exhaustive enumeration
-
-For the first version, use exhaustive enumeration:
-
-- generate the Cartesian product of the leaf lists in a cluster
-- filter combinations for feasibility
-- score each feasible combination
-- return the best
-
-To support pruning-disagreement statistics:
-
-- exhaustive enumeration should also retain enough per-scan information about non-MAP combinations to compare their pruning choices against the MAP choice before those alternatives are discarded
-- those alternatives do **not** need to persist as long-lived tracker state
-
-This is acceptable for the first version because:
-
-- clusters are expected to stay fairly small
-- the main goal is correctness and architectural clarity
-- clustering and minimal pruning should already reduce the search space substantially
-
-### 5.4 Later optimization
-
-After the architecture is working, solver replacement can be a separate step.
-
-Later options may include:
-
-- Murty-style K-best ranking
-- optimized external implementations
-- other assignment / relaxation formulations if profiling shows the need
-
-The rest of the tracker should depend only on a small solver interface and not on solver internals.
+The tracker remains responsible for mapping those IDs back to nodes.
 
 ---
 
-## 6. Birth and external-start handling in this phase
+## What should happen in this subphase
 
-Births are **not** the main architectural priority of this phase.
+### 1. Define the solver-facing datamodel
 
-The ISAC path currently does not use internal births, so this part can stay intentionally modest.
+Create clear solver-facing structures that represent:
 
-### Internal births
+- one track’s candidate leaf options,
+- one leaf’s score and conflict information,
+- the full cluster solve problem,
+- and one solved global hypothesis.
 
-Minimal acceptable approach:
+Naming does not need to be final, but the distinction should be clear.
 
-- still use the `initiator` passed via the constructor when it is not `None`
-- determine birth input detections **after Step 2**
-- specifically, use the current-scan detections unused by the **union of all surviving active leaves after local pruning / simple lifecycle filtering**
-- feed only those detections to the initiator
-- create new birth trees from the resulting initiated tracks
-- under that rule, births do not conflict with existing track trees
-- assume the initiator does not generate mutually conflicting birth candidates unless proven otherwise
-- add birth trees late in the update flow and let normal later survival determine whether they persist
+Important modeling point:
 
-### External track starts
+- the interface should represent both **full conflict keys** and **current-scan used detections** if both are needed to match the current objective exactly.
 
-External starts should remain supported.
+### 2. Define the solver protocol / abstract interface
 
-Planned interpretation in this phase:
+Define a solver interface that:
 
-- each external start becomes a new single-node track tree
-- as with births, assume external starts are created only from currently unused detections
-- under that rule, they are effectively separate new clusters with no conflicts to existing trees at insertion time
+- takes the natural cluster problem representation,
+- returns up to K solved global hypotheses,
+- is backend-agnostic,
+- and does not assume a specific internal reformulation.
 
-### Explicit risk note
+This interface should be narrow enough to be stable through the next few backend experiments.
 
-With minimal birth handling and incomplete lifecycle logic:
+### 3. Move the current exhaustive solver behind that interface
 
-- internal births may be over-produced
-- or published too early in some scenarios
+Reimplement the current exhaustive enumeration backend as one solver implementation using the new contract.
 
-This is acceptable for the first rewrite because ISAC does not use internal births, but should be monitored in synthetic/replay validation.
+This migration should aim for:
 
-### Explicit non-goal for this phase
+- no intended behavior change,
+- no intended semantics change,
+- and unchanged current replay behavior aside from any purely internal refactoring effects.
 
-Do **not** let internal births derail the main TO-MHT transition.
+### 4. Adapt the tracker to use the new solver contract
 
-If needed:
+Make `_rebuild_cluster_globals(...)` and related helpers call the new solver via the new interface.
 
-- keep births simple,
-- mark them as provisional,
-- revisit later with a cleaner lifecycle / candidate / tentative / confirmed model.
+The tracker should explicitly prepare:
 
----
+- leaf options,
+- conflict information,
+- current-scan detection usage information,
+- and any exact unused-detection scoring context needed by the current objective.
 
-## 7. Pruning expectations in this phase
+### 5. Make overload splitting / historical relaxation explicit around the interface
 
-The first track-oriented rewrite does **not** need to solve all pruning questions.
+Refactor the current policy structure so that it is clear that:
 
-Likely enough for the first version:
+- overload splitting is a current pre-solve approximation policy,
+- the exact solver contract itself still represents the unsplit exact subproblem,
+- historical-relaxation retry is a current around-solver fallback policy,
+- and these are not silently baked into the core exact problem definition.
 
-- minimal local branch limits
-- simple `max_missed`-based leaf / tree deletion
-- clustering
-- rebuilt globals by exhaustive enumeration
-- MAP-only N-scan pruning
+This is a key conceptual outcome of the subphase.
 
-That may already be sufficient to make many scenarios tractable.
+### 6. Update docs
 
-Further pruning can be deferred unless the rewrite immediately shows a need.
+Update the relevant docs so they describe:
 
----
-
-## 8. Debug / visualization goals
-
-This should be an explicit part of the target state.
-
-The tracker should make it reasonably easy to inspect:
-
-- the full current set of track trees
-- active leaves in each tree
-- current clusters
-- why trees were clustered together
-- rebuilt globals per cluster
-- current MAP output
-- disagreement between MAP-based pruning and alternative rebuilt globals
-
-Suggested direction:
-
-- add read-only debug/inspection properties or snapshot helpers
-- keep the public operational API stable
-- make internal structure easier to visualize during validation
-
-This will be important both for development and for explaining the rewrite.
+- the new solver-facing interface,
+- the fact that the current exhaustive solver now lives behind it,
+- and the distinction between exact solve semantics and approximation wrappers.
 
 ---
 
-## 9. Expected impact on tests and parameters
+## What should **not** happen in this subphase
 
-### 9.1 Tests
+This phase should **not** yet:
 
-Some current tests will no longer make sense because they are tied to the current architecture.
+- replace exhaustive enumeration with a new backend,
+- commit to a Murty/Hungarian-style internal reformulation,
+- redesign scoring semantics,
+- redesign birth semantics,
+- change N-scan pruning policy,
+- or broaden into a general cluster-code cleanup pass unrelated to the solver boundary.
 
-Expected actions:
-
-- remove tests that assume persistent scan-to-scan global-hypothesis-frontier mechanics
-- rewrite tests that should still hold conceptually but need new structural expectations
-- add tests for:
-  - explicit track trees
-  - per-scan clustering
-  - rebuilt globals
-  - MAP-based tree pruning
-  - simple leaf/tree deletion under `max_missed`
-  - debug snapshots if exposed
-
-### 9.2 TOMHTParams
-
-`TOMHTParams` will likely need revision.
-
-Reason:
-
-- some parameters are tied to concepts from the current architecture
-
-Expected approach:
-
-- keep stable, still-meaningful knobs
-- rename / remove parameters tied to old mechanics
-- add new parameters only where clearly justified by the new architecture
-- avoid overfitting the parameter block too early
+The point here is to make the next runtime work possible and explicit, not to do it all at once.
 
 ---
 
-## 10. Validation strategy after rewrite
+## Acceptance criteria
 
-Validation should be staged.
+This subphase should be considered complete when:
 
-### Stage 1: synthetic scenarios
+- there is a dedicated solver-facing module,
+- there is a clear solver protocol / contract,
+- the current exhaustive backend implements that contract,
+- the tracker uses the new interface for cluster solving,
+- overload splitting and historical-relaxation retry are clearly represented as policies around the exact solver problem,
+- replay behavior remains materially consistent with the current baseline,
+- and the docs clearly describe the new seam.
 
-Use the existing scenario set first.
+A strong secondary success criterion is that someone reading the code can now answer, in one place:
 
-Goal:
-
-- verify that the tracker is back in a sane working state
-- check that outputs still make sense qualitatively
-- catch obvious regressions in branching / scoring / pruning
-
-### Stage 2: replay data
-
-After synthetic scenarios are working:
-
-- run the tracker on recorded data
-- check that outputs remain sensible
-- inspect clusters / trees / MAP outputs
-- compare behavior and performance with the current handoff implementation
-
-This should give a reasonable level of confidence that the core rewrite is sound.
+> what exact optimization problem does the tracker currently solve per cluster, and what current approximation paths sit around that problem?
 
 ---
 
-## 11. Execution strategy
+## Follow-on work expected after this subphase
 
-### Preferred implementation style
+Once this seam is in place, the next likely steps become much clearer. Plausible follow-on directions include:
 
-This is likely best treated as a **coherent architectural rewrite**, not a very long chain of tiny patches.
+- a new exact or approximate K-best backend,
+- profiling-guided reduction of cluster-growth pressure before solve,
+- principled treatment of overload splitting and historical relaxation,
+- and improved organization of the cluster build/rebuild code as part of that deeper work.
 
-Reasons:
-
-- the target architecture is different in a fundamental way
-- many parts depend on each other
-- intermediate half-converted states may be more confusing than helpful
-
-### Practical note about using Codex
-
-If Codex is used for implementation:
-
-- first make the target architecture description clear enough that a human engineer would find it unambiguous
-- then try for a strong single-shot or mostly-single-shot implementation attempt
-- if execution stalls or drifts:
-  - diagnose whether the issue is the plan, the scope, or the code generation
-  - decide whether to steer incrementally or refresh the plan and retry
-
-The plan should be treated as the most important dependency.
+The current rebuild step remains exhaustive and is still the main runtime bottleneck on heavy merged clusters, which is why this seam is worth making explicit first.
 
 ---
 
-## 12. Proposed phase outcome
+## Recommended implementation style
 
-This phase should be considered successful if, at the end:
+This subphase should follow the usual conservative approach:
 
-- explicit track trees exist
-- globals are rebuilt from current surviving track hypotheses rather than propagated scan-to-scan as the main state
-- per-scan clustering exists and works
-- MAP-based pruning operates naturally on explicit trees
-- simple leaf/tree deletion under `max_missed` works
-- current public API remains usable for integration
-- synthetic scenarios work again
-- replay data gives sensible results
-- the resulting code is conceptually closer to the TO-MHT model described in the workshop
+1. define the contract,
+2. adapt the current exhaustive solver behind it,
+3. validate behavior,
+4. then use that seam for later solver experimentation.
 
----
-
-## 13. Immediate next actions
-
-1. Clean up `TO_MHT_CURRENT_STATE.md` so it accurately reflects the first handoff release.
-2. Update this document into the true TO-MHT transition plan.
-3. Review the target-state description carefully before implementation.
-4. Then attempt the architectural rewrite.
+That is the intended scope of this phase.
