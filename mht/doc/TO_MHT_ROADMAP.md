@@ -2,9 +2,9 @@
 
 This roadmap is intentionally forward-looking, but it starts from the tracker’s **current real baseline** rather than from the pre-transition plans.
 
-The structural track-oriented transition is now complete enough that the central question is no longer “how do we make this a true TO-MHT?” The central question is now:
+The structural track-oriented transition is complete enough that the main question is no longer “how do we make this a true TO-MHT?” The more relevant question is now:
 
-> given the current track-oriented baseline, what should be improved next, what belongs together, and which topics are highest leverage?
+> given the current track-oriented baseline, exact-solver seam, and current replay bottlenecks, what should be improved next, what belongs together, and which topics are highest leverage?
 
 This roadmap is therefore best read as a **priority map and topic grouping document**, not as a fixed execution order.
 
@@ -21,15 +21,17 @@ The tracker now has:
 - MAP-only N-scan pruning directly on explicit trees,
 - committed-prefix output history restoration,
 - predictor/updater as the primary constructor boundary,
-- and replay completion on the main recorded dataset.
+- an explicit solver-facing exact cluster-solver contract,
+- `branch_and_bound` as the default exact cluster backend,
+- `exhaustive` retained as exact reference/fallback,
+- `ortools` retained as experimental exact backend,
+- and per-scan timing-phase instrumentation showing where replay time is now going.
 
-This means the tracker is no longer blocked on the core architectural transition. It is now in a position where the next work should be chosen based on leverage and coherence, not by continuing to chase an already-completed architecture phase.
+This means the tracker is no longer blocked on the core architectural transition or on the original exact-solver bottleneck that motivated the recent scalability phase.
 
 ---
 
 ## 2. Guiding principles for the next phase
-
-A few principles should shape the next decisions.
 
 ### 2.1 Preserve the clear runtime story
 
@@ -38,7 +40,8 @@ The strongest gain from the transition is that the runtime story is now understa
 - trees/leaves are the persistent state,
 - globals are rebuilt per scan,
 - MAP-only N-scan pruning commits tree structure directly,
-- and output tracks are reconstructed from committed prefix plus unresolved lineage.
+- output tracks are reconstructed from committed prefix plus unresolved lineage,
+- and exact cluster solving now sits behind a clean dedicated seam.
 
 Future work should preserve that clarity.
 
@@ -53,30 +56,31 @@ This is especially important now that the tracker is good enough to experiment w
 
 ### 2.3 Avoid cleanup-only phases when the cleanup belongs to a deeper topic
 
-There is still internal organization work worth doing, especially around `_build_track_clusters(...)` and `_rebuild_cluster_globals(...)`. But that organization should preferably be treated as a **sub-goal of deeper work** such as solver/runtime work, approximation cleanup, or scoring redesign, rather than as an isolated readability-only phase.
+There is still internal organization work worth doing, especially around local expansion and parts of the cluster-build/rebuild flow. But that organization should preferably be treated as a **sub-goal of deeper work** such as local branching/runtime work, scoring redesign, or approximation cleanup, rather than as an isolated readability-only phase.
 
-### 2.4 Keep docs aligned with the actual code and reasoning
+### 2.4 Keep docs aligned with actual code and reasoning
 
-The docs are an important part of the handoff and planning workflow. As deeper work proceeds, `CURRENT_STATE`, `NEXT_STEPS`, and the roadmap should continue to evolve with the implementation.
+The docs are part of the handoff and planning workflow. As deeper work proceeds, `CURRENT_STATE`, `NEXT_STEPS`, and the roadmap should continue to evolve with the implementation.
 
 ---
 
 ## 3. Main topic groups from the current checkpoint
 
-The next work appears to fall into five main topic groups.
+The next work now appears to fall into five main topic groups.
 
-### A. Runtime / cluster-solver scalability
+### A. Local expansion / hypothesis-generation runtime
 
-This is the clearest current technical bottleneck.
+This now looks like the clearest immediate performance bottleneck on the primary replay used during the recent phase.
 
-The tracker is now robust enough to run through the main replay, but large merged clusters still create heavy-tailed scan times because the current rebuild path is still exhaustive enumeration. Overload splitting and historical relaxation help, but they are mitigations rather than a final scalability story.
+The recent timing breakdown work indicates that, once branch-and-bound replaced exhaustive as the default exact backend, heavy scans became dominated primarily by local expansion / hypothesis generation rather than by exact cluster rebuild solve time.
 
 This topic includes:
 
-- replacing exhaustive enumeration with a more scalable K-best cluster solver,
-- profiling where cluster combinatorics actually come from,
-- reducing the number of expensive merged clusters that reach the rebuild stage,
-- and improving the structure/readability of the cluster build/rebuild code as part of that work.
+- reducing per-leaf local hypothesis generation cost,
+- reducing the number of leaves that need full local expansion work,
+- revisiting how local hypotheses are produced and filtered,
+- potential caching/reuse opportunities,
+- and profiling where Stone Soup-boundary work is dominating.
 
 This is currently the strongest candidate for the **next major technical branch**.
 
@@ -92,7 +96,7 @@ This topic includes:
 - better alignment between local branch scoring and rebuilt-global semantics,
 - and possible prediction/gating/likelihood reuse or batching opportunities.
 
-This topic is important, but it is not yet obvious whether it should come **before** runtime/scalability work or after it.
+This topic overlaps strongly with local-expansion runtime work and may belong in the same broader next branch.
 
 ### C. Internal birth / existence / quality semantics
 
@@ -131,7 +135,7 @@ This topic includes:
 - deciding whether approximation-induced overlap should be treated differently,
 - and improving the conceptual story around when and why these mechanisms are engaged.
 
-This work likely belongs together with runtime/solver work more than as an isolated phase.
+This work still belongs more naturally with runtime/scoring/branching work than as an isolated phase.
 
 ### E. Integration / validation / operational hardening
 
@@ -143,7 +147,8 @@ This topic includes:
 - keeping the tracker easy to drop into Stone Soup-style workflows,
 - preserving Python / Stone Soup compatibility,
 - practical runner/parameter override support,
-- and scenario/replay validation sufficient to trust the next deeper changes.
+- backend parity/regression coverage,
+- and scenario/replay validation sufficient to trust deeper changes.
 
 This is important ongoing support work, but no longer the defining next phase.
 
@@ -157,7 +162,7 @@ The current rough priority picture looks like this.
 
 These currently look the most likely to shape the next deeper phase:
 
-1. **Runtime / cluster-solver scalability**
+1. **Local expansion / hypothesis-generation runtime**
 2. **Scoring / local-branching ownership**
 3. **Internal birth / existence semantics**
 
@@ -167,7 +172,7 @@ That does **not** mean they must be tackled in that exact order. But it does mea
 
 These should travel with the deeper work rather than define standalone phases:
 
-- cluster/build/rebuild code organization,
+- cluster/build/rebuild and expansion-path code organization,
 - approximation semantics cleanup,
 - observability improvements,
 - additional regression/validation coverage,
@@ -189,18 +194,18 @@ These still matter, but do not currently define the main next move:
 
 At the current checkpoint, several next branches are plausible.
 
-### Option 1: Runtime-first branch
+### Option 1: Local-expansion/runtime-first branch
 
 Focus:
-- cluster-growth pressure,
-- solver replacement,
-- overload-split/relaxation semantics,
-- and organization of the cluster build/rebuild code as part of that work.
+- local hypothesis generation cost,
+- leaf-frontier growth pressure before solve,
+- caching/reuse opportunities,
+- and timing-guided reduction of expensive expansion work.
 
 Why this is attractive:
-- runtime is the clearest current bottleneck,
-- replay now works well enough that performance profiling is meaningful,
-- and the tracker already has a conservative internal cluster-solver seam.
+- the recent branch-and-bound + timing work indicates that exact cluster solving is no longer the dominant bottleneck on the primary replay,
+- replay now works well enough that profiling is meaningful,
+- and the timing instrumentation provides a concrete starting point.
 
 This currently looks like the strongest candidate.
 
@@ -210,14 +215,14 @@ Focus:
 - tracker-owned local branching math,
 - less PDA-style dependency internally,
 - cleaner score decomposition,
-- and possible batching/caching opportunities.
+- and possibly better runtime through more direct local score generation.
 
 Why this is attractive:
 - the public interface already moved in this direction,
-- scoring remains one of the most obviously provisional parts of the design,
-- and better local scores may improve both quality and runtime indirectly.
+- scoring remains one of the most provisional parts of the design,
+- and a cleaner local-association story may improve both runtime and quality.
 
-This is compelling, but may still be slightly less urgent than the runtime story.
+This is compelling, and may in practice merge with Option 1.
 
 ### Option 3: Birth/existence-first branch
 
@@ -230,7 +235,7 @@ Focus:
 
 Why this is attractive:
 - recent reviews strongly suggest that internal-birth quality got worse structurally,
-- and the issue is now conceptually clearer than before.
+- and the issue is conceptually clearer than before.
 
 Why it may not be first:
 - ISAC integration is external-start-only,
@@ -244,12 +249,13 @@ This should stay high on the list even if not chosen first.
 
 To avoid fragmented work, some topics should be grouped deliberately.
 
-### Runtime / solver work should probably include
+### Local-expansion/runtime work should probably include
 
-- profiling and characterization of merged clusters,
-- solver replacement or solver-path refinement,
-- overload split / historical relaxation review,
-- and reorganization of `_build_track_clusters(...)` + `_rebuild_cluster_globals(...)` as part of that work.
+- profiling and characterization of expensive expansion scans,
+- revisiting the number of local hypotheses retained/generated,
+- any local caching/reuse opportunities,
+- scoring/local-branching simplification where it materially reduces expansion work,
+- and organization of the expansion-related tracker code as part of that work.
 
 ### Scoring work should probably include
 
@@ -267,7 +273,11 @@ To avoid fragmented work, some topics should be grouped deliberately.
 - candidate observability,
 - and TO-MHT-native birth impact metrics.
 
-This grouping should help avoid “half-fixes” that touch only one visible symptom.
+### Approximation work should probably include
+
+- overload split / historical relaxation review,
+- whether current exact/approximate boundaries are still the right ones,
+- and how those mechanisms should interact with future runtime or scoring changes.
 
 ---
 
@@ -275,35 +285,43 @@ This grouping should help avoid “half-fixes” that touch only one visible sym
 
 A few concrete observations should shape later choices.
 
-### 7.1 Determinism matters early
+### 7.1 The solver phase was successful enough to change the default
 
-The recent birth-cap nondeterminism issue was small but highly worthwhile to fix. Deterministic behavior makes replay and scenario debugging much easier. Future deeper work should preserve that standard.
+The recent runtime/scalability phase produced:
 
-### 7.2 Output-history restoration completed an important usability gap
+- a clean solver seam,
+- parity-preserving exhaustive extraction,
+- a rejected Murty direction,
+- an exploratory OR-Tools backend,
+- and a branch-and-bound backend that was strong enough to become the default.
 
-Committed-prefix output reconstruction was a small but valuable completion step. Similar improvements are worth doing when they clarify the runtime story without distorting the core architecture.
+That means the exact cluster-solver topic is no longer the same kind of urgent blocker it was at the start of the phase.
 
-### 7.3 Internal births should not dominate the whole roadmap
+### 7.2 OR-Tools should be kept, but not over-weighted
 
-Internal births are important, but the roadmap should not let them overshadow the broader runtime/scoring architecture questions unless operational use or replay evidence says they must.
+The experimental OR-Tools backend was useful and should remain available for comparison and future hybrid/K-best experiments, but the current repeated-solve CP-SAT path is not the main next runtime answer.
 
-### 7.4 Code organization is real, but should be attached to real work
+### 7.3 Timing instrumentation changed the picture
 
-The cluster build/rebuild section now carries a lot of closely related logic. This absolutely should improve, but most likely as part of whichever deeper branch is chosen next.
+The new timing breakdown was important because it revealed that, once the exact solver improved, the dominant replay bottleneck moved to local expansion. That should directly shape what comes next.
+
+### 7.4 Code organization is real, but should still be attached to real work
+
+There is still tracker-internal organization work worth doing, but most of it should probably travel with the next substantive branch rather than define a standalone cleanup phase.
 
 ---
 
 ## 8. Near-term execution style
 
-The immediate post-reset workflow should likely be:
+The immediate post-phase workflow should likely be:
 
-1. keep `CURRENT_STATE` accurate and clean,
-2. use this roadmap as a topic map rather than a strict sequence,
-3. choose the next focused branch deliberately,
-4. draft a fresh `NEXT_STEPS` only once that branch is chosen,
+1. refresh `CURRENT_STATE` and roadmap to match the new baseline,
+2. leave `NEXT_STEPS` as historical context for the just-completed solver phase,
+3. decide deliberately which next branch to take,
+4. only then draft a fresh `NEXT_STEPS` for that branch,
 5. then do a targeted implementation pass.
 
-This avoids committing too early to a precise phase order that may not survive contact with replay evidence.
+That avoids prematurely committing to the wrong next branch before the recent timing data is absorbed properly.
 
 ---
 
@@ -311,8 +329,11 @@ This avoids committing too early to a precise phase order that may not survive c
 
 At the current checkpoint, the best summary is:
 
-1. The track-oriented architectural transition is complete enough to treat as the new baseline.
-2. The main open technical weakness is runtime on large merged clusters.
-3. Scoring/local-branching design and internal birth/existence semantics are the two other major unresolved design areas.
-4. Approximation semantics, validation, observability, and code organization should be advanced together with those deeper topics rather than as isolated phases.
-5. The next concrete implementation phase should be chosen only after a focused decision between the main branches above.
+1. The track-oriented architectural transition is complete enough to treat as the stable baseline.
+2. The recent runtime/scalability phase succeeded in improving the exact cluster solver enough to make branch-and-bound the default backend.
+3. The main replay bottleneck is now local expansion / hypothesis generation rather than exact cluster solving.
+4. Scoring/local-branching design and internal birth/existence semantics remain the two other major unresolved design areas.
+5. Approximation semantics, validation, observability, and code organization should continue to advance together with those deeper topics rather than as isolated phases.
+6. The next concrete implementation phase should be chosen after a deliberate look at the refreshed roadmap and the new timing evidence.
+
+In other words: the tracker is now in a good place to pause, reset the docs, and choose the next deeper branch from a stronger baseline than before.

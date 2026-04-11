@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface-cleanup, determinism, output-history, and solver-seam passes completed through **2026-04-11**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface cleanup, determinism, output-history restoration, solver-seam extraction, exact-backend experiments, and timing-instrumentation work completed through **2026-04-11**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -25,120 +25,9 @@ The current implementation is therefore:
 - structurally aligned with the intended track-oriented TO-MHT direction,
 - usable for replay-based experimentation and continued integration work,
 - reasonably robust on the main recorded replay through end-of-file,
-- but still **performance-limited** in large merged-cluster situations and still reliant on a few explicit approximation/safety-net mechanisms.
+- and now on a materially better exact-solver footing than the earlier exhaustive baseline.
 
-## Update (2026-04-10): explicit cluster-solver contract seam
-
-The exact cluster solve path now has a dedicated solver-facing module:
-
-- `mht/tomht_cluster_solver.py` defines the solver-facing exact problem/result contract and shared solver helpers.
-- `mht/tomht_cluster_solver_exhaustive.py` contains the current exhaustive backend implementation.
-- The tracker prepares solver-facing cluster problems from node/tree state and maps solved leaf IDs back to node-native rebuilt globals.
-- The exact problem contract now explicitly carries:
-  - one leaf option per track choice,
-  - full-history conflict keys for feasibility,
-  - and pre-scored leaf accumulated scores that already include the current-scan
-    per-hit clutter correction used by today’s tracker scoring.
-- Approximation/policy placement is explicit:
-  - overload splitting remains a tracker-side pre-solve policy,
-  - historical-conflict relaxation remains a tracker-side around-solver retry policy.
-
-## Update (2026-04-11): experimental OR-Tools exact backend
-
-An experimental exact CP-SAT backend now exists behind the same cluster-solver contract:
-
-- `mht/tomht_cluster_solver_ortools.py` implements one-Boolean-per-leaf exact solving.
-- Constraints are:
-  - exactly one selected leaf per track,
-  - and per-history-key exclusion (`sum(vars with key) <= 1`).
-- Objective is maximize scaled integer leaf-score sum; scores are scaled as
-  `round(score * score_scale)` (default `score_scale=1_000_000`).
-- The ranking-inert `constant_score_offset` remains excluded from optimization and
-  is added back to returned solution scores.
-- K-best extraction uses repeated optimal solve calls plus a no-good cut that excludes
-  each returned selected set.
-- Returned OR-Tools candidates are re-scored with the exact float objective and passed
-  through the shared deterministic `TopKSolutionHeap` ordering helper used by exhaustive.
-- Optional constructor knob `extra_k_best_iterations` allows additional solve calls past
-  K (default `0`) to reduce scaled-objective tie/rounding risk around the K boundary.
-- Exhaustive remains the reference backend/fallback; OR-Tools remains opt-in
-  experimental via `TOMHTParams.cluster_solver_backend="ortools"`.
-- Early replay checks are encouraging on correctness: scenario smoke tests matched the
-  exhaustive backend output modulo expected volatile logging fields, and the recorded
-  MCAP replay (`--max-cpis 400`) produced visually consistent track outputs.
-- Instrumented profiling on the same replay window indicates this backend is **not**
-  currently a drop-in runtime replacement for exhaustive in this workload.
-  - OR-Tools replay timing (302 scans): median ~78 ms, p95 ~1349 ms, max ~4950 ms.
-  - Exhaustive replay timing (302 scans): median ~33 ms, p95 ~715 ms, max ~2019 ms.
-  - OR-Tools solve-time breakdown is dominated by repeated CP-SAT solve calls in the
-    current no-good-cut K-best loop (~91% solve calls, ~7% model build, ~2% post-solve).
-  - Small-cluster overhead exists but is not the main cost driver; large clusters with
-    repeated solve calls dominate elapsed time.
-- Current positioning: keep OR-Tools as an **experimental exact backend** for
-  comparison, fallback, and future K-best/hybrid experiments, not as default.
-
-## Update (2026-04-11): experimental branch-and-bound exact backend
-
-An additional exact backend now exists behind the same cluster-solver contract:
-
-- `mht/tomht_cluster_solver_branch_and_bound.py` implements deterministic
-  depth-first branch-and-bound exact solving.
-- It keeps the same exact semantics:
-  - one selected leaf per track,
-  - full-history key exclusivity,
-  - objective as leaf-score sum with ranking-inert `constant_score_offset` added
-    to returned scores.
-- It includes a dedicated exact 1-track fast path based on deterministic
-  score-sorted top-K selection.
-- General search uses deterministic ordering:
-  - tracks sorted by fewer leaves first, then stronger conflict burden,
-  - leaf options sorted per-track by descending score.
-- A simple optimistic upper bound is used:
-  - `partial_score + sum(best remaining track score, ignoring conflicts)`,
-  - and branches are pruned when this cannot beat the current retained Kth score.
-- Backend diagnostics now include search counters such as visited nodes and
-  conflict/bound prune counts.
-- Tracker default backend is now `"branch_and_bound"` (alias `"bnb"`), while
-  `"exhaustive"` remains available as exact reference/fallback.
-
-## Update (2026-04-11): per-scan timing breakdown instrumentation
-
-Per-scan scan-time instrumentation now includes a phase breakdown from
-`TOMHTTracker.update_tracker(...)`:
-
-- `mht/tomht_stats.py` now defines `ScanTimingBreakdown` and stores it in
-  `ScanStats`.
-- `SCAN_TIMING` remains the total per-scan wall-time line.
-- New `SCAN_TIMING_PHASES` lines expose coarse phase timings (prep/validation,
-  local expansion, births, cluster build+solve, post-solve pruning, map merge,
-  N-scan/lifecycle, cleanup, and residual `other_ms`).
-- Summary output now includes `SUMMARY timing_phases ...` med/max aggregates
-  for those phase buckets.
-
-## Update (2026-04-11): branch-and-bound replay timing and bottleneck shift
-
-Replay timing on the same 400-CPI window (`302` scan updates with timing lines)
-shows:
-
-- Branch-and-bound backend: median ~27 ms, p95 ~416 ms, max ~955 ms.
-- Earlier exhaustive baseline on this same window (not from this latest run):
-  median ~33 ms, p95 ~715 ms, max ~2019 ms.
-
-With branch-and-bound enabled, scan-time bottlenecks are now mostly outside the
-cluster solver:
-
-- `expand_ms` dominates runtime:
-  - median ~25.9 ms vs `cluster_build_solve_ms` median ~0.8 ms,
-  - p95 ~406.7 ms vs `cluster_build_solve_ms` p95 ~13.6 ms,
-  - on the slowest 20 scans, `expand_ms` is ~95.5% of wall time on average,
-    while `cluster_build_solve_ms` is ~3.5%.
-- Early/late replay contrast also points to expansion as the growth driver:
-  first 60 scans mean wall ~7.0 ms / expand ~6.5 ms / cluster_build_solve ~0.27 ms,
-  last 60 scans mean wall ~183.2 ms / expand ~172.7 ms / cluster_build_solve ~8.26 ms.
-
-Conclusion: replacing exhaustive with branch-and-bound removed the previous main
-exact-solver bottleneck on this replay; large scan times are now primarily driven
-by non-solver tracker work (especially local expansion).
+The main remaining practical weakness is no longer the exact cluster solver itself. With the new default branch-and-bound backend, the main replay bottleneck has shifted toward **local expansion / hypothesis generation**, while some explicit approximation/safety-net mechanisms still remain in place.
 
 ---
 
@@ -238,12 +127,95 @@ The tracker’s current runtime pipeline is:
 3. drop empty trees,
 4. optionally create internal birth trees from detections unused by the union of surviving active leaves,
 5. recompute clusters from current trees,
-6. rebuild feasible globals per cluster by exhaustive enumeration, with optional overload splitting first,
+6. rebuild feasible globals per cluster through the exact cluster-solver contract (default backend = branch-and-bound exact search), with optional overload splitting first and optional narrow historical-relaxation retry around the exact solve,
 7. post-solve prune each cluster tree frontier to leaves supported by retained rebuilt globals,
 8. merge cluster MAP selections into full-scan MAP, apply MAP-only N-scan pruning, then apply whole-track miss lifecycle,
-9. keep last-scan debug snapshots and return MAP output tracks.
+9. reclaim unreachable node storage, keep last-scan debug snapshots, and return MAP output tracks.
 
 This is the main runtime story the code now implements.
+
+---
+
+## Solver architecture and current exact backend status
+
+A dedicated solver seam now exists:
+
+- `mht/tomht_cluster_solver.py` defines the solver-facing exact cluster problem/result contract and shared helpers,
+- `mht/tomht_cluster_solver_exhaustive.py` contains the exhaustive reference backend,
+- `mht/tomht_cluster_solver_branch_and_bound.py` contains the current default exact backend,
+- `mht/tomht_cluster_solver_ortools.py` contains an experimental exact CP-SAT backend.
+
+The exact cluster problem contract now explicitly carries:
+
+- one leaf option per track choice,
+- full-history conflict keys for feasibility,
+- pre-scored leaf accumulated scores,
+- and a ranking-inert `constant_score_offset`.
+
+Tracker-side problem preparation folds the current linear current-scan clutter correction into leaf scores before solve, leaving only a cluster-constant offset outside the optimizer.
+
+Approximation/policy placement is explicit:
+
+- overload splitting remains a tracker-side pre-solve policy,
+- historical-conflict relaxation remains a tracker-side around-solver retry policy.
+
+### Current default exact backend: branch-and-bound
+
+The tracker default backend is now `TOMHTParams.cluster_solver_backend="branch_and_bound"` (aliases `"branch-and-bound"` / `"bnb"`).
+
+This backend:
+
+- performs deterministic depth-first exact search over ordered tracks,
+- uses an exact 1-track fast path,
+- uses full-history conflict-key exclusivity exactly,
+- uses deterministic ordering:
+  - tracks ordered by fewer leaves first, then stronger conflict burden, then `track_id`,
+  - leaves ordered per track by descending score,
+- uses a simple optimistic suffix-score upper bound for pruning,
+- retains exact K-best solutions through the shared deterministic `TopKSolutionHeap`.
+
+During optimization work in this phase, branch state was tightened from Python `set`-based conflict tracking to compact integer conflict masks for shared keys, and selected-leaf branch state was reduced from per-branch dict churn to depth-indexed arrays before materializing final solutions.
+
+Branch-and-bound diagnostics now include counters such as:
+
+- `search_nodes_visited`
+- `branches_pruned_conflict`
+- `branches_pruned_bound`
+- `complete_feasible_solutions`
+
+### Exhaustive backend status
+
+The exhaustive backend remains available as:
+
+- exact reference implementation,
+- parity oracle for tests and solver experiments,
+- fallback backend when needed.
+
+It is no longer the default.
+
+### OR-Tools backend status
+
+An experimental exact CP-SAT backend also exists behind the same solver contract.
+
+It uses:
+
+- one Boolean variable per leaf,
+- exactly-one selection per track,
+- per-history-key exclusion constraints,
+- scaled integer objective coefficients,
+- repeated optimal solve calls plus no-good cuts for K-best extraction.
+
+This backend is **exact under the current solver contract**, but in the current repeated-solve K-best form it is **not** a runtime win on the primary replay workload used during this phase. Profiling showed:
+
+- solve time dominated by repeated CP-SAT solve calls rather than Python-side setup,
+- small-cluster overhead exists but is not the main cost driver,
+- large clusters plus repeated K-best solves dominate elapsed time.
+
+Current positioning:
+
+- keep OR-Tools as an **experimental exact backend**,
+- useful for comparison, fallback, and future hybrid/K-best experiments,
+- not recommended as the default runtime path in the current configuration.
 
 ---
 
@@ -270,19 +242,16 @@ Clusters are built from **full active-leaf historical detection-key overlap**, n
 
 ### Global rebuild
 
-For each cluster, the tracker currently uses:
+For each cluster, the tracker now solves the exact cluster K-best problem through the solver interface described above. The solver contract itself assumes:
 
-- exhaustive Cartesian enumeration across active leaf sets,
-- full-history exclusivity checks,
-- an explicit per-combination cluster-local unused-detection term,
-- streaming top-K retention of rebuilt globals,
-- and cluster-local MAP extraction.
-
-`max_global_hypotheses` is now only a **retained rebuilt-global cap for debug/snapshot storage**, not a persistent beam width carried scan-to-scan.
+- one selected leaf per track,
+- no overlapping full-history conflict keys,
+- score = sum of selected leaf scores + cluster constant,
+- retain up to `max_results` best feasible combinations.
 
 ### Post-solve supported-leaf pruning
 
-After each cluster rebuild, each non-overload-split cluster tree keeps only leaves that appear in at least one retained rebuilt global for that cluster. This is now the main pruning mechanism that keeps active leaf frontiers globally informed.
+After each cluster rebuild, each non-overload-split cluster tree keeps only leaves that appear in at least one retained rebuilt global for that cluster. This remains the main pruning mechanism that keeps active leaf frontiers globally informed.
 
 ### MAP-only N-scan pruning
 
@@ -308,7 +277,7 @@ Miss handling now happens as **whole-track termination after N-scan pruning**, u
   - `global_k_leaves`
 - threshold `max(max_missed, ns_scan_window + 1)`
 
-This is cleaner than the earlier branch-local miss handling, but it is also part of why low-quality trees can now persist longer than before.
+This is cleaner than the earlier branch-local miss handling, but it is also part of why low-quality trees can persist longer than before.
 
 ---
 
@@ -353,7 +322,7 @@ Scoring remains based on the default beta-ratio-style model in `tomht_scoring.py
 Current default behavior:
 
 - scores local track hypotheses using PDA-style β-ratio approximations,
-- scores unused detections through a clutter-density-derived per-unused term,
+- applies a linear current-scan clutter correction that is now pre-baked into cluster leaf scores before exact solve,
 - applies a fixed birth penalty for births,
 - logs scoring diagnostics at tracker construction time.
 
@@ -400,11 +369,21 @@ Per-scan and summary instrumentation reports:
 - scan wall time
 - memory / node counts
 
-This instrumentation has been important for replay diagnosis and remains part of the tracker’s practical observability story.
+In this phase, instrumentation was extended with **per-scan timing-phase breakdowns**:
 
-An optional one-time startup config dump is also available via
-`TOMHTParams.debug_display_config`, which prints resolved tracker parameters,
-the scoring-model type, and the selected cluster-solver type.
+- prep/context
+- pre-expand validation
+- local expansion
+- post-expand prune/validation
+- births
+- cluster build + solve
+- post-solve prune
+- map merge
+- N-scan / lifecycle
+- cleanup
+- residual `other_ms`
+
+This has been important for locating the new dominant replay bottleneck after the solver change.
 
 ### Determinism
 
@@ -422,22 +401,38 @@ The broader tracker is intended to be deterministic, and this remains an importa
 
 The current code can complete the main recorded replay to end-of-file, which was the immediate robustness goal after the transition.
 
-The main remaining issue is no longer basic correctness instability, but runtime concentration in high-combinatoric merged-cluster scans.
+A key outcome of this phase is that the previous exact-solver bottleneck has been reduced enough that the main replay bottleneck has shifted.
 
-Current runtime snapshot from the present replay checkpoint is roughly:
+### Exact-solver outcome
 
-- median scan time: ~31 ms
-- p90: ~714 ms
-- p95: ~1191 ms
-- max: ~4576 ms
+On the 400-CPI replay window used during this phase:
 
-The long scans are concentrated where clusters merge and still produce large `comb_eval` / `comb_feas` counts even after overload splitting and historical relaxation.
+- earlier exhaustive baseline timing was approximately:
+  - median ~33 ms
+  - p95 ~715 ms
+  - max ~2019 ms
+- branch-and-bound timing on the same window was approximately:
+  - median ~27–29 ms
+  - p95 ~407–423 ms
+  - max ~929–965 ms
 
-So the tracker is now in a state that is:
+This is a meaningful improvement and was sufficient to justify switching the default exact backend from exhaustive to branch-and-bound.
 
-- robust enough for replay-based experimentation,
-- producing reasonable output on the recorded dataset checkpoint,
-- but still clearly in need of runtime optimization for heavy merged-cluster scans.
+### New dominant bottleneck
+
+With branch-and-bound enabled, the slow scans are now dominated primarily by **local expansion / hypothesis generation**, not cluster solving.
+
+Timing-phase instrumentation on the same replay window shows:
+
+- `expand_ms` dominates the top slow scans,
+- median `cluster_build_and_solve_ms` is small relative to `expand_ms`,
+- early-vs-late replay growth is driven much more by expansion time than by exact cluster solve time.
+
+So the current runtime picture is:
+
+- exact cluster solving is no longer the main immediate blocker on this replay,
+- the next likely leverage point is local expansion / hypothesis generation,
+- while large merged clusters still matter, especially for tail behavior and approximation semantics.
 
 ---
 
@@ -507,7 +502,12 @@ The following now look solid enough to treat as the current base architecture:
 - whole-track post-N-scan miss lifecycle,
 - predictor/updater public integration boundary,
 - deterministic birth capping,
-- and replay integration with end-to-end recorded replay completion.
+- explicit solver seam with solver-facing exact cluster problem contract,
+- branch-and-bound as the default exact backend,
+- exhaustive retained as exact reference/fallback,
+- OR-Tools retained as experimental exact backend,
+- replay integration with end-to-end recorded replay completion,
+- and per-scan timing-phase instrumentation.
 
 ---
 
@@ -515,37 +515,26 @@ The following now look solid enough to treat as the current base architecture:
 
 The following are still provisional or explicitly not the final word:
 
-### 1. Runtime / solver story
+### 1. Local expansion / hypothesis-generation runtime
+This now looks like the most immediate runtime bottleneck on the primary replay used during this phase.
 
-The current rebuild step is still exhaustive enumeration. Large merged clusters remain expensive even with overload splitting. A more scalable K-best cluster solver remains a clear future target.
+### 2. Approximation semantics
+Overload splitting and historical-conflict relaxation are useful and explicit, but still not conceptually final.
 
-### 2. Overload splitting semantics
-
-Overload splitting is useful and explicit, but still an approximation. It can later induce committed historical overlap, which is why historical relaxation exists. This is acceptable for now, but not conceptually final.
-
-### 3. Historical-relaxation safety net
-
-Historical conflict relaxation is narrow and pragmatic. It is a good safety net, but not the final principled treatment of approximation-induced overlap.
+### 3. Scoring design
+The beta-ratio scoring model remains pragmatic rather than fully settled.
 
 ### 4. Local hypothesis-generation ownership
+The public constructor boundary has shifted to predictor/updater, but local branching is still internally driven by a PDA-style generator path. This is an intentional transitional state.
 
-The public constructor boundary has shifted to predictor/updater, but local branching is still internally driven by a PDA-style generator path. This is an intentional transitional state, not necessarily the final local-association design.
+### 5. Internal birth / existence semantics
+Internal births remain simple, heuristic, and secondary. Their current semantics appear more permissive with respect to false-start persistence than the pre-transition behavior.
 
-### 5. Scoring design
-
-The beta-ratio scoring model remains pragmatic rather than fully settled. Cleaner decomposition of local hypothesis score contributions, existence/survival interpretation, and reduced dependence on PDA-style packaging remain open topics.
-
-### 6. Internal birth / existence semantics
-
-Internal births remain simple, heuristic, and secondary. Their current semantics appear more permissive with respect to false-start persistence than the pre-transition behavior, and are not yet conceptually final.
-
-### 7. Tracking quality / false-start tuning
-
+### 6. Tracking quality / false-start tuning
 Replay output is now usable enough that false starts and similar quality issues can be revisited meaningfully, but they are not the single main blocker at the current checkpoint.
 
-### 8. Internal organization around cluster build/rebuild
-
-There is now a clearer internal seam around cluster solving, but `_build_track_clusters(...)` and `_rebuild_cluster_globals(...)` still contain a lot of closely related logic. Further organization work is likely warranted, but should preferably happen as a sub-goal of deeper work rather than as a standalone cleanup-only phase.
+### 7. Internal organization around cluster build/rebuild and expansion paths
+The exact cluster-solver seam is now cleaner, but some tracker internals still carry a lot of closely related logic. Further organization work is likely warranted, but should preferably happen as a sub-goal of deeper work rather than as a standalone cleanup-only phase.
 
 ---
 
@@ -558,11 +547,11 @@ This checkpoint should be understood as:
 - that survives the target recorded replay end-to-end
 - and is suitable for continued replay-based evaluation, integration work, and next-phase planning
 
-But it should also be understood as:
+It should also be understood as:
 
-- still pragmatically tuned,
-- still carrying a few explicit approximation/safety-net paths,
-- still performance-limited on large merged clusters,
-- and still carrying some unresolved birth/existence and scoring questions.
+- now on a better exact-solver footing than the earlier exhaustive baseline,
+- with branch-and-bound validated enough to become the default exact backend,
+- with OR-Tools retained as an experimental comparison path,
+- and with the main replay bottleneck now moved outward into local expansion / hypothesis generation.
 
-This is a good place to begin a consolidation-and-priority-reset phase before the next deeper round of work.
+This is a good place to pause, refresh the docs, and deliberately choose the next deeper branch of work.
