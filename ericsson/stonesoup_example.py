@@ -51,7 +51,6 @@ from stonesoup.types.state import GaussianState
 from stonesoup.tracker.simple import MultiTargetTracker
 from stonesoup.types.track import Track
 
-
 # ----------------------------
 # Pretty logging helpers
 # ----------------------------

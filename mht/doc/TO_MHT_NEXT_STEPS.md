@@ -1,5 +1,23 @@
 # TO-MHT Next Steps
 
+## Update (2026-04-11): experimental exact OR-Tools backend implemented
+
+Implemented this runtime/scalability follow-on step:
+
+- added `mht/tomht_cluster_solver_ortools.py`, an experimental exact CP-SAT backend
+  under the existing `ClusterSolver` contract,
+- kept `mht/tomht_cluster_solver_exhaustive.py` as the reference backend,
+- added tracker-level backend selection with default unchanged
+  (`TOMHTParams.cluster_solver_backend="exhaustive"`; opt-in `"ortools"`),
+- validated OR-Tools against exhaustive on small tractable exact problems in
+  `mht/tests/test_tomht_cluster_solver_ortools.py`,
+- routed OR-Tools returned candidates through exact float re-scoring plus the shared
+  deterministic `TopKSolutionHeap` helper for backend-consistent ranking behavior,
+- added `extra_k_best_iterations` (default `0`) as an optional OR-Tools constructor
+  knob to run a few solves past K and reduce K-boundary rounding/tie risk,
+- documented tie-order caveat explicitly: tied solutions can have different order
+  than exhaustive even when selected sets/scores match.
+
 ## Update (2026-04-10): subphase implemented
 
 Implemented this subphase as a conservative refactor:
@@ -13,9 +31,13 @@ Implemented this subphase as a conservative refactor:
 
 ## Next architectural subphase
 
-**Runtime / cluster-solver scalability, step 1: formalize the cluster-solver interface and move the current exhaustive solver behind it.**
+**Runtime / cluster-solver scalability, step 2: evaluate and harden alternative exact backends behind the existing solver seam.**
 
-This phase is intentionally **about interface definition, problem clarification, and seam cleanup first**, not yet about replacing the solver algorithm itself.
+The remainder of this document currently includes the historical step-1 planning
+notes; keep them as background context, but treat the concrete next work as
+step-2 backend evaluation and scalability hardening.
+
+This phase is intentionally **about backend experimentation and validation under the existing interface**, not a broader tracker/scoring redesign.
 
 The tracker is now at a point where:
 

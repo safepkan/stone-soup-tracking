@@ -12,6 +12,7 @@ dependencies = [
   "scipy==1.17.1",
   "matplotlib==3.10.8",
   "ordered-set==4.1.0",
+  "ortools==9.15.6755",
 ]
 
 [project.optional-dependencies]

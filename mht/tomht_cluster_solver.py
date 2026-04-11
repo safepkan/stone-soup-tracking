@@ -8,6 +8,7 @@ problem from current tree frontiers and maps solved leaf IDs back to nodes.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import heapq
 from math import prod
 from typing import Mapping, Protocol
 
@@ -65,12 +66,58 @@ class ClusterSolverResult:
     solutions: tuple[ClusterSolverSolution, ...]
 
 
+class TopKSolutionHeap:
+    """Deterministic streaming top-K retention for scored solver solutions."""
+
+    def __init__(self, *, k: int) -> None:
+        self._k = int(k)
+        self._heap: list[tuple[float, int, ClusterSolverSolution]] = []
+
+    def push(
+        self,
+        *,
+        candidate: ClusterSolverSolution,
+        insertion_order: int,
+    ) -> None:
+        """Consider one candidate for top-K retention."""
+        if self._k <= 0:
+            return
+
+        entry = (
+            float(candidate.score),
+            -int(insertion_order),
+            candidate,
+        )
+        if len(self._heap) < self._k:
+            heapq.heappush(self._heap, entry)
+            return
+        if entry > self._heap[0]:
+            heapq.heapreplace(self._heap, entry)
+
+    def finalize(self) -> tuple[ClusterSolverSolution, ...]:
+        """Return retained solutions sorted best-first with deterministic tie order."""
+        self._heap.sort(
+            key=lambda item: (
+                float(item[0]),  # score
+                int(-item[1]),  # deterministic tie order by insertion
+            ),
+            reverse=True,
+        )
+        return tuple(item[2] for item in self._heap)
+
+
 @dataclass(frozen=True)
 class ClusterSolverDiagnostics:
     """Optional backend diagnostics for one cluster solve call."""
 
     combinations_evaluated: int
     feasible_combinations: int
+    backend: str | None = None
+    optimal: bool | None = None
+    solutions_returned: int | None = None
+    solves_attempted: int | None = None
+    terminated_early: bool | None = None
+    early_stop_reason: str | None = None
 
 
 class ClusterSolver(Protocol):

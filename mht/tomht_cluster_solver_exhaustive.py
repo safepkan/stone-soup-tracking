@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import heapq
 from itertools import product
 
 from mht.tomht_model import DetectionKey
@@ -12,48 +11,9 @@ from mht.tomht_cluster_solver import (
     ClusterSolverProblem,
     ClusterSolverResult,
     ClusterSolverSolution,
+    TopKSolutionHeap,
     validate_cluster_solver_problem,
 )
-
-
-class TopKSolutionHeap:
-    """Deterministic streaming top-K retention for scored solver solutions."""
-
-    def __init__(self, *, k: int) -> None:
-        self._k = int(k)
-        self._heap: list[tuple[float, int, ClusterSolverSolution]] = []
-
-    def push(
-        self,
-        *,
-        candidate: ClusterSolverSolution,
-        insertion_order: int,
-    ) -> None:
-        """Consider one candidate for top-K retention."""
-        if self._k <= 0:
-            return
-
-        entry = (
-            float(candidate.score),
-            -int(insertion_order),
-            candidate,
-        )
-        if len(self._heap) < self._k:
-            heapq.heappush(self._heap, entry)
-            return
-        if entry > self._heap[0]:
-            heapq.heapreplace(self._heap, entry)
-
-    def finalize(self) -> tuple[ClusterSolverSolution, ...]:
-        """Return retained solutions sorted best-first with deterministic tie order."""
-        self._heap.sort(
-            key=lambda item: (
-                float(item[0]),  # score
-                int(-item[1]),  # deterministic tie order by insertion
-            ),
-            reverse=True,
-        )
-        return tuple(item[2] for item in self._heap)
 
 
 class ExhaustiveClusterSolver:
@@ -99,12 +59,27 @@ class ExhaustiveClusterSolver:
                 insertion_order=feasible_combinations,
             )
 
+        solutions = top_k.finalize()
+        max_results = int(problem.max_results)
+        if max_results <= 0:
+            early_stop_reason = "max_results_is_zero"
+        elif len(solutions) < max_results:
+            early_stop_reason = "feasible_set_exhausted"
+        else:
+            early_stop_reason = "max_results_reached"
+
         self._last_diagnostics = ClusterSolverDiagnostics(
             combinations_evaluated=combinations_evaluated,
             feasible_combinations=feasible_combinations,
+            backend="exhaustive",
+            optimal=True,
+            solutions_returned=len(solutions),
+            solves_attempted=1,
+            terminated_early=len(solutions) < max_results,
+            early_stop_reason=early_stop_reason,
         )
         return ClusterSolverResult(
-            solutions=top_k.finalize(),
+            solutions=solutions,
         )
 
     def get_last_diagnostics(self) -> ClusterSolverDiagnostics | None:

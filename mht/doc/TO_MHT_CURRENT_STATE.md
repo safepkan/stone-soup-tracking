@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface-cleanup, determinism, output-history, and solver-seam passes completed through **2026-04-10**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface-cleanup, determinism, output-history, and solver-seam passes completed through **2026-04-11**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -42,6 +42,41 @@ The exact cluster solve path now has a dedicated solver-facing module:
 - Approximation/policy placement is explicit:
   - overload splitting remains a tracker-side pre-solve policy,
   - historical-conflict relaxation remains a tracker-side around-solver retry policy.
+
+## Update (2026-04-11): experimental OR-Tools exact backend
+
+An experimental exact CP-SAT backend now exists behind the same cluster-solver contract:
+
+- `mht/tomht_cluster_solver_ortools.py` implements one-Boolean-per-leaf exact solving.
+- Constraints are:
+  - exactly one selected leaf per track,
+  - and per-history-key exclusion (`sum(vars with key) <= 1`).
+- Objective is maximize scaled integer leaf-score sum; scores are scaled as
+  `round(score * score_scale)` (default `score_scale=1_000_000`).
+- The ranking-inert `constant_score_offset` remains excluded from optimization and
+  is added back to returned solution scores.
+- K-best extraction uses repeated optimal solve calls plus a no-good cut that excludes
+  each returned selected set.
+- Returned OR-Tools candidates are re-scored with the exact float objective and passed
+  through the shared deterministic `TopKSolutionHeap` ordering helper used by exhaustive.
+- Optional constructor knob `extra_k_best_iterations` allows additional solve calls past
+  K (default `0`) to reduce scaled-objective tie/rounding risk around the K boundary.
+- Exhaustive remains the reference backend; tracker default backend is still
+  `"exhaustive"` with opt-in `"ortools"` through `TOMHTParams.cluster_solver_backend`.
+- Early replay checks are encouraging on correctness: scenario smoke tests matched the
+  exhaustive backend output modulo expected volatile logging fields, and the recorded
+  MCAP replay (`--max-cpis 400`) produced visually consistent track outputs.
+- Instrumented profiling on the same replay window indicates this backend is **not**
+  currently a drop-in runtime replacement for exhaustive in this workload.
+  - OR-Tools replay timing (302 scans): median ~78 ms, p95 ~1349 ms, max ~4950 ms.
+  - Exhaustive replay timing (302 scans): median ~33 ms, p95 ~715 ms, max ~2019 ms.
+  - OR-Tools solve-time breakdown is dominated by repeated CP-SAT solve calls in the
+    current no-good-cut K-best loop (~91% solve calls, ~7% model build, ~2% post-solve).
+  - Small-cluster overhead exists but is not the main cost driver; large clusters with
+    repeated solve calls dominate elapsed time.
+- Current positioning: keep OR-Tools as an **experimental exact backend** for
+  comparison, fallback, and future K-best/hybrid experiments, while keeping
+  `"exhaustive"` as the recommended default path for present replay workloads.
 
 ---
 
@@ -304,6 +339,10 @@ Per-scan and summary instrumentation reports:
 - memory / node counts
 
 This instrumentation has been important for replay diagnosis and remains part of the tracker’s practical observability story.
+
+An optional one-time startup config dump is also available via
+`TOMHTParams.debug_display_config`, which prints resolved tracker parameters,
+the scoring-model type, and the selected cluster-solver type.
 
 ### Determinism
 

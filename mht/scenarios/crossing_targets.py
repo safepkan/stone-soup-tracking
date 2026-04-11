@@ -23,7 +23,6 @@ from stonesoup.types.track import Track
 
 from mht.scenarios.common import ScenarioConfig
 
-
 # ----- Global-ish parameters for this scenario -----
 
 # Reproduce the original example behaviour

@@ -8,7 +8,6 @@ from typing import Mapping
 
 from stonesoup.types.state import State
 
-
 # Detection key used for exclusivity/conflict checks.
 #
 # Key format is (scan_index, det_index), so keys are unique across the unresolved

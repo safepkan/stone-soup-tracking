@@ -49,7 +49,6 @@ from mht.tomht_tracker import (  # noqa: E402
     TOMHTParams,
 )
 
-
 SetupName = Literal["crossing", "bearing_range"]
 OperatingModeName = Literal["CUSTOM", "EXTERNAL", "INTERNAL", "BOTH"]
 

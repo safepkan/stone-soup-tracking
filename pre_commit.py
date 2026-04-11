@@ -2,6 +2,7 @@
 """
 Lint and format all Python files in the repository.
 """
+
 import subprocess
 import sys
 from pathlib import Path

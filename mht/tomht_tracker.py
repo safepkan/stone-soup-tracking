@@ -84,7 +84,6 @@ from mht.tomht_stats import (
     print_summary_stats as print_summary_stats_report,
 )
 
-
 # ============================================================================
 # Tracker-Local Support Structures / Params
 # ============================================================================
@@ -124,6 +123,10 @@ class TOMHTParams:
 
     # Rebuilt-global storage cap (debug/inspection cap, not persistent beam state).
     max_global_hypotheses: int = 20
+    # Exact cluster-solver backend.
+    # - "exhaustive": current reference backend
+    # - "ortools": experimental CP-SAT backend
+    cluster_solver_backend: str = "exhaustive"
     # Optional hard cap for one cluster's projected Cartesian leaf combinations.
     # If exceeded, cluster rebuild fails explicitly (no adaptive trimming/retry).
     max_projected_cluster_combinations: int | None = None
@@ -163,6 +166,7 @@ class TOMHTParams:
 
     # Debug / instrumentation toggles.
     debug_display_detections: bool = False
+    debug_display_config: bool = False
     debug_display_scan_stats: bool = True
     debug_display_hypotheses: bool = True
     debug_display_births: bool = True
@@ -437,7 +441,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self.scoring_model = scoring_model
         maybe_log_scoring_diagnostics(self.scoring_model)
         # Exact cluster-solver backend behind a narrow solver-facing contract.
-        self._cluster_solver: ClusterSolver = ExhaustiveClusterSolver()
+        self._cluster_solver: ClusterSolver = self._make_cluster_solver(
+            self.params.cluster_solver_backend
+        )
+        self._maybe_print_config()
 
         self._next_track_id = 0
         self._next_node_id = 0
@@ -491,6 +498,35 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def hypothesiser(self, value) -> None:
         """Deprecated compatibility alias for ``hypothesis_generator``."""
         self.hypothesis_generator = value
+
+    @staticmethod
+    def _make_cluster_solver(cluster_solver_backend: str) -> ClusterSolver:
+        """Construct one exact cluster-solver backend by configured name."""
+        backend = str(cluster_solver_backend).strip().lower()
+        if backend == "exhaustive":
+            return ExhaustiveClusterSolver()
+        if backend in {"ortools", "ortools_cp_sat", "cp_sat"}:
+            from mht.tomht_cluster_solver_ortools import ORToolsClusterSolver
+
+            return ORToolsClusterSolver()
+        raise ValueError(
+            "Unknown cluster solver backend. "
+            f"cluster_solver_backend={cluster_solver_backend!r}"
+        )
+
+    def _maybe_print_config(self) -> None:
+        """Print a one-time resolved tracker config snapshot when enabled."""
+        if not self.params.debug_display_config:
+            return
+        print("TOMHT_CONFIG resolved parameters:")
+        for param_field in fields(TOMHTParams):
+            value = getattr(self.params, param_field.name)
+            print(f"  {param_field.name}={value!r}")
+        print(
+            "  "
+            f"scoring_model={type(self.scoring_model).__name__} "
+            f"cluster_solver={type(self._cluster_solver).__name__}"
+        )
 
     def _resolve_hypothesis_generator_dependencies(
         self,
