@@ -320,6 +320,24 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertIsNotNone(tracker.last_scan_stats)
         assert tracker.last_scan_stats is not None
         self.assertGreaterEqual(tracker.last_scan_stats.nscan_disagreement_total, 1)
+        timings = tracker.last_scan_stats.timing_breakdown
+        phase_sum = (
+            timings.prep_ctx_ms
+            + timings.pre_expand_validate_ms
+            + timings.expand_ms
+            + timings.post_expand_prune_validate_ms
+            + timings.births_ms
+            + timings.cluster_build_and_solve_ms
+            + timings.post_solve_prune_ms
+            + timings.map_merge_ms
+            + timings.nscan_lifecycle_ms
+            + timings.cleanup_ms
+        )
+        self.assertGreaterEqual(timings.cluster_build_and_solve_ms, 0.0)
+        self.assertGreaterEqual(timings.expand_ms, 0.0)
+        self.assertLessEqual(
+            phase_sum, tracker.last_scan_stats.scan_wall_ms + 1.0
+        )  # keep tolerance for measurement overhead/noise
 
     def test_map_output_reconstruction_keeps_committed_prefix_across_pruning(
         self,

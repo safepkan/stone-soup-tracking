@@ -61,8 +61,8 @@ An experimental exact CP-SAT backend now exists behind the same cluster-solver c
   through the shared deterministic `TopKSolutionHeap` ordering helper used by exhaustive.
 - Optional constructor knob `extra_k_best_iterations` allows additional solve calls past
   K (default `0`) to reduce scaled-objective tie/rounding risk around the K boundary.
-- Exhaustive remains the reference backend; tracker default backend is still
-  `"exhaustive"` with opt-in `"ortools"` through `TOMHTParams.cluster_solver_backend`.
+- Exhaustive remains the reference backend/fallback; OR-Tools remains opt-in
+  experimental via `TOMHTParams.cluster_solver_backend="ortools"`.
 - Early replay checks are encouraging on correctness: scenario smoke tests matched the
   exhaustive backend output modulo expected volatile logging fields, and the recorded
   MCAP replay (`--max-cpis 400`) produced visually consistent track outputs.
@@ -75,8 +75,70 @@ An experimental exact CP-SAT backend now exists behind the same cluster-solver c
   - Small-cluster overhead exists but is not the main cost driver; large clusters with
     repeated solve calls dominate elapsed time.
 - Current positioning: keep OR-Tools as an **experimental exact backend** for
-  comparison, fallback, and future K-best/hybrid experiments, while keeping
-  `"exhaustive"` as the recommended default path for present replay workloads.
+  comparison, fallback, and future K-best/hybrid experiments, not as default.
+
+## Update (2026-04-11): experimental branch-and-bound exact backend
+
+An additional exact backend now exists behind the same cluster-solver contract:
+
+- `mht/tomht_cluster_solver_branch_and_bound.py` implements deterministic
+  depth-first branch-and-bound exact solving.
+- It keeps the same exact semantics:
+  - one selected leaf per track,
+  - full-history key exclusivity,
+  - objective as leaf-score sum with ranking-inert `constant_score_offset` added
+    to returned scores.
+- It includes a dedicated exact 1-track fast path based on deterministic
+  score-sorted top-K selection.
+- General search uses deterministic ordering:
+  - tracks sorted by fewer leaves first, then stronger conflict burden,
+  - leaf options sorted per-track by descending score.
+- A simple optimistic upper bound is used:
+  - `partial_score + sum(best remaining track score, ignoring conflicts)`,
+  - and branches are pruned when this cannot beat the current retained Kth score.
+- Backend diagnostics now include search counters such as visited nodes and
+  conflict/bound prune counts.
+- Tracker default backend is now `"branch_and_bound"` (alias `"bnb"`), while
+  `"exhaustive"` remains available as exact reference/fallback.
+
+## Update (2026-04-11): per-scan timing breakdown instrumentation
+
+Per-scan scan-time instrumentation now includes a phase breakdown from
+`TOMHTTracker.update_tracker(...)`:
+
+- `mht/tomht_stats.py` now defines `ScanTimingBreakdown` and stores it in
+  `ScanStats`.
+- `SCAN_TIMING` remains the total per-scan wall-time line.
+- New `SCAN_TIMING_PHASES` lines expose coarse phase timings (prep/validation,
+  local expansion, births, cluster build+solve, post-solve pruning, map merge,
+  N-scan/lifecycle, cleanup, and residual `other_ms`).
+- Summary output now includes `SUMMARY timing_phases ...` med/max aggregates
+  for those phase buckets.
+
+## Update (2026-04-11): branch-and-bound replay timing and bottleneck shift
+
+Replay timing on the same 400-CPI window (`302` scan updates with timing lines)
+shows:
+
+- Branch-and-bound backend: median ~27 ms, p95 ~416 ms, max ~955 ms.
+- Earlier exhaustive baseline on this same window (not from this latest run):
+  median ~33 ms, p95 ~715 ms, max ~2019 ms.
+
+With branch-and-bound enabled, scan-time bottlenecks are now mostly outside the
+cluster solver:
+
+- `expand_ms` dominates runtime:
+  - median ~25.9 ms vs `cluster_build_solve_ms` median ~0.8 ms,
+  - p95 ~406.7 ms vs `cluster_build_solve_ms` p95 ~13.6 ms,
+  - on the slowest 20 scans, `expand_ms` is ~95.5% of wall time on average,
+    while `cluster_build_solve_ms` is ~3.5%.
+- Early/late replay contrast also points to expansion as the growth driver:
+  first 60 scans mean wall ~7.0 ms / expand ~6.5 ms / cluster_build_solve ~0.27 ms,
+  last 60 scans mean wall ~183.2 ms / expand ~172.7 ms / cluster_build_solve ~8.26 ms.
+
+Conclusion: replacing exhaustive with branch-and-bound removed the previous main
+exact-solver bottleneck on this replay; large scan times are now primarily driven
+by non-solver tracker work (especially local expansion).
 
 ---
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import datetime
 from statistics import median
 from typing import Mapping
@@ -29,6 +29,22 @@ class RebuildStats:
     historical_relaxation_attempts: int = 0
     historical_relaxation_successes: int = 0
     historical_relaxed_keys_total: int = 0
+
+
+@dataclass(frozen=True)
+class ScanTimingBreakdown:
+    """Per-scan wall-time breakdown across major update pipeline phases."""
+
+    prep_ctx_ms: float = 0.0
+    pre_expand_validate_ms: float = 0.0
+    expand_ms: float = 0.0
+    post_expand_prune_validate_ms: float = 0.0
+    births_ms: float = 0.0
+    cluster_build_and_solve_ms: float = 0.0
+    post_solve_prune_ms: float = 0.0
+    map_merge_ms: float = 0.0
+    nscan_lifecycle_ms: float = 0.0
+    cleanup_ms: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -61,6 +77,7 @@ class ScanStats:
     map_unused: int
     map_miss_hist: dict[int, int]
     map_mean_hit_rate: float
+    timing_breakdown: ScanTimingBreakdown = field(default_factory=ScanTimingBreakdown)
 
 
 def print_scan_stats(
@@ -71,6 +88,21 @@ def print_scan_stats(
     debug_display_map_miss_hist: bool,
 ) -> None:
     """Print one per-scan instrumentation block from precomputed ScanStats."""
+    breakdown = scan_stats.timing_breakdown
+    phase_accounted_ms = (
+        float(breakdown.prep_ctx_ms)
+        + float(breakdown.pre_expand_validate_ms)
+        + float(breakdown.expand_ms)
+        + float(breakdown.post_expand_prune_validate_ms)
+        + float(breakdown.births_ms)
+        + float(breakdown.cluster_build_and_solve_ms)
+        + float(breakdown.post_solve_prune_ms)
+        + float(breakdown.map_merge_ms)
+        + float(breakdown.nscan_lifecycle_ms)
+        + float(breakdown.cleanup_ms)
+    )
+    phase_other_ms = max(float(scan_stats.scan_wall_ms) - phase_accounted_ms, 0.0)
+
     print(
         f"SCAN t={timestamp} det={scan_stats.num_detections} "
         f"trees={scan_stats.active_trees} leaves={scan_stats.active_leaves} "
@@ -96,6 +128,21 @@ def print_scan_stats(
         f"hit_rate={scan_stats.map_mean_hit_rate:.2f}"
     )
     print(f"SCAN_TIMING t={timestamp} wall_ms={scan_stats.scan_wall_ms:.3f}")
+    print(
+        f"SCAN_TIMING_PHASES t={timestamp} "
+        f"prep_ctx_ms={breakdown.prep_ctx_ms:.3f} "
+        f"pre_expand_validate_ms={breakdown.pre_expand_validate_ms:.3f} "
+        f"expand_ms={breakdown.expand_ms:.3f} "
+        "post_expand_prune_validate_ms="
+        f"{breakdown.post_expand_prune_validate_ms:.3f} "
+        f"births_ms={breakdown.births_ms:.3f} "
+        f"cluster_build_solve_ms={breakdown.cluster_build_and_solve_ms:.3f} "
+        f"post_solve_prune_ms={breakdown.post_solve_prune_ms:.3f} "
+        f"map_merge_ms={breakdown.map_merge_ms:.3f} "
+        f"nscan_lifecycle_ms={breakdown.nscan_lifecycle_ms:.3f} "
+        f"cleanup_ms={breakdown.cleanup_ms:.3f} "
+        f"other_ms={phase_other_ms:.3f}"
+    )
     print(
         f"SCAN_MEMORY t={timestamp} "
         f"nodes={scan_stats.node_count_total} "
@@ -160,6 +207,39 @@ def print_summary_stats(
     map_hit_rate = [s.map_mean_hit_rate for s in stats]
 
     scan_wall_ms = [s.scan_wall_ms for s in stats]
+    prep_ctx_ms = [s.timing_breakdown.prep_ctx_ms for s in stats]
+    pre_expand_validate_ms = [s.timing_breakdown.pre_expand_validate_ms for s in stats]
+    expand_ms = [s.timing_breakdown.expand_ms for s in stats]
+    post_expand_prune_validate_ms = [
+        s.timing_breakdown.post_expand_prune_validate_ms for s in stats
+    ]
+    births_ms = [s.timing_breakdown.births_ms for s in stats]
+    cluster_build_and_solve_ms = [
+        s.timing_breakdown.cluster_build_and_solve_ms for s in stats
+    ]
+    post_solve_prune_ms = [s.timing_breakdown.post_solve_prune_ms for s in stats]
+    map_merge_ms = [s.timing_breakdown.map_merge_ms for s in stats]
+    nscan_lifecycle_ms = [s.timing_breakdown.nscan_lifecycle_ms for s in stats]
+    cleanup_ms = [s.timing_breakdown.cleanup_ms for s in stats]
+    other_ms = [
+        max(
+            float(s.scan_wall_ms)
+            - (
+                float(s.timing_breakdown.prep_ctx_ms)
+                + float(s.timing_breakdown.pre_expand_validate_ms)
+                + float(s.timing_breakdown.expand_ms)
+                + float(s.timing_breakdown.post_expand_prune_validate_ms)
+                + float(s.timing_breakdown.births_ms)
+                + float(s.timing_breakdown.cluster_build_and_solve_ms)
+                + float(s.timing_breakdown.post_solve_prune_ms)
+                + float(s.timing_breakdown.map_merge_ms)
+                + float(s.timing_breakdown.nscan_lifecycle_ms)
+                + float(s.timing_breakdown.cleanup_ms)
+            ),
+            0.0,
+        )
+        for s in stats
+    ]
     maxrss_mb = [s.maxrss_mb for s in stats]
     node_count_total = [s.node_count_total for s in stats]
 
@@ -195,6 +275,23 @@ def print_summary_stats(
         f"scan_wall_ms med={median(scan_wall_ms):.1f} "
         f"mean={_mean(scan_wall_ms):.1f} "
         f"max={max(scan_wall_ms):.1f}"
+    )
+    print(
+        "SUMMARY timing_phases "
+        f"prep_ctx_ms med={median(prep_ctx_ms):.1f} max={max(prep_ctx_ms):.1f} "
+        "pre_expand_validate_ms "
+        f"med={median(pre_expand_validate_ms):.1f} max={max(pre_expand_validate_ms):.1f} "
+        f"expand_ms med={median(expand_ms):.1f} max={max(expand_ms):.1f} "
+        "post_expand_prune_validate_ms "
+        f"med={median(post_expand_prune_validate_ms):.1f} max={max(post_expand_prune_validate_ms):.1f} "
+        f"births_ms med={median(births_ms):.1f} max={max(births_ms):.1f} "
+        "cluster_build_solve_ms "
+        f"med={median(cluster_build_and_solve_ms):.1f} max={max(cluster_build_and_solve_ms):.1f} "
+        f"post_solve_prune_ms med={median(post_solve_prune_ms):.1f} max={max(post_solve_prune_ms):.1f} "
+        f"map_merge_ms med={median(map_merge_ms):.1f} max={max(map_merge_ms):.1f} "
+        f"nscan_lifecycle_ms med={median(nscan_lifecycle_ms):.1f} max={max(nscan_lifecycle_ms):.1f} "
+        f"cleanup_ms med={median(cleanup_ms):.1f} max={max(cleanup_ms):.1f} "
+        f"other_ms med={median(other_ms):.1f} max={max(other_ms):.1f}"
     )
     print(
         "SUMMARY memory "

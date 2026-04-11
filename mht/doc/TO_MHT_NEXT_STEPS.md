@@ -1,5 +1,38 @@
 # TO-MHT Next Steps
 
+## Update (2026-04-11): experimental exact branch-and-bound backend implemented
+
+Implemented a second experimental exact backend under the existing solver seam:
+
+- added `mht/tomht_cluster_solver_branch_and_bound.py` with deterministic
+  depth-first branch-and-bound solving,
+- kept `mht/tomht_cluster_solver_exhaustive.py` as the reference backend,
+- added exact 1-track score-sorted fast-path handling,
+- used deterministic search ordering:
+  - tracks ordered by fewer leaves first, then stronger conflict burden,
+  - per-track leaves ordered by descending score,
+- added a simple optimistic upper bound based on partial score plus best
+  remaining-track score sums (ignoring conflicts),
+- added branch-and-bound diagnostics (visited nodes, conflict-prune count,
+  bound-prune count, complete feasible solutions found),
+- set tracker default backend to
+  `TOMHTParams.cluster_solver_backend="branch_and_bound"` (alias `"bnb"`),
+- validated branch-and-bound against exhaustive on small exact problems in
+  `mht/tests/test_tomht_cluster_solver_branch_and_bound.py`,
+- documented tie-order caveat explicitly via set-based tie test:
+  tied solution ordering can differ while selected sets and scores still match.
+
+## Update (2026-04-11): added per-scan timing-phase breakdown
+
+Implemented a granular timing instrumentation pass for diagnosis of large-CPU
+scans:
+
+- added `ScanTimingBreakdown` into `ScanStats`,
+- timed major `update_tracker(...)` phases directly in tracker runtime code,
+- kept `SCAN_TIMING` total wall-time output and added `SCAN_TIMING_PHASES`
+  lines for per-scan phase attribution,
+- added `SUMMARY timing_phases ...` med/max aggregates for run-level review.
+
 ## Update (2026-04-11): experimental exact OR-Tools backend implemented
 
 Implemented this runtime/scalability follow-on step:
@@ -7,8 +40,8 @@ Implemented this runtime/scalability follow-on step:
 - added `mht/tomht_cluster_solver_ortools.py`, an experimental exact CP-SAT backend
   under the existing `ClusterSolver` contract,
 - kept `mht/tomht_cluster_solver_exhaustive.py` as the reference backend,
-- added tracker-level backend selection with default unchanged
-  (`TOMHTParams.cluster_solver_backend="exhaustive"`; opt-in `"ortools"`),
+- kept OR-Tools as opt-in experimental backend
+  (`TOMHTParams.cluster_solver_backend="ortools"`),
 - validated OR-Tools against exhaustive on small tractable exact problems in
   `mht/tests/test_tomht_cluster_solver_ortools.py`,
 - routed OR-Tools returned candidates through exact float re-scoring plus the shared

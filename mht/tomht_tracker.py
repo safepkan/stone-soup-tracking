@@ -80,6 +80,7 @@ from mht.tomht_stats import (
     BirthStats,
     RebuildStats,
     ScanStats,
+    ScanTimingBreakdown,
     print_scan_stats as print_scan_stats_report,
     print_summary_stats as print_summary_stats_report,
 )
@@ -124,9 +125,10 @@ class TOMHTParams:
     # Rebuilt-global storage cap (debug/inspection cap, not persistent beam state).
     max_global_hypotheses: int = 20
     # Exact cluster-solver backend.
-    # - "exhaustive": current reference backend
+    # - "branch_and_bound": default exact DFS branch-and-bound backend
+    # - "exhaustive": exact reference/fallback backend
     # - "ortools": experimental CP-SAT backend
-    cluster_solver_backend: str = "exhaustive"
+    cluster_solver_backend: str = "branch_and_bound"
     # Optional hard cap for one cluster's projected Cartesian leaf combinations.
     # If exceeded, cluster rebuild fails explicitly (no adaptive trimming/retry).
     max_projected_cluster_combinations: int | None = None
@@ -318,7 +320,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
        of surviving active leaves after Step 3.
     5. Recompute measurement-exclusivity clusters from current trees.
     6. Rebuild feasible globals per cluster through the exact cluster-solver
-       contract (current backend = exhaustive enumeration) and choose MAP per
+       contract (default backend = branch-and-bound exact search) and choose MAP per
        cluster; overloaded clusters may first be approximately decomposed by
        severing weakest full-history conflict edges.
     7. Post-solve prune each cluster tree frontier to leaves supported by at
@@ -505,6 +507,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         backend = str(cluster_solver_backend).strip().lower()
         if backend == "exhaustive":
             return ExhaustiveClusterSolver()
+        if backend in {"branch_and_bound", "branch-and-bound", "bnb"}:
+            from mht.tomht_cluster_solver_branch_and_bound import (
+                BranchAndBoundClusterSolver,
+            )
+
+            return BranchAndBoundClusterSolver()
         if backend in {"ortools", "ortools_cp_sat", "cp_sat"}:
             from mht.tomht_cluster_solver_ortools import ORToolsClusterSolver
 
@@ -681,6 +689,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> tuple[datetime.datetime, set[Track]]:
         """Run one scan update and return ``(time, MAP tracks)``."""
         scan_wall_start_ns = wall_clock.perf_counter_ns()
+        phase_start_ns = scan_wall_start_ns
 
         scan_index = (
             0 if self._last_scan_index is None else int(self._last_scan_index) + 1
@@ -693,14 +702,20 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             detections=det_list,
             det_index_by_obj=det_index_by_obj,
         )
+        prep_ctx_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
+        phase_start_ns = wall_clock.perf_counter_ns()
 
         self._maybe_validate_pruning_feasibility(
             stage="pre_local_expansion",
             ctx=ctx,
         )
+        pre_expand_validate_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
+        phase_start_ns = wall_clock.perf_counter_ns()
 
         # 1) Expand every tree locally.
         self._expand_all_track_trees(ctx)
+        expand_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
+        phase_start_ns = wall_clock.perf_counter_ns()
 
         # 2) Simple lifecycle handling.
         self._remove_empty_trees()
@@ -708,15 +723,25 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             stage="post_local_pruning",
             ctx=ctx,
         )
+        post_expand_prune_validate_ms = (
+            wall_clock.perf_counter_ns() - phase_start_ns
+        ) / 1e6
+        phase_start_ns = wall_clock.perf_counter_ns()
 
         # 3) Internal births from Step-2 residual detections.
         birth_stats = self._run_internal_births(ctx)
+        births_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
+        phase_start_ns = wall_clock.perf_counter_ns()
 
         # 4) Build clusters and rebuild globals per cluster (fresh each scan).
         cluster_work = self._build_track_clusters(ctx)
         cluster_snapshots, rebuild_stats = self._rebuild_cluster_globals(
             cluster_work, ctx
         )
+        cluster_build_and_solve_ms = (
+            wall_clock.perf_counter_ns() - phase_start_ns
+        ) / 1e6
+        phase_start_ns = wall_clock.perf_counter_ns()
 
         # 5) Post-solve cluster-local supported-leaf pruning from rebuilt top-K.
         self._apply_post_solve_supported_leaf_pruning(cluster_snapshots)
@@ -724,8 +749,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             stage="post_supported_leaf_pruning",
             ctx=ctx,
         )
+        post_solve_prune_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
+        phase_start_ns = wall_clock.perf_counter_ns()
 
         map_global = self._merge_cluster_map_globals(cluster_snapshots)
+        map_merge_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
+        phase_start_ns = wall_clock.perf_counter_ns()
 
         # 6) MAP-only N-scan pruning on explicit trees + disagreement stats.
         (
@@ -758,9 +787,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         # Keep one full-scan MAP global in compatibility slot for old inspection paths.
         self._last_map_global = map_global
         self.global_hypotheses = [map_global]
+        nscan_lifecycle_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
+        phase_start_ns = wall_clock.perf_counter_ns()
 
         # 7) Reclaim node storage not reachable from surviving roots/leaves/commitments.
         self._cleanup_unreachable_nodes()
+        cleanup_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
 
         # 8) Post-scan instrumentation.
         scan_wall_ms = (wall_clock.perf_counter_ns() - scan_wall_start_ns) / 1e6
@@ -769,6 +801,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         active_leaves = sum(
             len(tree.active_leaf_node_ids)
             for tree in self.track_trees_by_track_id.values()
+        )
+
+        timing_breakdown = ScanTimingBreakdown(
+            prep_ctx_ms=float(prep_ctx_ms),
+            pre_expand_validate_ms=float(pre_expand_validate_ms),
+            expand_ms=float(expand_ms),
+            post_expand_prune_validate_ms=float(post_expand_prune_validate_ms),
+            births_ms=float(births_ms),
+            cluster_build_and_solve_ms=float(cluster_build_and_solve_ms),
+            post_solve_prune_ms=float(post_solve_prune_ms),
+            map_merge_ms=float(map_merge_ms),
+            nscan_lifecycle_ms=float(nscan_lifecycle_ms),
+            cleanup_ms=float(cleanup_ms),
         )
 
         self._run_scan_instrumentation(
@@ -783,6 +828,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             nscan_tracks_in_scope=nscan_tracks_in_scope,
             nscan_tracks_committed=nscan_tracks_committed,
             birth_stats=birth_stats,
+            timing_breakdown=timing_breakdown,
         )
 
         self._last_update_timestamp = time
@@ -3093,6 +3139,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         nscan_tracks_in_scope: int,
         nscan_tracks_committed: int,
         birth_stats: BirthStats,
+        timing_breakdown: ScanTimingBreakdown,
     ) -> None:
         """Build/store per-scan stats and emit optional debug displays."""
         self._maybe_display_scan_debug_output(ctx)
@@ -3108,6 +3155,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             nscan_tracks_in_scope=nscan_tracks_in_scope,
             nscan_tracks_committed=nscan_tracks_committed,
             birth_stats=birth_stats,
+            timing_breakdown=timing_breakdown,
         )
         self.last_scan_stats = scan_stats
         if self.params.collect_stats:
@@ -3192,6 +3240,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         nscan_tracks_in_scope: int,
         nscan_tracks_committed: int,
         birth_stats: BirthStats,
+        timing_breakdown: ScanTimingBreakdown,
     ) -> ScanStats:
         """Assemble one immutable per-scan ScanStats record."""
         map_tracks, map_used, map_unused, map_miss_hist, map_mean_hit_rate = (
@@ -3226,6 +3275,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             map_unused=map_unused,
             map_miss_hist=map_miss_hist,
             map_mean_hit_rate=map_mean_hit_rate,
+            timing_breakdown=timing_breakdown,
         )
 
     def _maybe_display_scan_stats(

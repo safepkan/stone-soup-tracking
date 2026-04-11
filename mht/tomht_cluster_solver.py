@@ -94,6 +94,16 @@ class TopKSolutionHeap:
         if entry > self._heap[0]:
             heapq.heapreplace(self._heap, entry)
 
+    def is_full(self) -> bool:
+        """Return whether the heap currently retains exactly K candidates."""
+        return self._k > 0 and len(self._heap) >= self._k
+
+    def retention_floor_score(self) -> float | None:
+        """Return the current worst retained score when heap is full."""
+        if not self.is_full():
+            return None
+        return float(self._heap[0][0])
+
     def finalize(self) -> tuple[ClusterSolverSolution, ...]:
         """Return retained solutions sorted best-first with deterministic tie order."""
         self._heap.sort(
@@ -118,6 +128,10 @@ class ClusterSolverDiagnostics:
     solves_attempted: int | None = None
     terminated_early: bool | None = None
     early_stop_reason: str | None = None
+    search_nodes_visited: int | None = None
+    branches_pruned_conflict: int | None = None
+    branches_pruned_bound: int | None = None
+    complete_feasible_solutions: int | None = None
 
 
 class ClusterSolver(Protocol):
