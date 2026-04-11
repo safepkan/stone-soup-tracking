@@ -36,8 +36,8 @@ The exact cluster solve path now has a dedicated solver-facing module:
 - The exact problem contract now explicitly carries:
   - one leaf option per track choice,
   - full-history conflict keys for feasibility,
-  - current-scan used-detection sets per leaf,
-  - and the cluster-local unused-detection score hook needed for current objective semantics.
+  - and pre-scored leaf accumulated scores that already include the current-scan
+    per-hit clutter correction used by today’s tracker scoring.
 - Approximation/policy placement is explicit:
   - overload splitting remains a tracker-side pre-solve policy,
   - historical-conflict relaxation remains a tracker-side around-solver retry policy.

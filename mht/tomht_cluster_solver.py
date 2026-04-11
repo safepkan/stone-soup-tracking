@@ -10,12 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import heapq
 from itertools import product
-from typing import Callable, Protocol
+from math import prod
+from typing import Mapping, Protocol
 
 from mht.tomht_model import DetectionKey
-
-
-type UnusedCurrentScanScoreFn = Callable[[frozenset[int]], float]
 
 
 @dataclass(frozen=True)
@@ -24,9 +22,8 @@ class ClusterSolverLeafOption:
 
     leaf_id: int
     track_id: int
-    accumulated_log_score: float
+    score: float
     full_history_conflict_keys: frozenset[DetectionKey]
-    used_current_scan_det_indices: frozenset[int]
 
 
 @dataclass(frozen=True)
@@ -44,14 +41,15 @@ class ClusterSolverProblem:
     Semantics:
     - choose exactly one leaf option per track,
     - reject combinations with overlapping full-history conflict keys,
-    - score = sum(selected leaf accumulated scores) + optional cluster-local
-      unused-detection term from the current-scan used-detection union,
+    - score = sum(selected leaf scores) + cluster-constant offset,
     - keep up to ``max_results`` best feasible combinations.
     """
 
     track_options: tuple[ClusterSolverTrackOptions, ...]
     max_results: int
-    score_unused_current_scan_detections: UnusedCurrentScanScoreFn | None = None
+    # Ranking-inert cluster constant retained temporarily to ease comparison with
+    # previous versions. Intended to be dropped once validated.
+    constant_score_offset: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -59,14 +57,20 @@ class ClusterSolverSolution:
     """One feasible solved cluster selection."""
 
     selected_leaf_id_by_track_id: dict[int, int]
-    log_weight: float
+    score: float
 
 
 @dataclass(frozen=True)
 class ClusterSolverResult:
-    """K-best result plus enumeration counters for one cluster solve call."""
+    """K-best solutions for one cluster solve call."""
 
     solutions: tuple[ClusterSolverSolution, ...]
+
+
+@dataclass(frozen=True)
+class ClusterSolverDiagnostics:
+    """Optional backend diagnostics for one cluster solve call."""
+
     combinations_evaluated: int
     feasible_combinations: int
 
@@ -77,72 +81,128 @@ class ClusterSolver(Protocol):
     def solve(self, problem: ClusterSolverProblem) -> ClusterSolverResult:
         """Return up to K feasible solutions in descending score order."""
 
+    def get_last_diagnostics(self) -> ClusterSolverDiagnostics | None:
+        """Return diagnostics for the most recent ``solve`` call, when available."""
 
-type _TopKHeap = list[tuple[float, int, ClusterSolverSolution]]
+
+class TopKSolutionHeap:
+    """Deterministic streaming top-K retention for scored solver solutions."""
+
+    def __init__(self, *, k: int) -> None:
+        self._k = int(k)
+        self._heap: list[tuple[float, int, ClusterSolverSolution]] = []
+
+    def push(
+        self,
+        *,
+        candidate: ClusterSolverSolution,
+        insertion_order: int,
+    ) -> None:
+        """Consider one candidate for top-K retention."""
+        if self._k <= 0:
+            return
+
+        entry = (
+            float(candidate.score),
+            -int(insertion_order),
+            candidate,
+        )
+        if len(self._heap) < self._k:
+            heapq.heappush(self._heap, entry)
+            return
+        if entry > self._heap[0]:
+            heapq.heapreplace(self._heap, entry)
+
+    def finalize(self) -> tuple[ClusterSolverSolution, ...]:
+        """Return retained solutions sorted best-first with deterministic tie order."""
+        self._heap.sort(
+            key=lambda item: (
+                float(item[0]),  # score
+                int(-item[1]),  # deterministic tie order by insertion
+            ),
+            reverse=True,
+        )
+        return tuple(item[2] for item in self._heap)
+
+
+def validate_cluster_solver_problem(problem: ClusterSolverProblem) -> None:
+    """Validate generic cluster-solver contract invariants."""
+    if int(problem.max_results) < 0:
+        raise ValueError("ClusterSolverProblem.max_results must be >= 0.")
+    for track in problem.track_options:
+        if not track.leaf_options:
+            raise ValueError(
+                "ClusterSolverProblem requires at least one leaf option per track."
+            )
+
+
+def projected_track_combination_count(problem: ClusterSolverProblem) -> int:
+    """Return Cartesian track-choice count for one cluster-solver problem."""
+    return int(prod(len(track.leaf_options) for track in problem.track_options))
+
+
+def score_selected_leaf_ids_if_exact_feasible(
+    *,
+    problem: ClusterSolverProblem,
+    selected_leaf_id_by_track_id: Mapping[int, int],
+    leaf_option_by_leaf_id: Mapping[int, ClusterSolverLeafOption],
+) -> float | None:
+    """Return exact score for a proposed track->leaf selection, if feasible.
+
+    This evaluates one candidate selection under the exact cluster-solver
+    contract:
+    - exactly one selected leaf per track in ``problem.track_options``,
+    - each selected leaf exists and belongs to that track,
+    - selected leaves are pairwise conflict-free under
+      ``full_history_conflict_keys``.
+
+    Returns:
+    - ``float`` exact score when all checks pass,
+    - ``None`` when the proposal violates any feasibility constraint.
+    """
+    if len(selected_leaf_id_by_track_id) != len(problem.track_options):
+        return None
+
+    used_history_keys: set[DetectionKey] = set()
+    leaf_score_sum = 0.0
+
+    for track in problem.track_options:
+        track_id = int(track.track_id)
+        leaf_id = selected_leaf_id_by_track_id.get(track_id)
+        if leaf_id is None:
+            return None
+        leaf = leaf_option_by_leaf_id.get(int(leaf_id))
+        if leaf is None or int(leaf.track_id) != track_id:
+            return None
+
+        overlap = used_history_keys & leaf.full_history_conflict_keys
+        if overlap:
+            return None
+
+        used_history_keys |= set(leaf.full_history_conflict_keys)
+        leaf_score_sum += float(leaf.score)
+
+    return float(leaf_score_sum + float(problem.constant_score_offset))
 
 
 class ExhaustiveClusterSolver:
     """Current exact backend: exhaustive enumeration with deterministic top-K."""
 
-    @staticmethod
-    def _push_top_k(
-        *,
-        top_k_heap: _TopKHeap,
-        candidate: ClusterSolverSolution,
-        insertion_order: int,
-        k: int,
-    ) -> None:
-        """Streaming top-K with existing tie retention (earlier feasible combos kept)."""
-        if k <= 0:
-            return
-
-        entry = (
-            float(candidate.log_weight),
-            -int(insertion_order),
-            candidate,
-        )
-        if len(top_k_heap) < k:
-            heapq.heappush(top_k_heap, entry)
-            return
-        if entry > top_k_heap[0]:
-            heapq.heapreplace(top_k_heap, entry)
-
-    @staticmethod
-    def _finalize_top_k(top_k_heap: _TopKHeap) -> tuple[ClusterSolverSolution, ...]:
-        """Return retained solutions sorted best-first with existing tie ordering."""
-        top_k_heap.sort(
-            key=lambda item: (
-                float(item[0]),  # log_weight
-                int(-item[1]),  # existing deterministic tie order by insertion
-            ),
-            reverse=True,
-        )
-        return tuple(item[2] for item in top_k_heap)
-
-    @staticmethod
-    def _validate_problem(problem: ClusterSolverProblem) -> None:
-        if int(problem.max_results) < 0:
-            raise ValueError("ClusterSolverProblem.max_results must be >= 0.")
-        for track in problem.track_options:
-            if not track.leaf_options:
-                raise ValueError(
-                    "ClusterSolverProblem requires at least one leaf option per track."
-                )
+    def __init__(self) -> None:
+        self._last_diagnostics: ClusterSolverDiagnostics | None = None
 
     def solve(self, problem: ClusterSolverProblem) -> ClusterSolverResult:
-        self._validate_problem(problem)
+        validate_cluster_solver_problem(problem)
 
         track_option_lists = [track.leaf_options for track in problem.track_options]
-        top_k_heap: _TopKHeap = []
+        top_k = TopKSolutionHeap(k=int(problem.max_results))
         combinations_evaluated = 0
         feasible_combinations = 0
-        k = int(problem.max_results)
-        score_unused = problem.score_unused_current_scan_detections
+        constant_offset = float(problem.constant_score_offset)
 
         for picked in product(*track_option_lists):
             combinations_evaluated += 1
             used_history_keys: set[DetectionKey] = set()
-            used_current_scan_det_indices: set[int] = set()
             selected_leaf_id_by_track_id: dict[int, int] = {}
             leaf_score_sum = 0.0
 
@@ -153,32 +213,28 @@ class ExhaustiveClusterSolver:
                     feasible = False
                     break
                 used_history_keys |= option.full_history_conflict_keys
-                used_current_scan_det_indices |= option.used_current_scan_det_indices
                 selected_leaf_id_by_track_id[int(option.track_id)] = int(option.leaf_id)
-                leaf_score_sum += float(option.accumulated_log_score)
+                leaf_score_sum += float(option.score)
             if not feasible:
                 continue
 
             feasible_combinations += 1
-            unused_term = 0.0
-            if score_unused is not None:
-                unused_term = float(
-                    score_unused(frozenset(used_current_scan_det_indices))
-                )
-
             candidate = ClusterSolverSolution(
                 selected_leaf_id_by_track_id=selected_leaf_id_by_track_id,
-                log_weight=float(leaf_score_sum + unused_term),
+                score=float(leaf_score_sum + constant_offset),
             )
-            self._push_top_k(
-                top_k_heap=top_k_heap,
+            top_k.push(
                 candidate=candidate,
                 insertion_order=feasible_combinations,
-                k=k,
             )
 
-        return ClusterSolverResult(
-            solutions=self._finalize_top_k(top_k_heap),
+        self._last_diagnostics = ClusterSolverDiagnostics(
             combinations_evaluated=combinations_evaluated,
             feasible_combinations=feasible_combinations,
         )
+        return ClusterSolverResult(
+            solutions=top_k.finalize(),
+        )
+
+    def get_last_diagnostics(self) -> ClusterSolverDiagnostics | None:
+        return self._last_diagnostics

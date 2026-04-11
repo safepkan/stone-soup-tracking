@@ -51,6 +51,7 @@ from stonesoup.updater.base import Updater
 from mht.helpers.hypothesiser import RobustPDAHypothesiser
 from mht.tomht_cluster_solver import (
     ClusterSolver,
+    ClusterSolverDiagnostics,
     ClusterSolverLeafOption,
     ClusterSolverProblem,
     ClusterSolverResult,
@@ -207,7 +208,14 @@ class _ClusterUnusedScoreContext:
     """Precomputed cluster-local context for unused-detection scoring."""
 
     local_ctx: ScanContext
-    local_slot_by_global_det_index: dict[int, int]
+
+
+@dataclass(frozen=True)
+class _ClusterCurrentScanScoreDecomposition:
+    """Per-hit + constant decomposition for cluster-local current-scan scoring."""
+
+    per_hit_log_bonus: float
+    constant_log_offset: float
 
 
 @dataclass(frozen=True)
@@ -1608,36 +1616,75 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             det_index_by_obj=local_det_index_by_obj,
         )
 
-        local_slot_by_global_det_index = {
-            global_det_idx: local_idx
-            for local_idx, global_det_idx in enumerate(det_indices)
-        }
-        return _ClusterUnusedScoreContext(
-            local_ctx=local_ctx,
-            local_slot_by_global_det_index=local_slot_by_global_det_index,
+        return _ClusterUnusedScoreContext(local_ctx=local_ctx)
+
+    def _build_cluster_current_scan_score_decomposition(
+        self,
+        *,
+        score_context: _ClusterUnusedScoreContext | None,
+    ) -> _ClusterCurrentScanScoreDecomposition | None:
+        """Build per-hit + constant decomposition for tracker scoring."""
+        if score_context is None:
+            return None
+
+        used_none: set[int] = set()
+        total_current_scan_det_count = len(score_context.local_ctx.detections)
+        if total_current_scan_det_count <= 0:
+            return None
+
+        baseline = float(
+            self.scoring_model.score_unused_detections(
+                used_det_keys=used_none,
+                ctx=score_context.local_ctx,
+            )
+        )
+
+        # Derive per-used slope from two points and verify the linear shape for
+        # the current scoring contract that this solver interface supports.
+        first_key = 0
+        first_used_score = float(
+            self.scoring_model.score_unused_detections(
+                used_det_keys={first_key},
+                ctx=score_context.local_ctx,
+            )
+        )
+        per_used = float(first_used_score - baseline)
+
+        if total_current_scan_det_count >= 2:
+            second_used_score = float(
+                self.scoring_model.score_unused_detections(
+                    used_det_keys={0, 1},
+                    ctx=score_context.local_ctx,
+                )
+            )
+            second_increment = float(second_used_score - first_used_score)
+            if not np.isclose(second_increment, per_used, rtol=0.0, atol=1e-12):
+                raise RuntimeError(
+                    "Current cluster-solver leaf-score pre-baking assumes a linear "
+                    "per-hit current-scan clutter correction. Tracker scoring model "
+                    "produced non-linear cluster unused-detection behavior."
+                )
+
+        predicted_all_used = baseline + per_used * float(total_current_scan_det_count)
+        all_used_score = float(
+            self.scoring_model.score_unused_detections(
+                used_det_keys=set(range(total_current_scan_det_count)),
+                ctx=score_context.local_ctx,
+            )
+        )
+        if not np.isclose(predicted_all_used, all_used_score, rtol=0.0, atol=1e-12):
+            raise RuntimeError(
+                "Current cluster-solver leaf-score pre-baking assumes a linear "
+                "per-hit current-scan clutter correction. Tracker scoring model "
+                "produced inconsistent endpoint scores."
+            )
+
+        return _ClusterCurrentScanScoreDecomposition(
+            per_hit_log_bonus=per_used,
+            constant_log_offset=baseline,
         )
 
     # --- Solver guardrails / debug-only feasibility checks ---
-
-    def _score_unused_cluster_current_scan_term(
-        self,
-        *,
-        selected_used_current_scan_det_indices: frozenset[int],
-        score_context: _ClusterUnusedScoreContext | None,
-    ) -> float:
-        """Compute explicit per-combination cluster-local unused-detection term."""
-        if score_context is None:
-            return 0.0
-
-        used_local_slots = {
-            score_context.local_slot_by_global_det_index[det_idx]
-            for det_idx in selected_used_current_scan_det_indices
-            if det_idx in score_context.local_slot_by_global_det_index
-        }
-        return self.scoring_model.score_unused_detections(
-            used_det_keys=used_local_slots,
-            ctx=score_context.local_ctx,
-        )
 
     @staticmethod
     def _pruning_feasibility_validation_enabled() -> bool:
@@ -1992,6 +2039,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> _PreparedClusterSolveProblem:
         """Build one solver-facing exact cluster problem from tracker state."""
         relaxed_key_set = set(relaxed_conflict_keys)
+        score_decomposition = self._build_cluster_current_scan_score_decomposition(
+            score_context=unused_score_context
+        )
+        per_hit_log_bonus = (
+            0.0
+            if score_decomposition is None
+            else score_decomposition.per_hit_log_bonus
+        )
+        constant_log_offset = (
+            0.0
+            if score_decomposition is None
+            else score_decomposition.constant_log_offset
+        )
         leaf_node_by_leaf_id: dict[int, TrackHypothesisNode] = {}
         track_options: list[ClusterSolverTrackOptions] = []
 
@@ -2005,20 +2065,42 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 if relaxed_key_set:
                     conflict_keys -= relaxed_key_set
 
-                used_current_scan_det_indices = frozenset(
-                    det_idx
-                    for (scan_idx, det_idx) in leaf.detection_history_keys
-                    if scan_idx == ctx.scan_index
-                    and (scan_idx, det_idx) in cluster_universe
+                used_current_scan_keys = sorted(
+                    key
+                    for key in leaf.detection_history_keys
+                    if key[0] == ctx.scan_index and key in cluster_universe
                 )
+                if len(used_current_scan_keys) > 1:
+                    raise RuntimeError(
+                        "Cluster solver contract requires at most one current-scan "
+                        "detection per leaf option. "
+                        f"track_id={track_id} leaf_id={leaf_id} "
+                        f"current_scan_keys={used_current_scan_keys}"
+                    )
+                uses_current_scan_detection = bool(used_current_scan_keys)
+
+                if (
+                    uses_current_scan_detection
+                    and used_current_scan_keys[0] not in conflict_keys
+                ):
+                    raise RuntimeError(
+                        "Current-scan detections cannot be relaxed out of "
+                        "full-history conflict keys for exact cluster solving. "
+                        f"track_id={track_id} leaf_id={leaf_id} "
+                        f"det_key={used_current_scan_keys[0]}"
+                    )
 
                 solver_leaf_options.append(
                     ClusterSolverLeafOption(
                         leaf_id=leaf_id,
                         track_id=int(track_id),
-                        accumulated_log_score=float(leaf.accumulated_log_score),
+                        score=float(leaf.accumulated_log_score)
+                        + (
+                            float(per_hit_log_bonus)
+                            if uses_current_scan_detection
+                            else 0.0
+                        ),
                         full_history_conflict_keys=frozenset(conflict_keys),
-                        used_current_scan_det_indices=used_current_scan_det_indices,
                     )
                 )
 
@@ -2029,26 +2111,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 )
             )
 
-        score_unused_current_scan_detections = None
-        if unused_score_context is not None:
-
-            def _score_unused_current_scan_detections(
-                used_current_scan_det_indices: frozenset[int],
-            ) -> float:
-                return self._score_unused_cluster_current_scan_term(
-                    selected_used_current_scan_det_indices=used_current_scan_det_indices,
-                    score_context=unused_score_context,
-                )
-
-            score_unused_current_scan_detections = _score_unused_current_scan_detections
-
         return _PreparedClusterSolveProblem(
             problem=ClusterSolverProblem(
                 track_options=tuple(track_options),
                 max_results=int(self.params.max_global_hypotheses),
-                score_unused_current_scan_detections=(
-                    score_unused_current_scan_detections
-                ),
+                constant_score_offset=float(constant_log_offset),
             ),
             leaf_node_by_leaf_id=leaf_node_by_leaf_id,
         )
@@ -2074,7 +2141,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             out.append(
                 GlobalHypothesis(
                     leaf_nodes_by_track_id=leaf_nodes_by_track_id,
-                    log_weight=float(solution.log_weight),
+                    log_weight=float(solution.score),
                 )
             )
         return tuple(out)
@@ -2083,14 +2150,20 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self,
         *,
         prepared_problem: _PreparedClusterSolveProblem,
-    ) -> tuple[tuple[GlobalHypothesis, ...], ClusterSolverResult]:
+    ) -> tuple[tuple[GlobalHypothesis, ...], ClusterSolverDiagnostics]:
         """Run one exact cluster solve call through the solver interface."""
         solver_result = self._cluster_solver.solve(prepared_problem.problem)
         kept_globals = self._solver_result_to_globals(
             solver_result=solver_result,
             leaf_node_by_leaf_id=prepared_problem.leaf_node_by_leaf_id,
         )
-        return kept_globals, solver_result
+        diagnostics = self._cluster_solver.get_last_diagnostics()
+        if diagnostics is None:
+            diagnostics = ClusterSolverDiagnostics(
+                combinations_evaluated=0,
+                feasible_combinations=0,
+            )
+        return kept_globals, diagnostics
 
     def _infeasible_cluster_debug_summary(
         self,
@@ -2249,11 +2322,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             unused_score_context=solve_input.unused_score_context,
             relaxed_conflict_keys=frozenset(),
         )
-        kept_globals, solve_result = self._solve_cluster_exact(
+        kept_globals, solve_diagnostics = self._solve_cluster_exact(
             prepared_problem=prepared_problem
         )
-        combinations_evaluated = int(solve_result.combinations_evaluated)
-        feasible_combinations = int(solve_result.feasible_combinations)
+        combinations_evaluated = int(solve_diagnostics.combinations_evaluated)
+        feasible_combinations = int(solve_diagnostics.feasible_combinations)
 
         historical_relaxation_attempted = False
         historical_relaxation_succeeded = False
@@ -2279,11 +2352,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                     unused_score_context=solve_input.unused_score_context,
                     relaxed_conflict_keys=frozenset(relaxed_historical_keys),
                 )
-                kept_globals, relaxed_result = self._solve_cluster_exact(
+                kept_globals, relaxed_diagnostics = self._solve_cluster_exact(
                     prepared_problem=relaxed_problem
                 )
-                combinations_evaluated += int(relaxed_result.combinations_evaluated)
-                feasible_combinations = int(relaxed_result.feasible_combinations)
+                combinations_evaluated += int(
+                    relaxed_diagnostics.combinations_evaluated
+                )
+                feasible_combinations = int(relaxed_diagnostics.feasible_combinations)
                 historical_relaxation_succeeded = feasible_combinations > 0
                 self._log_historical_relaxation(
                     cluster=solve_input.cluster,

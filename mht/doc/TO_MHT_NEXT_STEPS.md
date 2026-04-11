@@ -175,8 +175,8 @@ The current exact cluster objective is not just the sum of per-leaf scores.
 
 It also includes the explicit cluster-local unused-detection term derived from current-scan detection usage. The contract should therefore either:
 
-- include enough information for the solver to compute this exactly,
-- or include a clearly defined callback/context object for that score term.
+- include enough information for the solver to compute this exactly via an
+  explicit structured objective term.
 
 The main requirement is that the current exhaustive backend can be migrated behind the new interface **without changing scoring semantics**.
 
