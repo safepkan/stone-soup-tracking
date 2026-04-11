@@ -1,0 +1,12 @@
+# Track replay runbook, canonical inputs, and override templates.
+*
+!.gitignore
+!README.md
+!inputs/
+!inputs/.gitkeep
+!inputs/*.mcap
+!overrides/
+!overrides/*.json
+!outputs/
+!outputs/.gitkeep
+

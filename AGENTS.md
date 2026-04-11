@@ -34,3 +34,17 @@
 - Expected behavior: scripts complete without exceptions; logs print global hypotheses over time and end-of-run `SUMMARY ...` aggregate ScanStats lines. Use output to spot regressions; at minimum ensure they don’t crash after code changes.
 - Quick smoke check: `make smoke` runs both scenarios headless (`MPLBACKEND=Agg TOMHT_NO_SHOW=1`) and fails on any crash.
 - The TO-MHT convenience scripts (`run_tomht_crossing.py`, `run_tomht_bearing_range.py`) accept CLI flags to flip scoring mode and to toggle initiator/births or scenario initial tracks; use them for A/B testing without editing runner code.
+
+## Standard Replay Example
+
+- Canonical replay input: `replay/inputs/cpi_replay_2025-12-10_173948.mcap`.
+- Keep replay artifacts under `replay/` with this convention:
+  - `inputs/` = versioned replay inputs
+  - `overrides/` = versioned JSON override templates
+  - `outputs/` = replay outputs/logs/profiles (local working artifacts)
+- Standard command from the `l2-sp` clone root (or any equivalent clone that
+  contains `python.pipeline.batch_mcap_replay`):
+  - `source venv/bin/activate && python -m python.pipeline.batch_mcap_replay replay/inputs/cpi_replay_2025-12-10_173948.mcap --include-tracker --tracker-type stonesoup-mht --max-cpis 400 --output-path replay/outputs/standard_replay_default`
+- For backend/config overrides, add:
+  - `--tracker-param-override-file replay/overrides/<file>.json`
+- See `replay/README.md` for examples.
