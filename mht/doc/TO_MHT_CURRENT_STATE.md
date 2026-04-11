@@ -31,7 +31,8 @@ The current implementation is therefore:
 
 The exact cluster solve path now has a dedicated solver-facing module:
 
-- `mht/tomht_cluster_solver.py` defines the solver-facing exact problem/result contract and the current exhaustive backend.
+- `mht/tomht_cluster_solver.py` defines the solver-facing exact problem/result contract and shared solver helpers.
+- `mht/tomht_cluster_solver_exhaustive.py` contains the current exhaustive backend implementation.
 - The tracker prepares solver-facing cluster problems from node/tree state and maps solved leaf IDs back to node-native rebuilt globals.
 - The exact problem contract now explicitly carries:
   - one leaf option per track choice,

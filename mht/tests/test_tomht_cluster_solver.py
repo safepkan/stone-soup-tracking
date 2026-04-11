@@ -6,8 +6,8 @@ from mht.tomht_cluster_solver import (
     ClusterSolverLeafOption,
     ClusterSolverProblem,
     ClusterSolverTrackOptions,
-    ExhaustiveClusterSolver,
 )
+from mht.tomht_cluster_solver_exhaustive import ExhaustiveClusterSolver
 
 
 def _leaf(

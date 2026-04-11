@@ -5,7 +5,8 @@
 Implemented this subphase as a conservative refactor:
 
 - added a dedicated solver module (`mht/tomht_cluster_solver.py`) with an explicit exact cluster problem/result contract,
-- moved the current exhaustive K-best cluster solve behind that contract,
+- moved the current exhaustive K-best cluster solve behind that contract in
+  `mht/tomht_cluster_solver_exhaustive.py`,
 - kept tracker-side problem preparation and result mapping in `tomht_tracker.py`,
 - kept overload splitting as an explicit pre-solve tracker policy,
 - kept historical-conflict relaxation as an explicit around-solver retry policy.

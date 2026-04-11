@@ -56,8 +56,8 @@ from mht.tomht_cluster_solver import (
     ClusterSolverProblem,
     ClusterSolverResult,
     ClusterSolverTrackOptions,
-    ExhaustiveClusterSolver,
 )
+from mht.tomht_cluster_solver_exhaustive import ExhaustiveClusterSolver
 from mht.tomht_model import (
     ClusterRebuildSnapshot,
     DetectionKey,
