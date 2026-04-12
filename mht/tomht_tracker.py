@@ -413,6 +413,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             refined; it should be treated as transitional rather than a stable
             long-term extension point.
         """
+        explicit_hypothesis_backend_override = (
+            isinstance(params_overrides, Mapping)
+            and "hypothesis_backend" in params_overrides
+        )
         params = self._apply_params_overrides(params, params_overrides)
         resolved_predictor, resolved_updater, resolved_hypothesis_generator = (
             self._resolve_hypothesis_generator_dependencies(
@@ -421,6 +425,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 hypothesis_generator=hypothesis_generator,
                 hypothesiser=hypothesiser,
                 params=params,
+                explicit_hypothesis_backend_override=(
+                    explicit_hypothesis_backend_override
+                ),
             )
         )
         super().__init__(
@@ -545,10 +552,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         hypothesis_generator: object | None,
         hypothesiser: PDAHypothesiser | None,
         params: TOMHTParams,
+        explicit_hypothesis_backend_override: bool = False,
     ) -> tuple[Predictor, Updater, object]:
         """Resolve transitional local-hypothesis backend wiring with precedence."""
         resolved_predictor = predictor
         resolved_updater = updater
+        legacy_positional_hypothesiser: object | None = None
+        default_hypothesis_backend = TOMHTParams().hypothesis_backend
 
         # Legacy positional compatibility: TOMHTTracker(hypothesiser,updater,...)
         if (
@@ -559,18 +569,53 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             and not hasattr(predictor, "predict")
         ):
             hypothesiser = predictor  # type: ignore[assignment]
+            legacy_positional_hypothesiser = predictor
             resolved_predictor = None
 
         if hypothesis_generator is not None:
             resolved_hypothesis_generator = hypothesis_generator
         elif hypothesiser is not None:
-            warnings.warn(
-                "TOMHTTracker(..., hypothesiser=...) is deprecated; pass "
-                "hypothesis_generator=... or rely on params.hypothesis_backend.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            resolved_hypothesis_generator = hypothesiser
+            if legacy_positional_hypothesiser is not None and (
+                params.hypothesis_backend != default_hypothesis_backend
+                or explicit_hypothesis_backend_override
+            ):
+                # Keep legacy positional compatibility, but allow non-default
+                # params.hypothesis_backend overrides (e.g. JSON replay config)
+                # to select tracker-owned backend construction.
+                resolved_predictor = getattr(
+                    legacy_positional_hypothesiser, "predictor", None
+                )
+                if resolved_updater is None:
+                    resolved_updater = getattr(
+                        legacy_positional_hypothesiser, "updater", None
+                    )
+                if resolved_predictor is None:
+                    raise TypeError(
+                        "Legacy positional hypothesiser override requires a "
+                        "predictor attribute when params.hypothesis_backend "
+                        "selects a non-default backend."
+                    )
+                if resolved_updater is None:
+                    raise TypeError(
+                        "Legacy positional hypothesiser override requires an "
+                        "updater (argument or hypothesiser.updater) when "
+                        "params.hypothesis_backend selects a non-default backend."
+                    )
+                resolved_hypothesis_generator = (
+                    self._build_default_hypothesis_generator(
+                        predictor=resolved_predictor,
+                        updater=resolved_updater,
+                        params=params,
+                    )
+                )
+            else:
+                warnings.warn(
+                    "TOMHTTracker(..., hypothesiser=...) is deprecated; pass "
+                    "hypothesis_generator=... or rely on params.hypothesis_backend.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                resolved_hypothesis_generator = hypothesiser
         else:
             if resolved_predictor is None:
                 raise TypeError(

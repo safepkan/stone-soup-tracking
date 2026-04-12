@@ -5,10 +5,12 @@ import unittest
 from typing import cast
 
 import numpy as np
+from stonesoup.hypothesiser.probability import PDAHypothesiser
 from stonesoup.types.detection import Detection
 from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 
+from mht.helpers.hypothesiser import RobustPDAHypothesiser
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
 
 
@@ -28,6 +30,16 @@ class _NoopUpdater:
     def update(self, hypothesis):
         del hypothesis
         raise RuntimeError("No update expected in this test helper")
+
+
+class _LegacyPositionalNoopHypothesiser:
+    def __init__(self, predictor: _NoopPredictor, updater: _NoopUpdater) -> None:
+        self.predictor = predictor
+        self.updater = updater
+
+    def hypothesise(self, track: Track, detections, timestamp):
+        del track, detections, timestamp
+        return []
 
 
 class _ZeroScoringModel:
@@ -107,6 +119,67 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
     def test_constructor_rejects_non_string_params_override_keys(self) -> None:
         with self.assertRaisesRegex(TypeError, "params_overrides keys must be strings"):
             _build_tracker_with_overrides({1: 1})  # type: ignore[dict-item]
+
+    def test_legacy_positional_hypothesiser_kept_on_default_backend(self) -> None:
+        legacy_predictor = _NoopPredictor()
+        legacy_updater = _NoopUpdater()
+        legacy_hypothesiser = _LegacyPositionalNoopHypothesiser(
+            legacy_predictor, legacy_updater
+        )
+        tracker = TOMHTTracker(
+            legacy_hypothesiser,
+            legacy_updater,
+            params=TOMHTParams(
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+            scoring_model=_ZeroScoringModel(),
+        )
+
+        self.assertIs(legacy_hypothesiser, tracker.hypothesis_generator)
+
+    def test_legacy_positional_hypothesiser_can_use_backend_override(self) -> None:
+        legacy_hypothesiser = _LegacyPositionalNoopHypothesiser(
+            _NoopPredictor(), _NoopUpdater()
+        )
+        tracker = TOMHTTracker(
+            legacy_hypothesiser,
+            _NoopUpdater(),
+            params=TOMHTParams(
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+            params_overrides={"hypothesis_backend": "robust_pda"},
+            scoring_model=_ZeroScoringModel(),
+        )
+
+        self.assertEqual("robust_pda", tracker.params.hypothesis_backend)
+        self.assertIsInstance(tracker.hypothesis_generator, RobustPDAHypothesiser)
+
+    def test_legacy_positional_hypothesiser_honors_explicit_pda_override(self) -> None:
+        legacy_hypothesiser = _LegacyPositionalNoopHypothesiser(
+            _NoopPredictor(), _NoopUpdater()
+        )
+        tracker = TOMHTTracker(
+            legacy_hypothesiser,
+            _NoopUpdater(),
+            params=TOMHTParams(
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+            params_overrides={"hypothesis_backend": "pda"},
+            scoring_model=_ZeroScoringModel(),
+        )
+
+        self.assertEqual("pda", tracker.params.hypothesis_backend)
+        self.assertIsNot(legacy_hypothesiser, tracker.hypothesis_generator)
+        self.assertIsInstance(tracker.hypothesis_generator, PDAHypothesiser)
 
     def test_tracker_starts_with_empty_map_and_no_trees(self) -> None:
         tracker = _build_tracker()

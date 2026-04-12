@@ -1,5 +1,13 @@
 # TO-MHT Next Steps
 
+## Update (2026-04-12): replay override support for hypothesis backend wired
+
+- legacy positional construction (`TOMHTTracker(hypothesiser,updater,...)`)
+  now honors non-default `tomht_params.hypothesis_backend` overrides,
+- added replay override templates for hypothesis backend A/B runs:
+  - `replay/overrides/tracker_hypothesis_backend_pda.json`
+  - `replay/overrides/tracker_hypothesis_backend_robust_pda.json`.
+
 ## Update (2026-04-12): smoke/replay golden workflows refined
 
 - debug cluster-rebuild header now logs `scan=<index>` + `t=<timestamp>` for

@@ -1,5 +1,15 @@
 # TO-MHT Current State
 
+## Update (2026-04-12): legacy replay path now respects `hypothesis_backend` override
+
+- In `TOMHTTracker` legacy positional compatibility mode
+  (`TOMHTTracker(hypothesiser,updater,...)`), a non-default
+  `TOMHTParams.hypothesis_backend` now forces tracker-owned backend construction
+  from the legacy hypothesiser's predictor/updater dependencies.
+- This keeps old call sites working while allowing JSON
+  `tomht_params.hypothesis_backend` replay overrides to actually switch between
+  `"pda"` and `"robust_pda"`.
+
 ## Snapshot date
 
 This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface cleanup, determinism, output-history restoration, solver-seam extraction, exact-backend experiments, timing-instrumentation work, and smoke-output golden-regression workflow setup completed through **2026-04-12**.

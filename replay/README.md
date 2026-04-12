@@ -48,6 +48,8 @@ Available backend override templates:
 - `replay/overrides/tracker_backend_branch_and_bound.json`
 - `replay/overrides/tracker_backend_exhaustive.json`
 - `replay/overrides/tracker_backend_ortools.json`
+- `replay/overrides/tracker_hypothesis_backend_pda.json`
+- `replay/overrides/tracker_hypothesis_backend_robust_pda.json`
 
 ## Standard Replay Regression
 
