@@ -55,7 +55,9 @@ def _tomht_crossing_covar() -> CovarianceMatrix:
     return CovarianceMatrix(np.diag([1.5, 0.5, 1.5, 0.5]))
 
 
-def create_crossing_scenario() -> Tuple[
+def create_crossing_scenario(
+    start_time: datetime.datetime | None = None,
+) -> Tuple[
     OrderedSet[GroundTruthPath],
     List[OrderedSet[Detection]],
     datetime.datetime,
@@ -92,7 +94,8 @@ def create_crossing_scenario() -> Tuple[
 
     # Ground truth: two crossing targets
     truths: OrderedSet[GroundTruthPath] = OrderedSet()
-    start_time = datetime.datetime.now()
+    if start_time is None:
+        start_time = datetime.datetime.now()
 
     # Target 1: starts at (0, 0), heading roughly up-right
     truth1 = GroundTruthPath(

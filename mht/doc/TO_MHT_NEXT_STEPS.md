@@ -1,5 +1,57 @@
 # TO-MHT Next Steps
 
+## Update (2026-04-12): smoke/replay golden workflows refined
+
+- debug cluster-rebuild header now logs `scan=<index>` + `t=<timestamp>` for
+  easier cross-reference in replay/smoke logs,
+- smoke regression baselines now mirror replay style:
+  - versioned `raw` + `normalized` logs per scenario,
+  - compare pass/fail still uses normalized output only,
+  - latest run artifacts always written for inspection under
+    `replay/outputs/smoke_regression_latest/`,
+- added optional raw timing-summary comparison flags/targets for performance
+  work:
+  - `make smoke_compare_timing`
+  - `make replay_compare_timing`.
+
+## Update (2026-04-12): standard replay golden regression harness added
+
+Added an optional heavyweight replay-regression path for the canonical MCAP
+replay command:
+
+- added `replay/standard_replay_regression.py` with `compare` and `update`
+  modes,
+- captures both raw and normalized replay output for each run,
+- stores latest inspectable run logs under
+  `replay/outputs/standard_replay_regression_latest/`,
+- versioned replay baselines now live under `replay/replay_baselines/`:
+  - `standard_replay_default.raw.log`
+  - `standard_replay_default.normalized.log`,
+- comparison uses normalized output; raw output is retained for direct
+  inspection and timing analysis,
+- added optional Make shortcuts:
+  - `make replay_compare`
+  - `make replay_update_baseline`,
+- baseline updates are explicitly intentional (not routine validation).
+
+## Update (2026-04-12): smoke-output golden regression harness added
+
+Formalized the "no-output-change expected" validation path for smoke runs:
+
+- added `replay/smoke_output_regression.py` to run both smoke scenarios,
+  normalize volatile output, and compare against versioned golden logs,
+- versioned baseline location: `replay/smoke_baselines/`,
+- normalization currently removes timing/memory line families while keeping
+  timestamps,
+- smoke harness now pins scenario start time via `--scenario-start-time`
+  to keep `SCAN t=...` timestamps stable/diffable,
+- `SCAN ...` logging now includes explicit `scan=<index>` for easier debugging
+  and diff references,
+- added Makefile shortcuts:
+  - `make smoke_compare`
+  - `make smoke_update_baseline`
+- documented usage in `README.md` and `replay/README.md`.
+
 ## Update (2026-04-11): experimental exact branch-and-bound backend implemented
 
 Implemented a second experimental exact backend under the existing solver seam:

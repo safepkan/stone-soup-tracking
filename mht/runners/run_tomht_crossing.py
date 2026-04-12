@@ -10,6 +10,7 @@ if __package__ in (None, ""):
 from mht.runners.tomht_runner import (
     TOMHTOperatingMode,
     load_params_overrides_json,
+    parse_scenario_start_time,
     run_tomht,
 )
 
@@ -103,6 +104,16 @@ if __name__ == "__main__":
             "(top-level object: key->value)."
         ),
     )
+    parser.add_argument(
+        "--scenario-start-time",
+        dest="scenario_start_time",
+        type=parse_scenario_start_time,
+        default=None,
+        help=(
+            "Pin scenario start time (ISO-8601) for reproducible timestamps, "
+            "for example 2026-01-01T12:00:00."
+        ),
+    )
     # VS Code/Jupyter Interactive injects kernel args (for example --f=...).
     # Ignore unknown args so this script works both as CLI and in notebooks.
     args, _unknown = parser.parse_known_args()
@@ -123,5 +134,6 @@ if __name__ == "__main__":
         debug_display_scan_stats=args.debug_scan_stats,
         debug_display_hypotheses=args.debug_hypotheses,
         debug_display_births=args.debug_births,
+        scenario_start_time=args.scenario_start_time,
         params_overrides=params_overrides,
     )

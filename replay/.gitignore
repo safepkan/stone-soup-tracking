@@ -2,6 +2,7 @@
 *
 !.gitignore
 !README.md
+!__init__.py
 !inputs/
 !inputs/.gitkeep
 !inputs/*.mcap
@@ -9,4 +10,13 @@
 !overrides/*.json
 !outputs/
 !outputs/.gitkeep
-
+!smoke_output_regression.py
+!timing_summary_from_log.py
+!regression_common.py
+!smoke_baselines/
+!smoke_baselines/README.md
+!smoke_baselines/*.log
+!standard_replay_regression.py
+!replay_baselines/
+!replay_baselines/README.md
+!replay_baselines/*.log

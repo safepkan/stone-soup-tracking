@@ -21,6 +21,16 @@ The `Makefile` provides a few convenience targets:
 - `make setup_venv` creates a venv and installs `requirements.txt`.
 - `make update_venv` updates dependencies in the existing venv.
 - `make smoke` runs both TO-MHT scenario smoke scripts headless.
+- `make smoke_compare` runs normalized smoke-output regression against versioned baselines.
+- `make smoke_compare_timing` runs smoke comparison and also prints timing-summary diff from raw logs.
+- `make timing_summaries_regenerate_baselines` regenerates baseline timing summaries from existing raw logs (no rerun).
+- `make timing_summaries_regenerate_latest` regenerates latest-run timing summaries from existing raw logs (no rerun).
+- `make smoke_update_baseline` refreshes the versioned smoke baselines (raw + normalized)
+  (use only when baseline updates are intentionally approved).
+- `make replay_compare` runs heavyweight standard-replay regression against versioned baselines.
+- `make replay_compare_timing` runs replay comparison and also prints timing-summary diff from raw logs.
+- `make replay_update_baseline` refreshes standard-replay baselines
+  (use only when baseline updates are intentionally approved).
 
 You can select a different environment by passing `ENV` (default is `venv`):
 

@@ -3168,7 +3168,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 print(f"  {det.state_vector}")
 
         if self.params.debug_display_hypotheses:
-            print(f"\nCluster rebuilds at timestamp {ctx.timestamp}:")
+            print(f"\nCluster rebuilds scan={ctx.scan_index} t={ctx.timestamp}:")
             self._display_cluster_rebuilds()
 
     def _display_cluster_rebuilds(self) -> None:
@@ -3245,6 +3245,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             self._map_stats_for_current_map(ctx.detections, ctx.scan_index)
         )
         return ScanStats(
+            scan_index=int(ctx.scan_index),
             timestamp=ctx.timestamp,
             scan_wall_ms=float(scan_wall_ms),
             maxrss_mb=float(maxrss_mb),

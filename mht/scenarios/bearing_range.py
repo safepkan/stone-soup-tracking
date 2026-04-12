@@ -48,7 +48,9 @@ def _tomht_bearing_range_covar() -> CovarianceMatrix:
     return CovarianceMatrix(np.diag([10.0, 1.0, 10.0, 1.0]))
 
 
-def create_bearing_range_mht_example() -> Tuple[
+def create_bearing_range_mht_example(
+    start_time: datetime.datetime | None = None,
+) -> Tuple[
     OrderedSet[GroundTruthPath],
     List[OrderedSet[Detection]],
     List[datetime.datetime],
@@ -62,7 +64,8 @@ def create_bearing_range_mht_example() -> Tuple[
     """
     np.random.seed(1908)  # as per MFT example
 
-    start_time = datetime.datetime.now().replace(microsecond=0)
+    if start_time is None:
+        start_time = datetime.datetime.now().replace(microsecond=0)
     simulation_steps = 50
     timestep_size = datetime.timedelta(seconds=2)
 

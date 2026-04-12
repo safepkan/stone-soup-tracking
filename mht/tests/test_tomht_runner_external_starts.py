@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import json
 import tempfile
 import unittest
@@ -16,6 +17,7 @@ from mht.runners.tomht_runner import (
     _resolve_external_start_timing,
     _resolve_mode_configuration,
     load_params_overrides_json,
+    parse_scenario_start_time,
 )
 from mht.scenarios.bearing_range import (
     create_bearing_range_mht_example,
@@ -257,6 +259,25 @@ class ParamsOverrideJsonLoadTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "top-level object"):
                 load_params_overrides_json(json_path)
+
+
+class ScenarioStartTimeParseTest(unittest.TestCase):
+    def test_parse_scenario_start_time_accepts_iso_without_timezone(self) -> None:
+        parsed = parse_scenario_start_time("2026-01-01T12:34:56")
+
+        self.assertEqual(datetime.datetime(2026, 1, 1, 12, 34, 56), parsed)
+
+    def test_parse_scenario_start_time_accepts_z_suffix(self) -> None:
+        parsed = parse_scenario_start_time("2026-01-01T12:34:56Z")
+
+        self.assertEqual(
+            datetime.datetime(2026, 1, 1, 12, 34, 56, tzinfo=datetime.timezone.utc),
+            parsed,
+        )
+
+    def test_parse_scenario_start_time_rejects_invalid_value(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Invalid scenario start time"):
+            parse_scenario_start_time("not-a-timestamp")
 
 
 if __name__ == "__main__":

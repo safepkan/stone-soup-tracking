@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface cleanup, determinism, output-history restoration, solver-seam extraction, exact-backend experiments, and timing-instrumentation work completed through **2026-04-11**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface cleanup, determinism, output-history restoration, solver-seam extraction, exact-backend experiments, timing-instrumentation work, and smoke-output golden-regression workflow setup completed through **2026-04-12**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -376,6 +376,7 @@ Per-scan and summary instrumentation reports:
 - N-scan commitment counts
 - birth statistics
 - MAP track usage
+- explicit scan index in `SCAN ...` lines (`scan=<index>`)
 - scan wall time
 - memory / node counts
 
@@ -517,6 +518,10 @@ The following now look solid enough to treat as the current base architecture:
 - exhaustive retained as exact reference/fallback,
 - OR-Tools retained as experimental exact backend,
 - replay integration with end-to-end recorded replay completion,
+- versioned smoke-output golden-regression harness with both raw and normalized
+  baselines (normalized compare + raw inspection/timing analysis),
+- optional versioned standard-replay golden-regression harness with both raw
+  and normalized baselines,
 - and per-scan timing-phase instrumentation.
 
 ---

@@ -33,6 +33,20 @@
 - Control animation display: set `TOMHT_SHOW=1` to force showing even with non-interactive backends; set `TOMHT_NO_SHOW=1` to suppress entirely.
 - Expected behavior: scripts complete without exceptions; logs print global hypotheses over time and end-of-run `SUMMARY ...` aggregate ScanStats lines. Use output to spot regressions; at minimum ensure they don’t crash after code changes.
 - Quick smoke check: `make smoke` runs both scenarios headless (`MPLBACKEND=Agg TOMHT_NO_SHOW=1`) and fails on any crash.
+- Standard post-change output-regression validation: `make smoke_compare`.
+  - Run this after code updates unless the task is clearly unrelated.
+  - If it reports differences, treat that as a review point: assess whether the
+    delta is expected from the change.
+  - Do **not** update smoke baselines unless explicitly requested by the user.
+- Optional heavyweight replay regression (not part of routine validation):
+  `make replay_compare`.
+  - Use when replay-level behavior checks are useful.
+  - Treat differences as a review point against expected change impact.
+  - Do **not** update replay baselines unless explicitly requested by the user.
+- For performance-focused investigations, optional timing-summary comparisons are
+  available from raw baseline vs latest raw run output:
+  - `make smoke_compare_timing`
+  - `make replay_compare_timing`
 - The TO-MHT convenience scripts (`run_tomht_crossing.py`, `run_tomht_bearing_range.py`) accept CLI flags to flip scoring mode and to toggle initiator/births or scenario initial tracks; use them for A/B testing without editing runner code.
 
 ## Standard Replay Example

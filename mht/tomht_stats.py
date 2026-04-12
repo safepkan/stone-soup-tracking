@@ -49,6 +49,7 @@ class ScanTimingBreakdown:
 
 @dataclass(frozen=True)
 class ScanStats:
+    scan_index: int
     timestamp: datetime.datetime
     scan_wall_ms: float
     maxrss_mb: float
@@ -104,7 +105,8 @@ def print_scan_stats(
     phase_other_ms = max(float(scan_stats.scan_wall_ms) - phase_accounted_ms, 0.0)
 
     print(
-        f"SCAN t={timestamp} det={scan_stats.num_detections} "
+        f"SCAN scan={scan_stats.scan_index} t={timestamp} "
+        f"det={scan_stats.num_detections} "
         f"trees={scan_stats.active_trees} leaves={scan_stats.active_leaves} "
         f"clusters={scan_stats.cluster_count} "
         f"comb_eval={scan_stats.combinations_evaluated} "
@@ -157,6 +159,7 @@ def print_scan_stats(
         )
         print(
             "SCAN_NSCAN_COMMITTED "
+            f"scan={scan_stats.scan_index} "
             f"t={timestamp} boundary={nscan_snapshot.boundary_scan_index} "
             f"{committed_pairs}"
         )

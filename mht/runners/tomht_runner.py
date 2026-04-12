@@ -246,6 +246,21 @@ def load_params_overrides_json(
     return loaded
 
 
+def parse_scenario_start_time(value: str) -> datetime.datetime:
+    """Parse one ISO-8601 timestamp used to pin scenario start time."""
+
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        return datetime.datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            "Invalid scenario start time. Use ISO-8601, for example "
+            "'2026-01-01T12:00:00' or '2026-01-01T12:00:00+00:00'."
+        ) from exc
+
+
 def run_tomht(
     setup: SetupName,
     *,
@@ -258,6 +273,7 @@ def run_tomht(
     debug_display_scan_stats: bool | None = None,
     debug_display_hypotheses: bool | None = None,
     debug_display_births: bool | None = None,
+    scenario_start_time: datetime.datetime | None = None,
     params_overrides: Mapping[str, Any] | None = None,
 ) -> None:
     """Run one TOMHT scenario end-to-end and render or suppress animation output.
@@ -290,7 +306,7 @@ def run_tomht(
     styles: tuple[str, ...]
     if setup == "crossing":
         truths, scans, start_time, transition_model, measurement_model, config = (
-            create_crossing_scenario()
+            create_crossing_scenario(start_time=scenario_start_time)
         )
         timestamps = [
             start_time + datetime.timedelta(seconds=i) for i in range(len(scans))
@@ -304,8 +320,9 @@ def run_tomht(
         styles = ("r-", "b-")
     else:
         truths, scans, timestamps, transition_model, measurement_model, config = (
-            create_bearing_range_mht_example()
+            create_bearing_range_mht_example(start_time=scenario_start_time)
         )
+        start_time = timestamps[0]
 
         def build_external_starts(scan_index: int, timestamp: datetime.datetime):
             """Build scenario-derived external starts for the current bearing-range scan."""
@@ -392,6 +409,7 @@ def run_tomht(
         "OPERATING_MODE "
         f"setup={setup} resolved={mode.value} "
         f"requested={requested_mode_raw} "
+        f"scenario_start_time={start_time} "
         f"births={'on' if use_initiator else 'off'} "
         f"external_starts={'on' if mode_config.external_starts_enabled else 'off'} "
         "external_start_timing="
