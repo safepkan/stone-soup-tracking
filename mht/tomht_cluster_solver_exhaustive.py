@@ -74,7 +74,6 @@ class ExhaustiveClusterSolver:
             backend="exhaustive",
             optimal=True,
             solutions_returned=len(solutions),
-            solves_attempted=1,
             terminated_early=len(solutions) < max_results,
             early_stop_reason=early_stop_reason,
         )

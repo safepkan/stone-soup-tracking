@@ -183,6 +183,16 @@ Branch-and-bound diagnostics now include counters such as:
 - `branches_pruned_bound`
 - `complete_feasible_solutions`
 
+`ClusterSolverDiagnostics` is intentionally a union-style schema:
+
+- required across backends: `combinations_evaluated`, `feasible_combinations`,
+- common fields (constructor-required): backend/termination/result summary fields,
+- backend-specific optional fields for solver-local instrumentation.
+
+In particular, `solves_attempted` is now treated as backend-specific and is
+primarily meaningful for repeated-solve backends (currently OR-Tools CP-SAT),
+rather than being forced to `1` by single-pass backends.
+
 ### Exhaustive backend status
 
 The exhaustive backend remains available as:

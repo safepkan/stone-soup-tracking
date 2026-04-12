@@ -56,6 +56,7 @@ from mht.tomht_cluster_solver import (
     ClusterSolverProblem,
     ClusterSolverResult,
     ClusterSolverTrackOptions,
+    missing_cluster_solver_diagnostics,
 )
 from mht.tomht_cluster_solver_exhaustive import ExhaustiveClusterSolver
 from mht.tomht_model import (
@@ -2241,10 +2242,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         diagnostics = self._cluster_solver.get_last_diagnostics()
         if diagnostics is None:
-            diagnostics = ClusterSolverDiagnostics(
-                combinations_evaluated=0,
-                feasible_combinations=0,
-            )
+            diagnostics = missing_cluster_solver_diagnostics()
         return kept_globals, diagnostics
 
     def _infeasible_cluster_debug_summary(

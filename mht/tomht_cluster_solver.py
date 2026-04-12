@@ -120,14 +120,20 @@ class TopKSolutionHeap:
 class ClusterSolverDiagnostics:
     """Optional backend diagnostics for one cluster solve call."""
 
+    # Required by the tracker/statistics path.
     combinations_evaluated: int
     feasible_combinations: int
-    backend: str | None = None
-    optimal: bool | None = None
-    solutions_returned: int | None = None
+
+    # Common fields that all backends should report explicitly.
+    # Values may be ``None`` only for compatibility/fallback paths.
+    backend: str | None
+    optimal: bool | None
+    solutions_returned: int | None
+    terminated_early: bool | None
+    early_stop_reason: str | None
+
+    # Backend-specific fields (populate only when meaningful).
     solves_attempted: int | None = None
-    terminated_early: bool | None = None
-    early_stop_reason: str | None = None
     search_nodes_visited: int | None = None
     branches_pruned_conflict: int | None = None
     branches_pruned_bound: int | None = None
@@ -142,6 +148,19 @@ class ClusterSolver(Protocol):
 
     def get_last_diagnostics(self) -> ClusterSolverDiagnostics | None:
         """Return diagnostics for the most recent ``solve`` call, when available."""
+
+
+def missing_cluster_solver_diagnostics() -> ClusterSolverDiagnostics:
+    """Return fallback diagnostics when a solver does not report diagnostics."""
+    return ClusterSolverDiagnostics(
+        combinations_evaluated=0,
+        feasible_combinations=0,
+        backend=None,
+        optimal=None,
+        solutions_returned=None,
+        terminated_early=None,
+        early_stop_reason="missing_solver_diagnostics",
+    )
 
 
 def validate_cluster_solver_problem(problem: ClusterSolverProblem) -> None:
