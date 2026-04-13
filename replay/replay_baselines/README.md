@@ -11,6 +11,8 @@ Files:
 - `standard_replay_default.timing_summary.log`: extracted timing summary used
   for easy inspection (derived generically from raw output; from `SUMMARY ...`
   lines when present, otherwise synthesized from `SCAN_TIMING*`/`SCAN_MEMORY`)
+- `standard_replay_default.replayed.mcap`: replay output MCAP copied from the
+  run for easy inspection (kept local; intentionally ignored by Git)
 
 You can regenerate this summary from existing raw output without rerunning
 replay:
@@ -44,7 +46,8 @@ python replay/standard_replay_regression.py compare
 ```
 
 `compare` matches only normalized output and always writes latest raw/normalized
-logs to `replay/outputs/standard_replay_regression_latest/`.
+logs plus latest replay MCAP to
+`replay/outputs/standard_replay_regression_latest/`.
 
 For performance work, include timing-summary comparison from raw logs:
 

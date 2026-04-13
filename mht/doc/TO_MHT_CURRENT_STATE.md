@@ -1,5 +1,15 @@
 # TO-MHT Current State
 
+## Update (2026-04-13): replay regression now preserves replayed MCAP artifacts
+
+- `replay/standard_replay_regression.py` now copies the replay-produced MCAP
+  into both:
+  - `replay/outputs/standard_replay_regression_latest/latest.replayed.mcap`
+  - `replay/replay_baselines/standard_replay_default.replayed.mcap`
+- This keeps replay inspectability aligned with raw/normalized/timing logs while
+  still relying on existing `replay/.gitignore` behavior so baseline MCAP files
+  remain local (not versioned).
+
 ## Update (2026-04-12): legacy replay path now respects `hypothesis_backend` override
 
 - In `TOMHTTracker` legacy positional compatibility mode
@@ -12,7 +22,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface cleanup, determinism, output-history restoration, solver-seam extraction, exact-backend experiments, timing-instrumentation work, and smoke-output golden-regression workflow setup completed through **2026-04-12**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface cleanup, determinism, output-history restoration, solver-seam extraction, exact-backend experiments, timing-instrumentation work, and smoke-output golden-regression workflow setup completed through **2026-04-13**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 

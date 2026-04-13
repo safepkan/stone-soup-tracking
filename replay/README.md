@@ -66,12 +66,15 @@ inspection under:
 - `replay/outputs/standard_replay_regression_latest/latest.raw.log`
 - `replay/outputs/standard_replay_regression_latest/latest.normalized.log`
 - `replay/outputs/standard_replay_regression_latest/latest.timing_summary.log`
+- `replay/outputs/standard_replay_regression_latest/latest.replayed.mcap`
 
 Versioned golden baseline artifacts are stored in:
 
 - `replay/replay_baselines/standard_replay_default.raw.log`
 - `replay/replay_baselines/standard_replay_default.normalized.log`
 - `replay/replay_baselines/standard_replay_default.timing_summary.log`
+- `replay/replay_baselines/standard_replay_default.replayed.mcap` (local
+  inspectable artifact; intentionally not versioned in Git)
 
 For performance-oriented checks, include timing-summary comparison from the raw
 logs:

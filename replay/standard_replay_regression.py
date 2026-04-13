@@ -34,17 +34,20 @@ BASELINE_NORMALIZED_PATH = BASELINE_DIR / "standard_replay_default.normalized.lo
 BASELINE_TIMING_SUMMARY_PATH = (
     BASELINE_DIR / "standard_replay_default.timing_summary.log"
 )
+BASELINE_MCAP_PATH = BASELINE_DIR / "standard_replay_default.replayed.mcap"
 
 LATEST_DIR = REPO_ROOT / "replay" / "outputs" / "standard_replay_regression_latest"
 LATEST_RAW_PATH = LATEST_DIR / "latest.raw.log"
 LATEST_NORMALIZED_PATH = LATEST_DIR / "latest.normalized.log"
 LATEST_TIMING_SUMMARY_PATH = LATEST_DIR / "latest.timing_summary.log"
+LATEST_MCAP_PATH = LATEST_DIR / "latest.replayed.mcap"
 
 _BASELINE_MISSING_HELP = (
     "Run this first (only when baseline refresh is intended):\n"
     "  source venv/bin/activate && python replay/standard_replay_regression.py update"
 )
 _RUN_ID_RE = re.compile(r"mcap_replay__\d{4}-\d{2}-\d{2}_\d{2}_\d{2}_\d{2}Z")
+_OUTPUT_DIRECTORY_RE = re.compile(r"^Output directory:\s*(?P<path>.+?)\s*$")
 
 
 def _detect_default_replay_repo() -> Path | None:
@@ -204,7 +207,7 @@ def _run_standard_replay(
     tracker_override: Path | None,
     keep_output_artifacts: bool,
     output_root: Path | None,
-) -> tuple[str, list[str], Path]:
+) -> tuple[str, list[str], Path, Path]:
     if keep_output_artifacts:
         replay_output_root = (
             output_root
@@ -267,26 +270,71 @@ def _run_standard_replay(
         replay_python=replay_python,
         replay_output_root=replay_output_root,
     )
-    return raw_output, normalized_lines, replay_output_root
+    replayed_mcap_path = _resolve_replayed_mcap_path(
+        raw_output=raw_output,
+        replay_output_root=replay_output_root,
+    )
+    return raw_output, normalized_lines, replay_output_root, replayed_mcap_path
 
 
-def _save_latest(raw_output: str, normalized_lines: list[str]) -> list[str]:
+def _extract_output_directory(raw_output: str) -> Path | None:
+    output_dir: Path | None = None
+    for raw_line in raw_output.splitlines():
+        match = _OUTPUT_DIRECTORY_RE.match(raw_line.strip())
+        if match is None:
+            continue
+        output_dir = Path(match.group("path")).expanduser()
+    return output_dir
+
+
+def _resolve_replayed_mcap_path(*, raw_output: str, replay_output_root: Path) -> Path:
+    candidates: list[Path] = []
+    output_dir = _extract_output_directory(raw_output)
+    if output_dir is not None and output_dir.exists():
+        candidates.extend(output_dir.rglob("*.mcap"))
+    if not candidates:
+        candidates.extend(replay_output_root.rglob("*.mcap"))
+    replayed_candidates = [
+        path for path in candidates if path.name.endswith("_replayed.mcap")
+    ]
+    search_pool = replayed_candidates if replayed_candidates else candidates
+    if not search_pool:
+        raise FileNotFoundError(
+            "Could not locate replay-produced MCAP artifact under "
+            f"{replay_output_root}."
+        )
+    return max(search_pool, key=lambda path: path.stat().st_mtime_ns)
+
+
+def _copy_mcap(src: Path, dst: Path) -> int:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return dst.stat().st_size
+
+
+def _save_latest(
+    raw_output: str, normalized_lines: list[str], *, replayed_mcap_path: Path
+) -> tuple[list[str], int]:
     write_text(LATEST_RAW_PATH, raw_output)
     write_text(LATEST_NORMALIZED_PATH, "\n".join(normalized_lines) + "\n")
     _, summary_lines = write_timing_summary_from_raw_log(
         LATEST_RAW_PATH,
         output_path=LATEST_TIMING_SUMMARY_PATH,
     )
-    return summary_lines
+    mcap_size_bytes = _copy_mcap(replayed_mcap_path, LATEST_MCAP_PATH)
+    return summary_lines, mcap_size_bytes
 
 
-def _update_baseline(raw_output: str, normalized_lines: list[str]) -> None:
+def _update_baseline(
+    raw_output: str, normalized_lines: list[str], *, replayed_mcap_path: Path
+) -> None:
     write_text(BASELINE_RAW_PATH, raw_output)
     write_text(BASELINE_NORMALIZED_PATH, "\n".join(normalized_lines) + "\n")
     _, timing_summary_lines = write_timing_summary_from_raw_log(
         BASELINE_RAW_PATH,
         output_path=BASELINE_TIMING_SUMMARY_PATH,
     )
+    baseline_mcap_size_bytes = _copy_mcap(replayed_mcap_path, BASELINE_MCAP_PATH)
     print(
         f"[write] {BASELINE_RAW_PATH.relative_to(REPO_ROOT)} "
         f"({len(raw_output.splitlines())} lines)"
@@ -298,6 +346,10 @@ def _update_baseline(raw_output: str, normalized_lines: list[str]) -> None:
     print(
         f"[write] {BASELINE_TIMING_SUMMARY_PATH.relative_to(REPO_ROOT)} "
         f"({len(timing_summary_lines)} lines)"
+    )
+    print(
+        f"[write] {BASELINE_MCAP_PATH.relative_to(REPO_ROOT)} "
+        f"({baseline_mcap_size_bytes} bytes)"
     )
 
 
@@ -324,6 +376,8 @@ def _compare(normalized_lines: list[str], *, max_diff_lines: int) -> int:
         )
     print(f"[hint] baseline raw: {BASELINE_RAW_PATH}")
     print(f"[hint] latest raw: {LATEST_RAW_PATH}")
+    print(f"[hint] baseline mcap: {BASELINE_MCAP_PATH}")
+    print(f"[hint] latest mcap: {LATEST_MCAP_PATH}")
     return 1
 
 
@@ -341,15 +395,21 @@ def main() -> int:
 
     print(f"[run] replay_repo={replay_repo}")
     print(f"[run] replay_python={replay_python}")
-    raw_output, normalized_lines, replay_output_root = _run_standard_replay(
-        replay_repo=replay_repo,
-        replay_python=replay_python,
-        max_cpis=args.max_cpis,
-        tracker_override=tracker_override,
-        keep_output_artifacts=bool(args.keep_output_artifacts),
-        output_root=args.output_root,
+    raw_output, normalized_lines, replay_output_root, replayed_mcap_path = (
+        _run_standard_replay(
+            replay_repo=replay_repo,
+            replay_python=replay_python,
+            max_cpis=args.max_cpis,
+            tracker_override=tracker_override,
+            keep_output_artifacts=bool(args.keep_output_artifacts),
+            output_root=args.output_root,
+        )
     )
-    latest_timing_summary_lines = _save_latest(raw_output, normalized_lines)
+    latest_timing_summary_lines, latest_mcap_size_bytes = _save_latest(
+        raw_output,
+        normalized_lines,
+        replayed_mcap_path=replayed_mcap_path,
+    )
     print(
         f"[write] {LATEST_RAW_PATH.relative_to(REPO_ROOT)} "
         f"({len(raw_output.splitlines())} lines)"
@@ -362,9 +422,17 @@ def main() -> int:
         f"[write] {LATEST_TIMING_SUMMARY_PATH.relative_to(REPO_ROOT)} "
         f"({len(latest_timing_summary_lines)} lines)"
     )
+    print(
+        f"[write] {LATEST_MCAP_PATH.relative_to(REPO_ROOT)} "
+        f"({latest_mcap_size_bytes} bytes)"
+    )
 
     if args.mode == "update":
-        _update_baseline(raw_output, normalized_lines)
+        _update_baseline(
+            raw_output,
+            normalized_lines,
+            replayed_mcap_path=replayed_mcap_path,
+        )
         print("[done] replay baseline updated")
         status = 0
     else:
