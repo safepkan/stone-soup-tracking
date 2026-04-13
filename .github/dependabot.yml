@@ -8,8 +8,10 @@ updates:
       time: "06:00"
       timezone: "Europe/Stockholm"
     open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -19,5 +21,7 @@ updates:
       time: "06:00"
       timezone: "Europe/Stockholm"
     open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
