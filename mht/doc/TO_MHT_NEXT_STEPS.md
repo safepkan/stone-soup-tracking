@@ -1,166 +1,36 @@
 # TO-MHT Next Steps
 
-## Update (2026-04-12): replay override support for hypothesis backend wired
-
-- legacy positional construction (`TOMHTTracker(hypothesiser,updater,...)`)
-  now honors non-default `tomht_params.hypothesis_backend` overrides,
-- added replay override templates for hypothesis backend A/B runs:
-  - `replay/overrides/tracker_hypothesis_backend_pda.json`
-  - `replay/overrides/tracker_hypothesis_backend_robust_pda.json`.
-
-## Update (2026-04-12): smoke/replay golden workflows refined
-
-- debug cluster-rebuild header now logs `scan=<index>` + `t=<timestamp>` for
-  easier cross-reference in replay/smoke logs,
-- smoke regression baselines now mirror replay style:
-  - versioned `raw` + `normalized` logs per scenario,
-  - compare pass/fail still uses normalized output only,
-  - latest run artifacts always written for inspection under
-    `replay/outputs/smoke_regression_latest/`,
-- added optional raw timing-summary comparison flags/targets for performance
-  work:
-  - `make smoke_compare_timing`
-  - `make replay_compare_timing`.
-
-## Update (2026-04-12): standard replay golden regression harness added
-
-Added an optional heavyweight replay-regression path for the canonical MCAP
-replay command:
-
-- added `replay/standard_replay_regression.py` with `compare` and `update`
-  modes,
-- captures both raw and normalized replay output for each run,
-- stores latest inspectable run logs under
-  `replay/outputs/standard_replay_regression_latest/`,
-- versioned replay baselines now live under `replay/replay_baselines/`:
-  - `standard_replay_default.raw.log`
-  - `standard_replay_default.normalized.log`,
-- comparison uses normalized output; raw output is retained for direct
-  inspection and timing analysis,
-- added optional Make shortcuts:
-  - `make replay_compare`
-  - `make replay_update_baseline`,
-- baseline updates are explicitly intentional (not routine validation).
-
-## Update (2026-04-12): smoke-output golden regression harness added
-
-Formalized the "no-output-change expected" validation path for smoke runs:
-
-- added `replay/smoke_output_regression.py` to run both smoke scenarios,
-  normalize volatile output, and compare against versioned golden logs,
-- versioned baseline location: `replay/smoke_baselines/`,
-- normalization currently removes timing/memory line families while keeping
-  timestamps,
-- smoke harness now pins scenario start time via `--scenario-start-time`
-  to keep `SCAN t=...` timestamps stable/diffable,
-- `SCAN ...` logging now includes explicit `scan=<index>` for easier debugging
-  and diff references,
-- added Makefile shortcuts:
-  - `make smoke_compare`
-  - `make smoke_update_baseline`
-- documented usage in `README.md` and `replay/README.md`.
-
-## Update (2026-04-11): experimental exact branch-and-bound backend implemented
-
-Implemented a second experimental exact backend under the existing solver seam:
-
-- added `mht/tomht_cluster_solver_branch_and_bound.py` with deterministic
-  depth-first branch-and-bound solving,
-- kept `mht/tomht_cluster_solver_exhaustive.py` as the reference backend,
-- added exact 1-track score-sorted fast-path handling,
-- used deterministic search ordering:
-  - tracks ordered by fewer leaves first, then stronger conflict burden,
-  - per-track leaves ordered by descending score,
-- added a simple optimistic upper bound based on partial score plus best
-  remaining-track score sums (ignoring conflicts),
-- added branch-and-bound diagnostics (visited nodes, conflict-prune count,
-  bound-prune count, complete feasible solutions found),
-- set tracker default backend to
-  `TOMHTParams.cluster_solver_backend="branch_and_bound"` (alias `"bnb"`),
-- validated branch-and-bound against exhaustive on small exact problems in
-  `mht/tests/test_tomht_cluster_solver_branch_and_bound.py`,
-- documented tie-order caveat explicitly via set-based tie test:
-  tied solution ordering can differ while selected sets and scores still match.
-
-## Update (2026-04-11): added per-scan timing-phase breakdown
-
-Implemented a granular timing instrumentation pass for diagnosis of large-CPU
-scans:
-
-- added `ScanTimingBreakdown` into `ScanStats`,
-- timed major `update_tracker(...)` phases directly in tracker runtime code,
-- kept `SCAN_TIMING` total wall-time output and added `SCAN_TIMING_PHASES`
-  lines for per-scan phase attribution,
-- added `SUMMARY timing_phases ...` med/max aggregates for run-level review.
-
-## Update (2026-04-11): experimental exact OR-Tools backend implemented
-
-Implemented this runtime/scalability follow-on step:
-
-- added `mht/tomht_cluster_solver_ortools.py`, an experimental exact CP-SAT backend
-  under the existing `ClusterSolver` contract,
-- kept `mht/tomht_cluster_solver_exhaustive.py` as the reference backend,
-- kept OR-Tools as opt-in experimental backend
-  (`TOMHTParams.cluster_solver_backend="ortools"`),
-- validated OR-Tools against exhaustive on small tractable exact problems in
-  `mht/tests/test_tomht_cluster_solver_ortools.py`,
-- routed OR-Tools returned candidates through exact float re-scoring plus the shared
-  deterministic `TopKSolutionHeap` helper for backend-consistent ranking behavior,
-- added `extra_k_best_iterations` (default `0`) as an optional OR-Tools constructor
-  knob to run a few solves past K and reduce K-boundary rounding/tie risk,
-- documented tie-order caveat explicitly: tied solutions can have different order
-  than exhaustive even when selected sets/scores match.
-
-## Update (2026-04-10): subphase implemented
-
-Implemented this subphase as a conservative refactor:
-
-- added a dedicated solver module (`mht/tomht_cluster_solver.py`) with an explicit exact cluster problem/result contract,
-- moved the current exhaustive K-best cluster solve behind that contract in
-  `mht/tomht_cluster_solver_exhaustive.py`,
-- kept tracker-side problem preparation and result mapping in `tomht_tracker.py`,
-- kept overload splitting as an explicit pre-solve tracker policy,
-- kept historical-conflict relaxation as an explicit around-solver retry policy.
-
 ## Next architectural subphase
 
-**Runtime / cluster-solver scalability, step 2: evaluate and harden alternative exact backends behind the existing solver seam.**
+**Local expansion / hypothesis-generation ownership and performance**
 
-The remainder of this document currently includes the historical step-1 planning
-notes; keep them as background context, but treat the concrete next work as
-step-2 backend evaluation and scalability hardening.
+The previous runtime/scalability phase is now complete enough that the exact cluster
+solver is no longer the dominant replay bottleneck. With `branch_and_bound` as the
+default exact backend, the main cost driver on the current replay is now local
+expansion / hypothesis generation.
 
-This phase is intentionally **about backend experimentation and validation under the existing interface**, not a broader tracker/scoring redesign.
-
-The tracker is now at a point where:
-
-- the track-oriented persistent-state transition is complete enough to treat as the baseline,
-- replay on the main recorded dataset reaches end-of-file,
-- the main remaining technical weakness is runtime concentration in large merged clusters,
-- and the current code already contains a conservative internal cluster-solver seam that can be made more explicit.
-
-The immediate next step is therefore to define, in one place and in explicit terms, **what problem the cluster solver is actually solving today** and what the tracker expects back from it.
+This phase is therefore about taking ownership of the local association path,
+removing the remaining internal dependence on the hypothesiser abstraction, and
+streamlining expansion toward the exact shape the tracker actually needs.
 
 ---
 
 ## Why this subphase now
 
-This is the right first step for the runtime/scalability branch because it delivers several things at once:
+Recent timing work shows that `expand_ms` is now the dominant scan-time component on
+the main replay path.
 
-- it makes the current solver assumptions explicit,
-- it gives the current exhaustive implementation a clean home behind a formal interface,
-- it reduces the amount of solver-related logic implicitly spread through tracker internals,
-- and it prepares the codebase for later alternative backends without committing prematurely to any specific reformulation or algorithm.
+A direct comparison of the current internal hypothesiser backends also showed that
+the built-in Stone Soup `PDAHypothesiser` is substantially faster than the current
+`RobustPDAHypothesiser` path on the same replay configuration. That strongly suggests
+that the current internal hypothesiser situation is both:
 
-This also fits the current state of the code well. The tracker already has:
+- a performance problem, and
+- an abstraction mismatch now that the public tracker boundary has already shifted to
+  `predictor + updater`.
 
-- `_ClusterSolveInput`
-- `_ClusterSolveOutcome`
-- `_solve_cluster(...)`
-- extracted historical-relaxation retry under that boundary
-- and overload splitting wrapped around cluster solving
-
-but the problem definition is still not yet expressed as a stable solver-facing contract.
+The next step is therefore not another solver phase. It is to simplify and own the
+local branching path.
 
 ---
 
@@ -168,222 +38,164 @@ but the problem definition is still not yet expressed as a stable solver-facing 
 
 At the end of this subphase, the tracker should have:
 
-1. a **separate solver module** with a clean solver-facing interface,
-2. a solver-facing problem definition that matches the tracker’s **actual current semantics**,
-3. the current exhaustive K-best solver migrated to that interface with no intended behavior change,
-4. tracker-side preparation and result-mapping logic that is thinner and easier to reason about,
-5. and a clearer distinction between:
-   - the **exact cluster K-best problem**
-   - and the current **approximation/safety-net policies** around it.
+1. a tracker-owned local association / local branching path built around
+   `predictor + updater`,
+2. no remaining need for `RobustPDAHypothesiser`,
+3. a clear baseline derived from Stone Soup PDA behavior rather than from the old
+   custom robust wrapper,
+4. a cleaner internal runtime story for local expansion,
+5. and at least one obvious cheap performance improvement applied to that path,
+   such as rectangular pre-gating before more expensive gating / likelihood work.
 
-This phase is successful even if runtime is not yet materially improved, provided the solver boundary becomes clear, explicit, and ready for follow-on work.
+This phase is successful even if the scoring model is not yet fundamentally redesigned,
+provided the tracker gains a clearer and faster local expansion path.
 
 ---
 
 ## Core design intent
 
-### 1. Express the problem in its natural tracker-facing form
+### 1. Keep `predictor + updater` as the real public boundary
 
-The solver interface should describe the cluster problem in the form the tracker naturally has available:
+The public constructor/API has already shifted away from “user provides a
+hypothesiser” toward “user provides predictor and updater”. The internal structure
+should now move in the same direction.
 
-- a cluster consists of a set of tracks,
-- each track contributes a set of active leaf options,
-- each leaf has a local score,
-- each leaf has a set of full-history conflict keys,
-- each leaf has a set of current-scan used detections,
-- and the solver must return the K best feasible selections of one leaf per track.
+The tracker should stop being internally organized around a generic hypothesiser
+interface and instead implement the specific prediction / gating / scoring /
+miss-handling flow it actually needs.
 
-The contract should be solver-agnostic. It should **not** assume that the backend is exhaustive enumeration, Murty-style assignment, Lagrangian relaxation, or anything else.
+### 2. Use built-in Stone Soup PDA as the baseline reference, not `RobustPDAHypothesiser`
 
-### 2. Match current tracker semantics, not an idealized future problem
+`RobustPDAHypothesiser` was introduced early as a practical workaround for numerical
+issues, especially around the UKF bearing/range synthetic case. It should no longer be
+treated as the conceptual baseline.
 
-The first interface must cover the problem the tracker actually solves **today**, not a simplified problem invented for a future solver.
+The intended starting point for this phase is:
 
-In particular, the current rebuild semantics include:
+- drop `RobustPDAHypothesiser`,
+- copy the relevant behavior/structure from Stone Soup `PDAHypothesiser`,
+- then refactor that copied logic into a tracker-owned local association path.
 
-- one selected leaf per track,
-- full-history exclusivity via overlapping detection keys,
-- leaf-local accumulated scores,
-- and an explicit per-combination cluster-local unused-detection score term for current-scan detections.
+### 3. Keep scope narrower than a full scoring redesign
 
-That means the interface should represent both:
+This phase is about ownership and performance of the local expansion path first.
 
-- the exact conflict structure used for feasibility,
-- and enough information for the current global score to be reconstructed faithfully.
+It may expose scoring issues and may require small scoring-related adjustments, but it
+is not yet intended to be the full “redo the scoring model” phase.
 
-### 3. Keep approximation paths explicit and separate
+### 4. Prefer cheap obvious filtering before expensive work
 
-The current code also includes:
+One of the clearest expected early improvements is adding a cheap pre-gating stage
+before full Mahalanobis gating / likelihood evaluation.
 
-- overload cluster splitting for oversized exact clusters,
-- and narrow historical-conflict relaxation when exact feasibility fails after approximation-induced overlap.
+Rectangular gating is the most obvious candidate:
+- use it to discard many detections cheaply,
+- then run more expensive proper gating / measurement-likelihood work only on the
+  survivors.
 
-These should be made explicit as **policies around the solver**, not silently folded into the core exact-solver contract.
-
-The exact solver contract should represent the exact cluster K-best problem. Approximate decomposition and relaxed-feasibility retry should remain explicit wrappers or policies around that contract.
-
-This is one of the main reasons this phase is valuable: it forces the code to say clearly what is “the problem” and what is “a current tractability workaround.”
-
----
-
-## Intended new structure
-
-### Separate module
-
-Create a dedicated solver-facing module, for example:
-
-- `mht/tomht_cluster_solver.py`
-
-or equivalent.
-
-The exact file name is less important than the separation of responsibility.
-
-This module should own:
-
-- solver-facing dataclasses / protocol / abstract base,
-- the current exhaustive backend implementation,
-- and any solver-local helpers needed by that backend.
-
-This module should **not** own:
-
-- cluster construction from trees,
-- N-scan pruning,
-- birth handling,
-- output reconstruction,
-- or broader tracker lifecycle logic.
-
-### Tracker responsibility after the split
-
-The tracker should remain responsible for:
-
-- building clusters from active tree frontiers,
-- preparing solver input from current tree/leaf state,
-- applying overload splitting before solve when enabled,
-- optionally applying historical-relaxation retry around solve when enabled,
-- mapping returned solver results back to current leaf nodes / rebuilt globals,
-- post-solve supported-leaf pruning,
-- and MAP/global snapshot construction.
-
-In other words:
-
-- tracker side prepares the problem,
-- solver module solves the exact problem,
-- tracker side interprets the result and applies current policies around it.
+This is the kind of conservative optimization that should fit well in this phase.
 
 ---
 
-## Problem contract to make explicit
+## Intended implementation direction
 
-The new solver interface should make explicit, at minimum, the following assumptions:
+### 1. Remove `RobustPDAHypothesiser` from the main path
 
-### Feasibility
+The tracker should no longer depend on the custom robust wrapper as one of the normal
+internal backends.
 
-A feasible cluster solution:
+It is acceptable to keep old compatibility code temporarily if needed for transition,
+but the direction should be clearly toward removal rather than preservation.
 
-- selects exactly one leaf per track,
-- and no two selected leaves may overlap in full-history detection keys.
+### 2. Build a tracker-owned local association helper/module
 
-This must remain explicit because current clustering and rebuild feasibility are both based on full-history overlap, not current-scan-only overlap.
+Create a tracker-owned local association path that explicitly performs:
 
-### Objective
+- prediction,
+- cheap pre-gating,
+- proper gating,
+- measurement likelihood evaluation,
+- missed-detection handling,
+- local score contribution construction,
+- and handoff to updater for selected measurement hypotheses.
 
-The current exact cluster objective is not just the sum of per-leaf scores.
+This should be organized around what the tracker actually consumes, not around
+reproducing the full generic hypothesiser abstraction.
 
-It also includes the explicit cluster-local unused-detection term derived from current-scan detection usage. The contract should therefore either:
+### 3. Keep behavior conservative at first
 
-- include enough information for the solver to compute this exactly via an
-  explicit structured objective term.
+The first pass should aim for:
 
-The main requirement is that the current exhaustive backend can be migrated behind the new interface **without changing scoring semantics**.
+- similar candidate semantics,
+- similar miss handling,
+- similar score interpretation,
+- and similar replay/scenario outputs as the current baseline,
 
-### K-best semantics
+while improving structure and performance.
 
-The solver must:
+### 4. Use the new regression/timing harness continuously
 
-- return up to `k` feasible solutions,
-- in descending score order,
-- and preserve deterministic tie behavior as far as the current tracker already intends to do so.
+This phase should lean on the newly available:
+- smoke-test regression checks,
+- replay summaries,
+- and full timing logs.
 
-The existing exhaustive/top-K path already has explicit tie handling in parts of the code, so the new contract should not ignore this.
-
-### Result shape
-
-The result should remain decoupled from tree internals:
-
-- return selected leaf IDs or equivalent stable solver-facing identifiers,
-- not direct `TrackHypothesisNode` objects.
-
-The tracker remains responsible for mapping those IDs back to nodes.
+The goal is to make changes incrementally and observe whether `expand_ms` improves
+without silently damaging tracker behavior.
 
 ---
 
 ## What should happen in this subphase
 
-### 1. Define the solver-facing datamodel
+### 1. Replace the internal hypothesiser-shaped path
 
-Create clear solver-facing structures that represent:
+Refactor local expansion so that the tracker no longer fundamentally depends on:
 
-- one track’s candidate leaf options,
-- one leaf’s score and conflict information,
-- the full cluster solve problem,
-- and one solved global hypothesis.
+- `hypothesis_generator.hypothesise(...)`,
+- `params.hypothesis_backend`,
+- or `RobustPDAHypothesiser`
 
-Naming does not need to be final, but the distinction should be clear.
+as the core internal structure.
 
-Important modeling point:
+A transitional compatibility layer can remain briefly if needed, but the intended
+runtime path should become tracker-owned.
 
-- the interface should represent both **full conflict keys** and **current-scan used detections** if both are needed to match the current objective exactly.
+### 2. Establish a clean copied baseline from Stone Soup PDA
 
-### 2. Define the solver protocol / abstract interface
+Before deeper optimizations, create a tracker-owned baseline derived from the built-in
+Stone Soup `PDAHypothesiser` logic.
 
-Define a solver interface that:
+This gives:
+- a clearer starting point,
+- simpler semantics than the old custom robust wrapper,
+- and a faster baseline than the current default robust path.
 
-- takes the natural cluster problem representation,
-- returns up to K solved global hypotheses,
-- is backend-agnostic,
-- and does not assume a specific internal reformulation.
+### 3. Add rectangular pre-gating
 
-This interface should be narrow enough to be stable through the next few backend experiments.
+Implement a cheap rectangular gate ahead of proper Mahalanobis gating / likelihood
+work.
 
-### 3. Move the current exhaustive solver behind that interface
+This should be the first obvious optimization to try once the tracker owns the local
+association path directly.
 
-Reimplement the current exhaustive enumeration backend as one solver implementation using the new contract.
+### 4. Reassess where time goes inside local expansion
 
-This migration should aim for:
+Once the tracker owns the path, profile local expansion more specifically:
 
-- no intended behavior change,
-- no intended semantics change,
-- and unchanged current replay behavior aside from any purely internal refactoring effects.
+- prediction cost
+- measurement-prediction cost
+- rectangular pre-gating
+- Mahalanobis gating
+- likelihood evaluation
+- updater/update cost
+- candidate sorting / retention
 
-### 4. Adapt the tracker to use the new solver contract
+This should guide later optimizations inside the same broad branch.
 
-Make `_rebuild_cluster_globals(...)` and related helpers call the new solver via the new interface.
+### 5. Keep docs/comments aligned
 
-The tracker should explicitly prepare:
-
-- leaf options,
-- conflict information,
-- current-scan detection usage information,
-- and any exact unused-detection scoring context needed by the current objective.
-
-### 5. Make overload splitting / historical relaxation explicit around the interface
-
-Refactor the current policy structure so that it is clear that:
-
-- overload splitting is a current pre-solve approximation policy,
-- the exact solver contract itself still represents the unsplit exact subproblem,
-- historical-relaxation retry is a current around-solver fallback policy,
-- and these are not silently baked into the core exact problem definition.
-
-This is a key conceptual outcome of the subphase.
-
-### 6. Update docs
-
-Update the relevant docs so they describe:
-
-- the new solver-facing interface,
-- the fact that the current exhaustive solver now lives behind it,
-- and the distinction between exact solve semantics and approximation wrappers.
+As the hypothesiser abstraction is removed internally, update comments/docs so they no
+longer describe PDA-style hypothesiser ownership as the intended runtime story.
 
 ---
 
@@ -391,14 +203,13 @@ Update the relevant docs so they describe:
 
 This phase should **not** yet:
 
-- replace exhaustive enumeration with a new backend,
-- commit to a Murty/Hungarian-style internal reformulation,
-- redesign scoring semantics,
-- redesign birth semantics,
-- change N-scan pruning policy,
-- or broaden into a general cluster-code cleanup pass unrelated to the solver boundary.
+- redesign the exact cluster solver again,
+- remove the solver seam,
+- do a broad birth/existence redesign,
+- do a full scoring-theory rewrite,
+- or broaden into a general cleanup-only pass.
 
-The point here is to make the next runtime work possible and explicit, not to do it all at once.
+The point here is to simplify and speed up the local expansion path first.
 
 ---
 
@@ -406,40 +217,29 @@ The point here is to make the next runtime work possible and explicit, not to do
 
 This subphase should be considered complete when:
 
-- there is a dedicated solver-facing module,
-- there is a clear solver protocol / contract,
-- the current exhaustive backend implements that contract,
-- the tracker uses the new interface for cluster solving,
-- overload splitting and historical-relaxation retry are clearly represented as policies around the exact solver problem,
-- replay behavior remains materially consistent with the current baseline,
-- and the docs clearly describe the new seam.
+- the main internal local expansion path is tracker-owned and no longer depends on
+  `RobustPDAHypothesiser`,
+- Stone Soup PDA has been used as the baseline reference for the new owned path,
+- at least one cheap prefiltering optimization such as rectangular gating is in place,
+- replay/scenario behavior remains materially acceptable,
+- and timing data shows that the expansion path is better understood and at least
+  somewhat improved.
 
-A strong secondary success criterion is that someone reading the code can now answer, in one place:
+A strong secondary success criterion is that someone reading the tracker can now answer,
+in one place:
 
-> what exact optimization problem does the tracker currently solve per cluster, and what current approximation paths sit around that problem?
-
----
-
-## Follow-on work expected after this subphase
-
-Once this seam is in place, the next likely steps become much clearer. Plausible follow-on directions include:
-
-- a new exact or approximate K-best backend,
-- profiling-guided reduction of cluster-growth pressure before solve,
-- principled treatment of overload splitting and historical relaxation,
-- and improved organization of the cluster build/rebuild code as part of that deeper work.
-
-The current rebuild step remains exhaustive and is still the main runtime bottleneck on heavy merged clusters, which is why this seam is worth making explicit first.
+> what exact steps are performed during local expansion, and where is the time going?
 
 ---
 
 ## Recommended implementation style
 
-This subphase should follow the usual conservative approach:
+This phase should follow the usual conservative style:
 
-1. define the contract,
-2. adapt the current exhaustive solver behind it,
-3. validate behavior,
-4. then use that seam for later solver experimentation.
+1. copy / establish the built-in PDA baseline internally,
+2. remove the custom robust wrapper from the main path,
+3. add cheap pre-gating and other obvious local optimizations,
+4. validate against smoke tests and replay timing,
+5. then decide whether a deeper scoring/local-association redesign should follow.
 
 That is the intended scope of this phase.
