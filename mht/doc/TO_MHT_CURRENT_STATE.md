@@ -1,94 +1,8 @@
 # TO-MHT Current State
 
-## Update (2026-04-16): Cholesky local-association math pass
-
-- `TrackerOwnedNLLDistanceHypothesiser` now applies a conservative rectangular
-  pre-gate before full Mahalanobis/NLL evaluation:
-  - per-axis check uses `innovation_k^2 <= gamma * S_kk`,
-    with `gamma = mahalanobis_gate_threshold^2` and `S_kk` from the raw
-    innovation covariance diagonal,
-  - full Mahalanobis thresholding remains the authoritative gate.
-- Covariance-side preparation in the local NLL/gating path now uses a
-  one-entry exact-equality cache per `hypothesise(...)` call:
-  - reuse only when `np.array_equal(...)` is true for the covariance input,
-  - prepared payload now includes SPD covariance, diagonal, Cholesky factor
-    `L`, and `logdet`,
-  - `logdet` is computed from Cholesky (`2 * sum(log(diag(L)))`),
-  - full Mahalanobis/NLL now uses triangular solve on `L` (`L y = x`,
-    `d2 = y^T y`) rather than a direct solve on full covariance,
-  - no approximate-equality reuse.
-- Scan-time prediction reuse is now explicit in local expansion:
-  - when `detection_timestamp == timestamp`, detection-hypothesis prediction
-    reuses the already computed scan-time prediction instead of re-calling the
-    predictor.
-- One-entry measurement-prediction reuse is now applied conservatively:
-  - if both `prediction` object and `measurement_model` object are the same as
-    the previous detection (`is` identity check), local expansion reuses the
-    previous `measurement_prediction`.
-- Regression status:
-  - `make smoke_compare` matched baseline exactly (normalized logs),
-  - `make replay_compare` matched baseline exactly (normalized logs).
-- Timing status from comparison helpers:
-  - `expand_ms` decreased in both smoke scenarios and in standard replay,
-  - this pass implements the local-association math-kernel change via Cholesky.
-
-## Update (2026-04-16): current output-quality note before baseline refresh
-
-- Smoke/scenario behavior remains somewhat noisy, with false track starts still
-  higher than desired.
-- Recorded-data replay remains broadly reasonable after the latest scoring/local
-  association changes, but shows somewhat more target swapping / track jumping
-  in some segments.
-- These are now treated as known baseline-quality concerns to inspect more
-  closely in a dedicated follow-up pass; they are not considered blockers for
-  proceeding with the next expansion-path optimization step.
-
-## Update (2026-04-16): explicit NLL-to-LLR local scoring
-
-- Local track-hypothesis scoring is now explicit in `NLLScoringModel` via:
-  - detection: `log(P_D) - log(lambda) - NLL`
-  - miss: `log(1 - P_D)`
-- Unit contract is now explicit in code/docs: `lambda` must be expressed in the
-  same measurement-space coordinates/units as the hypothesiser NLL
-  (`-log p(z|x)`), so coordinate scaling terms cancel in the hit score.
-- Local expansion still consumes Stone Soup distance hypotheses, but tracker
-  local score is no longer computed implicitly as `-distance`.
-- The tracker-owned default distance hypothesiser now emits:
-  - miss with sentinel distance (ignored by scoring),
-  - detection hypotheses with `distance = NLL` and Mahalanobis gating.
-- `TOMHTParams.scoring_mode` default is now `"nll"`.
-
-## Update (2026-04-15): main path switched to distance-hypothesiser semantics
-
-- `TOMHTTracker` local expansion now consumes Stone Soup
-  `MultipleHypothesis[SingleDistanceHypothesis]` output directly.
-- The tracker-owned default local association object is now
-  `TrackerOwnedNLLDistanceHypothesiser`, with explicit
-  `mahalanobis_gate_threshold` (non-squared Mahalanobis) main-path gating
-  semantics.
-- Constructor wiring now requires exactly one of `predictor` or `hypothesiser`
-  (with `updater` always required); custom hypothesiser injection remains
-  supported via the distance contract.
-- `ScoringModel` now owns explicit local NLL-to-LLR score construction plus
-  tracker-level additive extras (unused detections and births). PDA/beta
-  local-score normalization is no longer in the main local-expansion flow.
-- Legacy compatibility knobs from that transition period are now removed from
-  the main tracker path (`hypothesis_backend`, `prob_gate`, and beta-ratio
-  scoring aliasing).
-
-## Update (2026-04-13): replay regression now preserves replayed MCAP artifacts
-
-- `replay/standard_replay_regression.py` now copies the replay-produced MCAP
-  into both:
-  - `replay/outputs/standard_replay_regression_latest/latest.replayed.mcap`
-  - `replay/replay_baselines/standard_replay_default.replayed.mcap`
-- This keeps replay inspectability aligned with raw/normalized/timing logs while
-  still relying on existing `replay/.gitignore` behavior so baseline MCAP files
-  remain local (not versioned).
-
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface cleanup, determinism, output-history restoration, solver-seam extraction, exact-backend experiments, timing-instrumentation work, and smoke-output golden-regression workflow setup completed through **2026-04-16**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, determinism fixes, output-history restoration, solver-seam extraction, exact-backend experiments, local-association ownership refactor, explicit NLL scoring cleanup, and local-association optimization work completed through **2026-04-16**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -104,16 +18,17 @@ The tracker is now a **real track-oriented TO-MHT implementation** in the practi
 - MAP-only N-scan pruning operates directly on explicit trees,
 - and public output tracks are reconstructed from **committed prefix history plus current unresolved lineage**.
 
-The code now treats track trees as the primary persistent state, with rebuilt globals retained only as last-scan inspection/debug artifacts.
+The code treats track trees as the primary persistent state, with rebuilt globals retained only as last-scan inspection/debug artifacts.
 
 The current implementation is therefore:
 
 - structurally aligned with the intended track-oriented TO-MHT direction,
 - usable for replay-based experimentation and continued integration work,
 - reasonably robust on the main recorded replay through end-of-file,
-- and now on a materially better exact-solver footing than the earlier exhaustive baseline.
+- on a materially better exact-solver footing than the earlier exhaustive baseline,
+- and now on a much clearer local-association/scoring baseline than the earlier PDA/beta-oriented transitional path.
 
-The main remaining practical weakness is no longer the exact cluster solver itself. With the new default branch-and-bound backend, the main replay bottleneck has shifted toward **local expansion / hypothesis generation**, while some explicit approximation/safety-net mechanisms still remain in place.
+The main remaining practical weakness is no longer the exact cluster solver itself. With the default branch-and-bound backend in place and the recent local-association math cleanup completed, the main replay bottleneck remains **local expansion / hypothesis generation**, with the next likely leverage point being reduction of **expansion volume** rather than further inner-kernel cleanup alone.
 
 ---
 
@@ -143,35 +58,43 @@ The external interface remains Stone Soup-oriented:
   - `predictor` (+ tracker-owned default distance hypothesiser), or
   - `hypothesiser` (custom distance hypothesiser injection),
 - `updater` remains required in both constructor modes,
-- local expansion consumes distance options directly instead of PDA-normalized
-  hypothesis probabilities,
+- local expansion consumes distance hypotheses directly rather than PDA-normalized probabilities,
 - output `Track` metadata is an explicit TOMHT-owned projection from the current active leaf node rather than arbitrary propagated metadata.
 
 ### Constructor and local-association boundary
 
-The tracker now has a narrow distance-hypothesiser seam:
+The tracker now has a narrow **distance-hypothesiser seam**:
 
-- input: `(track,detections,timestamp)`
+- input: `(track, detections, timestamp)`
 - output: Stone Soup `MultipleHypothesis` containing exactly one missed
   `SingleDistanceHypothesis` plus zero or more gated detection
   `SingleDistanceHypothesis` entries
-- each detection hypothesis carries `distance = NLL`; missed-detection distance
-  is a sentinel and is ignored by local score construction.
+- each detection hypothesis carries `distance = NLL = -log p(z|x)` in measurement
+  space, **without** detection-probability or clutter-density factors,
+- missed-detection distance is a sentinel and is ignored by local score
+  construction.
 
-Default local association is tracker-owned (`TrackerOwnedNLLDistanceHypothesiser`)
-and uses explicit Mahalanobis-threshold gating semantics
-(`mahalanobis_gate_threshold`).
+Default local association is tracker-owned
+`TrackerOwnedNLLDistanceHypothesiser` and uses explicit non-squared
+Mahalanobis-threshold gating semantics via `mahalanobis_gate_threshold`.
 
-`ScoringModel` now owns local track-hypothesis scoring plus tracker-level extras:
+This split is now explicit:
+
+- **hypothesiser owns local distances and gating**
+- **scoring model owns local NLL-to-LLR conversion plus tracker-level extras**
+
+`ScoringModel` currently owns:
 
 - `score_track_hypotheses(...)`
 - `score_unused_detections(...)`
 - `score_birth(...)`
-- `used_det_keys`/`used_det_key` are local detection indices into
-  `ScanContext.detections` for the scoring call.
-- current solver pre-baking assumes `score_unused_detections(...)` is affine in
-  the number of used detections; broader/non-linear alternatives are deferred to
-  a later scoring redesign pass.
+
+`used_det_keys` / `used_det_key` are local detection indices into
+`ScanContext.detections` for the scoring call.
+
+The current solver pre-baking path assumes
+`score_unused_detections(...)` is affine in the number of used detections.
+Broader/non-linear alternatives are deferred to a later scoring redesign.
 
 ---
 
@@ -278,7 +201,7 @@ This backend:
 - uses a simple optimistic suffix-score upper bound for pruning,
 - retains exact K-best solutions through the shared deterministic `TopKSolutionHeap`.
 
-During optimization work in this phase, branch state was tightened from Python `set`-based conflict tracking to compact integer conflict masks for shared keys, and selected-leaf branch state was reduced from per-branch dict churn to depth-indexed arrays before materializing final solutions.
+During this phase, branch state was tightened from Python `set`-based conflict tracking to compact integer conflict masks for shared keys, and selected-leaf branch state was reduced from per-branch dict churn to depth-indexed arrays before materializing final solutions.
 
 Branch-and-bound diagnostics now include counters such as:
 
@@ -290,12 +213,10 @@ Branch-and-bound diagnostics now include counters such as:
 `ClusterSolverDiagnostics` is intentionally a union-style schema:
 
 - required across backends: `combinations_evaluated`, `feasible_combinations`,
-- common fields (constructor-required): backend/termination/result summary fields,
+- common fields: backend/termination/result summary fields,
 - backend-specific optional fields for solver-local instrumentation.
 
-In particular, `solves_attempted` is now treated as backend-specific and is
-primarily meaningful for repeated-solve backends (currently OR-Tools CP-SAT),
-rather than being forced to `1` by single-pass backends.
+In particular, `solves_attempted` is treated as backend-specific and is primarily meaningful for repeated-solve backends (currently OR-Tools CP-SAT), rather than being forced to `1` by single-pass backends.
 
 ### Exhaustive backend status
 
@@ -337,17 +258,30 @@ Current positioning:
 
 ### Local expansion
 
-Local expansion is now distance-hypothesis driven:
+Local expansion is now explicitly **distance-hypothesis driven**:
 
 - for each active leaf, reconstruct a compatibility `Track`,
 - call the configured distance hypothesiser,
-- require one missed-detection hypothesis plus zero or more gated detection
-  hypotheses,
-- derive local score via `ScoringModel.score_track_hypotheses(...)` using the
-  explicit NLL/LLR contract,
+- require one missed-detection hypothesis plus zero or more gated detection hypotheses,
+- derive local score via `ScoringModel.score_track_hypotheses(...)`,
 - create child nodes for kept hypotheses,
 - always retain a miss hypothesis,
 - then apply an optional per-tree local leaf cap.
+
+### Current local-association math kernel
+
+The tracker-owned default local hypothesiser currently includes several conservative optimizations:
+
+- rectangular pre-gating before full Mahalanobis/NLL work,
+- one-entry exact-equality covariance-preparation reuse per `hypothesise(...)` call,
+- scan-time prediction reuse when `detection_timestamp == timestamp`,
+- one-entry measurement-prediction reuse when both `prediction` and `measurement_model` match by object identity,
+- Cholesky-based Mahalanobis/NLL evaluation:
+  - prepared covariance payload includes SPD covariance, diagonal, Cholesky factor `L`, and `logdet`,
+  - `logdet = 2 * sum(log(diag(L)))`,
+  - full Mahalanobis distance uses triangular solve on `L`.
+
+Regression status for this math path remained exact on the normalized smoke/replay compare helpers during the phase, and timing helpers showed reduced `expand_ms` in both smoke scenarios and the standard replay baseline.
 
 ### Local leaf cap
 
@@ -434,20 +368,27 @@ These mechanisms are pragmatic, not final. They should be understood as explicit
 
 ## Scoring state
 
-Scoring now uses an explicit NLL-to-LLR additive model in
-`tomht_scoring.py` unless an explicit alternative scoring model is supplied.
+Scoring now uses an explicit NLL-to-LLR additive model in `tomht_scoring.py` unless an explicit alternative scoring model is supplied.
 
 Current default behavior:
 
-- local hypothesis scoring is computed in `NLLScoringModel` from hypothesiser
-  distance (`NLL`) plus explicit hit/miss constants,
-- applies a linear current-scan clutter correction that is pre-baked into
-  cluster leaf scores before exact solve,
-- applies a fixed birth penalty for births,
-- logs scoring diagnostics at tracker construction time.
+- local hit score: `log(P_D) - log(lambda) - NLL`
+- local miss score: `log(1 - P_D)`
+- current-scan clutter correction remains a simple linear term, pre-baked into cluster leaf scores before exact solve,
+- birth scoring remains a fixed penalty,
+- scoring diagnostics are logged at tracker construction time.
 
-This scoring split should still be understood as **pragmatic and serviceable**,
-not final.
+### Unit / scale contract
+
+The unit contract is now explicit:
+
+- hypothesiser detection distance must be `NLL = -log p(z|x)` in a particular measurement space,
+- `clutter_density` (`lambda`) must be expressed in the **same measurement-space units**,
+- with that contract, linear coordinate rescaling cancels between `-log(lambda)` and the Gaussian normalization term inside `NLL`.
+
+Miss-hypothesis distance from the hypothesiser is intentionally ignored by `NLLScoringModel`; the miss score is computed explicitly.
+
+This scoring split should still be understood as **pragmatic and serviceable**, not final.
 
 ---
 
@@ -487,11 +428,11 @@ Per-scan and summary instrumentation reports:
 - N-scan commitment counts
 - birth statistics
 - MAP track usage
-- explicit scan index in `SCAN ...` lines (`scan=<index>`)
+- explicit scan index in `SCAN ...` lines
 - scan wall time
 - memory / node counts
 
-In this phase, instrumentation was extended with **per-scan timing-phase breakdowns**:
+Instrumentation also reports **per-scan timing-phase breakdowns**:
 
 - prep/context
 - pre-expand validation
@@ -527,7 +468,7 @@ A key outcome of this phase is that the previous exact-solver bottleneck has bee
 
 ### Exact-solver outcome
 
-On the 400-CPI replay window used during this phase:
+On the 400-CPI replay window used during the solver phase:
 
 - earlier exhaustive baseline timing was approximately:
   - median ~33 ms
@@ -538,23 +479,36 @@ On the 400-CPI replay window used during this phase:
   - p95 ~407–423 ms
   - max ~929–965 ms
 
-This is a meaningful improvement and was sufficient to justify switching the default exact backend from exhaustive to branch-and-bound.
+This was sufficient to justify switching the default exact backend from exhaustive to branch-and-bound.
 
-### New dominant bottleneck
+### Local-association optimization outcome
 
-With branch-and-bound enabled, the slow scans are now dominated primarily by **local expansion / hypothesis generation**, not cluster solving.
+On the standard replay timing helpers used during the current phase, recent local-association passes reduced `expand_ms` materially, including both median and upper-tail timings. The Cholesky-based math pass in particular produced a visible additional reduction after the earlier reuse / rectangular-gating pass.
 
-Timing-phase instrumentation on the same replay window shows:
+### Current dominant bottleneck
 
-- `expand_ms` dominates the top slow scans,
-- median `cluster_build_and_solve_ms` is small relative to `expand_ms`,
-- early-vs-late replay growth is driven much more by expansion time than by exact cluster solve time.
+With branch-and-bound enabled and the recent hypothesiser/scoring cleanup in place, the slow scans are still dominated primarily by **local expansion / hypothesis generation**, not cluster solving.
 
 So the current runtime picture is:
 
-- exact cluster solving is no longer the main immediate blocker on this replay,
-- the next likely leverage point is local expansion / hypothesis generation,
-- while large merged clusters still matter, especially for tail behavior and approximation semantics.
+- exact cluster solving is no longer the main immediate blocker on the primary replay,
+- local-association inner-kernel cleanup has already yielded worthwhile wins,
+- the next likely leverage point is **reducing how many leaves require full expansion**,
+- while large merged clusters and approximation semantics still matter for tail behavior.
+
+---
+
+## Current output-quality note
+
+The current baseline is operationally usable, but output quality is not yet where it should ultimately be.
+
+Known current notes:
+
+- smoke/scenario behavior remains somewhat noisy, with false track starts still higher than desired,
+- recorded-data replay remains broadly reasonable after the latest local association and scoring changes,
+- but some segments appear to show somewhat more target swapping / track jumping than before.
+
+These are treated as **known baseline-quality concerns**, not as immediate blockers for the current runtime-focused next step. They likely deserve a dedicated follow-up quality pass rather than being mixed into the next expansion-volume phase.
 
 ---
 
@@ -571,7 +525,7 @@ Internal births should currently be understood as:
 
 The current residual policy uses detections unused by the **union of all active leaves** after local expansion. This is conservative, but it preserves a strong no-conflict invariant for internal births and for residual-based external starts.
 
-Birth capping is now deterministic and quality-ranked rather than arbitrary.
+Birth capping is deterministic and quality-ranked rather than arbitrary.
 
 ### What looks weak or provisional
 
@@ -623,16 +577,16 @@ The following now look solid enough to treat as the current base architecture:
 - committed-prefix output reconstruction across pruning,
 - whole-track post-N-scan miss lifecycle,
 - predictor/updater public integration boundary,
+- exact-one-of `predictor` or `hypothesiser` constructor semantics,
+- explicit distance-hypothesiser seam for local association,
+- explicit NLL-to-LLR scoring baseline,
 - deterministic birth capping,
 - explicit solver seam with solver-facing exact cluster problem contract,
 - branch-and-bound as the default exact backend,
 - exhaustive retained as exact reference/fallback,
 - OR-Tools retained as experimental exact backend,
 - replay integration with end-to-end recorded replay completion,
-- versioned smoke-output golden-regression harness with both raw and normalized
-  baselines (normalized compare + raw inspection/timing analysis),
-- optional versioned standard-replay golden-regression harness with both raw
-  and normalized baselines,
+- smoke/replay golden-regression harnesses for output/timing comparison,
 - and per-scan timing-phase instrumentation.
 
 ---
@@ -641,28 +595,26 @@ The following now look solid enough to treat as the current base architecture:
 
 The following are still provisional or explicitly not the final word:
 
-### 1. Local expansion / hypothesis-generation runtime
-This now looks like the most immediate runtime bottleneck on the primary replay used during this phase.
+### 1. Local expansion volume
+This now looks like the most immediate runtime bottleneck on the primary replay used during this phase. The next likely win is not more math-kernel cleanup alone, but reducing how many leaves need full expansion.
 
 ### 2. Approximation semantics
 Overload splitting and historical-conflict relaxation are useful and explicit, but still not conceptually final.
 
 ### 3. Scoring design
-The simple tracker-level extras model remains pragmatic rather than fully settled.
+The current NLL-based scoring split is much clearer than the old beta/PDA path, but still pragmatic rather than fully settled.
 
-### 4. Local hypothesis-generation ownership
-The ownership split is now explicit (hypothesiser owns local distances; scoring
-owns only tracker-level extras), but deeper local-expansion performance work is
-still pending.
+### 4. Parallelization / orchestration
+Parallel local expansion is a plausible future axis, but should likely be opt-in and architecturally separated from the current tracker-owned sequential default. This is a later concern.
 
 ### 5. Internal birth / existence semantics
 Internal births remain simple, heuristic, and secondary. Their current semantics appear more permissive with respect to false-start persistence than the pre-transition behavior.
 
 ### 6. Tracking quality / false-start tuning
-Replay output is now usable enough that false starts and similar quality issues can be revisited meaningfully, but they are not the single main blocker at the current checkpoint.
+Replay output is now usable enough that false starts and target-swapping issues can be revisited meaningfully, but they are not the single main blocker at the current checkpoint.
 
 ### 7. Internal organization around cluster build/rebuild and expansion paths
-The exact cluster-solver seam is now cleaner, but some tracker internals still carry a lot of closely related logic. Further organization work is likely warranted, but should preferably happen as a sub-goal of deeper work rather than as a standalone cleanup-only phase.
+The exact cluster-solver seam is now cleaner, and the local-association seam is much clearer than before, but some tracker internals still carry a lot of closely related logic. Further organization work is likely warranted, but should preferably happen as a sub-goal of deeper work rather than as a standalone cleanup-only phase.
 
 ---
 
@@ -680,6 +632,7 @@ It should also be understood as:
 - now on a better exact-solver footing than the earlier exhaustive baseline,
 - with branch-and-bound validated enough to become the default exact backend,
 - with OR-Tools retained as an experimental comparison path,
-- and with the main replay bottleneck now moved outward into local expansion / hypothesis generation.
+- with a much clearer local-association and scoring baseline than before,
+- and with the main replay bottleneck now centered on **local expansion volume** rather than exact cluster solving.
 
-This is a good place to pause, refresh the docs, and deliberately choose the next deeper branch of work.
+This is a good place to refresh the docs, consolidate what was learned in this phase, and then deliberately choose the next deeper branch of work.

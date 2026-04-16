@@ -4,7 +4,7 @@ This roadmap is intentionally forward-looking, but it starts from the tracker’
 
 The structural track-oriented transition is complete enough that the main question is no longer “how do we make this a true TO-MHT?” The more relevant question is now:
 
-> given the current track-oriented baseline, exact-solver seam, and current replay bottlenecks, what should be improved next, what belongs together, and which topics are highest leverage?
+> given the current track-oriented baseline, exact-solver seam, local-association/sequential runtime story, and current replay bottlenecks, what should be improved next, what belongs together, and which topics are highest leverage?
 
 This roadmap is therefore best read as a **priority map and topic grouping document**, not as a fixed execution order.
 
@@ -20,14 +20,16 @@ The tracker now has:
 - post-solve supported-leaf pruning,
 - MAP-only N-scan pruning directly on explicit trees,
 - committed-prefix output history restoration,
-- predictor/updater as the primary constructor boundary,
+- exact-one-of `predictor` or `hypothesiser` constructor semantics,
+- a narrow distance-hypothesiser seam for local association,
+- explicit NLL-based local scoring,
 - an explicit solver-facing exact cluster-solver contract,
 - `branch_and_bound` as the default exact cluster backend,
 - `exhaustive` retained as exact reference/fallback,
 - `ortools` retained as experimental exact backend,
 - and per-scan timing-phase instrumentation showing where replay time is now going.
 
-This means the tracker is no longer blocked on the core architectural transition or on the original exact-solver bottleneck that motivated the recent scalability phase.
+This means the tracker is no longer blocked on the core architectural transition, is no longer blocked on the original exact-solver bottleneck, and has now also landed the main local-association ownership cleanup that was the focus of the most recent phase.
 
 ---
 
@@ -41,7 +43,8 @@ The strongest gain from the transition is that the runtime story is now understa
 - globals are rebuilt per scan,
 - MAP-only N-scan pruning commits tree structure directly,
 - output tracks are reconstructed from committed prefix plus unresolved lineage,
-- and exact cluster solving now sits behind a clean dedicated seam.
+- exact cluster solving sits behind a clean dedicated seam,
+- and local association now sits behind a narrow distance-hypothesiser seam with explicit NLL scoring.
 
 Future work should preserve that clarity.
 
@@ -68,41 +71,40 @@ The docs are part of the handoff and planning workflow. As deeper work proceeds,
 
 The next work now appears to fall into five main topic groups.
 
-### A. Local expansion / hypothesis-generation runtime
+### A. Local expansion volume reduction / pre-expansion control
 
 This now looks like the clearest immediate performance bottleneck on the primary replay used during the recent phase.
 
-The recent timing breakdown work indicates that, once branch-and-bound replaced exhaustive as the default exact backend, heavy scans became dominated primarily by local expansion / hypothesis generation rather than by exact cluster rebuild solve time.
+The recent timing and local-association work suggests that the next main leverage point is no longer only the inner local-association math. It is likely **how many leaves require full expansion**, and where explicit, conservative controls can reduce that volume.
 
 This topic includes:
 
-- reducing per-leaf local hypothesis generation cost,
-- reducing the number of leaves that need full local expansion work,
-- revisiting how local hypotheses are produced and filtered,
-- potential caching/reuse opportunities,
-- and profiling where Stone Soup-boundary work is dominating.
+- profiling and characterizing how many leaves are expanded,
+- determining which expanded leaves are later useful,
+- reducing how many leaves require full local expansion work,
+- revisiting how many children are retained/generated per leaf,
+- and making explicit which controls are semantic vs tractability-oriented.
 
 This is currently the strongest candidate for the **next major technical branch**.
 
 ### B. Local branching / scoring design
 
-The public boundary has shifted to predictor/updater, but local branching is still internally PDA-style. The default scoring remains beta-ratio-based and should still be understood as pragmatic rather than final.
+The old PDA/beta-oriented path has now been replaced by a much cleaner NLL-based local scoring story. That is a big improvement, but it should still be treated as pragmatic rather than final.
 
 This topic includes:
 
-- clearer decomposition of local score contributions,
-- eventual tracker-owned local branching/scoring logic rather than dependence on PDA-style packaging,
-- reduced coupling to hypothesiser-oriented concepts,
-- better alignment between local branch scoring and rebuilt-global semantics,
-- and possible prediction/gating/likelihood reuse or batching opportunities.
+- refining the distance-hypothesiser contract,
+- clarifying which local score contributions should live in the hypothesiser vs scoring layer,
+- possible future simplification of the current unused-detection correction,
+- and any deeper local-association/scoring redesign beyond the current baseline.
 
-This topic overlaps strongly with local-expansion runtime work and may belong in the same broader next branch.
+This topic overlaps strongly with local-expansion runtime work and may travel with it, but it is no longer “own the local association path from scratch.” That part is now largely done.
 
 ### C. Internal birth / existence / quality semantics
 
 Internal births now work, but they remain intentionally simple and are clearly not the final design.
 
-Recent review notes suggest that false starts likely became worse after the transition for structural reasons:
+Recent review notes still suggest that false starts likely became worse after the transition for structural reasons:
 
 - birth candidates become real trees immediately,
 - post-birth existence is effectively mandatory,
@@ -114,7 +116,8 @@ This topic includes:
 - whether the current residual policy is too conservative or appropriately protective,
 - whether miss-lifecycle policy is too permissive for low-quality birth trees,
 - candidate observability and TO-MHT-native birth impact statistics,
-- and general false-start tuning.
+- general false-start tuning,
+- and follow-up review of target swapping / track jumping in replay output.
 
 For the **external-start-only ISAC path**, this is not necessarily the immediate blocker. But for the general tracker path, it remains a fairly high-priority quality topic.
 
@@ -148,6 +151,7 @@ This topic includes:
 - preserving Python / Stone Soup compatibility,
 - practical runner/parameter override support,
 - backend parity/regression coverage,
+- smoke/replay baseline maintenance,
 - and scenario/replay validation sufficient to trust deeper changes.
 
 This is important ongoing support work, but no longer the defining next phase.
@@ -162,9 +166,9 @@ The current rough priority picture looks like this.
 
 These currently look the most likely to shape the next deeper phase:
 
-1. **Local expansion / hypothesis-generation runtime**
-2. **Scoring / local-branching ownership**
-3. **Internal birth / existence semantics**
+1. **Local expansion volume reduction / pre-expansion control**
+2. **Internal birth / existence / quality semantics**
+3. **Further local branching / scoring refinement**
 
 That does **not** mean they must be tackled in that exact order. But it does mean they currently look like the most consequential topics.
 
@@ -186,7 +190,10 @@ These still matter, but do not currently define the main next move:
 - optional pre-first-step external starts,
 - broader lifecycle/materialisation refinements beyond the current committed-prefix output fix,
 - node GC / ancestry cleanup beyond the current reachable-node cleanup,
-- and more extensive packaging/handoff polish.
+- more extensive packaging/handoff polish,
+- and local-expansion parallelization/orchestration architecture.
+
+Parallelization is a real future axis, but it should likely remain later, explicit, and opt-in rather than being mixed into the current expansion-volume phase.
 
 ---
 
@@ -194,54 +201,54 @@ These still matter, but do not currently define the main next move:
 
 At the current checkpoint, several next branches are plausible.
 
-### Option 1: Local-expansion/runtime-first branch
+### Option 1: Expansion-volume-first branch
 
 Focus:
-- local hypothesis generation cost,
-- leaf-frontier growth pressure before solve,
-- caching/reuse opportunities,
-- and timing-guided reduction of expensive expansion work.
+- characterize how many leaves are expanded,
+- identify which expansions are useful,
+- reduce the number of leaves requiring full expansion,
+- and improve runtime by pre-expansion control rather than only inner-kernel optimization.
 
 Why this is attractive:
-- the recent branch-and-bound + timing work indicates that exact cluster solving is no longer the dominant bottleneck on the primary replay,
-- replay now works well enough that profiling is meaningful,
-- and the timing instrumentation provides a concrete starting point.
+- the recent local-association math passes already delivered worthwhile wins,
+- the remaining replay bottleneck still sits in local expansion,
+- and the next likely leverage is now expansion volume rather than another comparable kernel-only win.
 
 This currently looks like the strongest candidate.
 
-### Option 2: Scoring/local-association-first branch
-
-Focus:
-- tracker-owned local branching math,
-- less PDA-style dependency internally,
-- cleaner score decomposition,
-- and possibly better runtime through more direct local score generation.
-
-Why this is attractive:
-- the public interface already moved in this direction,
-- scoring remains one of the most provisional parts of the design,
-- and a cleaner local-association story may improve both runtime and quality.
-
-This is compelling, and may in practice merge with Option 1.
-
-### Option 3: Birth/existence-first branch
+### Option 2: Quality/birth/existence-first branch
 
 Focus:
 - false starts,
 - birth insertion semantics,
 - existence/absence alternatives,
 - lifecycle kill behavior,
-- and TO-MHT-native birth observability/statistics.
+- and target-swapping / track-jumping review.
 
 Why this is attractive:
-- recent reviews strongly suggest that internal-birth quality got worse structurally,
-- and the issue is conceptually clearer than before.
+- current output-quality concerns are now easier to see against a more stable runtime baseline,
+- and some of these issues are conceptually clearer than before.
 
 Why it may not be first:
-- ISAC integration is external-start-only,
-- and the issue is entangled with scoring and lifecycle policy.
+- the current runtime bottleneck is still more clearly on the expansion side,
+- and ISAC integration is external-start-only.
 
 This should stay high on the list even if not chosen first.
+
+### Option 3: Further local-association/scoring refinement branch
+
+Focus:
+- simplify or replace the current unused-detection correction,
+- refine distance-hypothesiser/scoring boundaries,
+- consider future tracker-owned or custom orchestration hooks,
+- and possibly revisit local score decomposition more deeply.
+
+Why this is attractive:
+- the architecture is now much cleaner than before,
+- and the current NLL baseline makes deeper reasoning easier.
+
+Why it may not be first:
+- the current local-association baseline is good enough to support a runtime-focused expansion-volume phase now.
 
 ---
 
@@ -249,20 +256,20 @@ This should stay high on the list even if not chosen first.
 
 To avoid fragmented work, some topics should be grouped deliberately.
 
-### Local-expansion/runtime work should probably include
+### Expansion-volume work should probably include
 
 - profiling and characterization of expensive expansion scans,
 - revisiting the number of local hypotheses retained/generated,
-- any local caching/reuse opportunities,
-- scoring/local-branching simplification where it materially reduces expansion work,
+- selective/pre-prioritized expansion where justified,
+- any local caching/reuse opportunities that still materially reduce cost,
 - and organization of the expansion-related tracker code as part of that work.
 
 ### Scoring work should probably include
 
 - local branching ownership,
 - raw local-score semantics,
-- hypothesis-generator de-emphasis,
-- and any resulting changes to clutter / birth / miss interpretation.
+- any future simplification or removal of the current unused-detection correction,
+- and resulting changes to clutter / birth / miss interpretation.
 
 ### Birth/existence work should probably include
 
@@ -271,13 +278,23 @@ To avoid fragmented work, some topics should be grouped deliberately.
 - lifecycle kill policy review,
 - initiator interaction,
 - candidate observability,
-- and TO-MHT-native birth impact metrics.
+- TO-MHT-native birth impact metrics,
+- and explicit replay-quality inspection around false starts and track jumping.
 
 ### Approximation work should probably include
 
 - overload split / historical relaxation review,
 - whether current exact/approximate boundaries are still the right ones,
 - and how those mechanisms should interact with future runtime or scoring changes.
+
+### Parallelization work should probably include
+
+- opt-in runtime behavior only,
+- a clean orchestration abstraction above hypothesiser execution,
+- room for sequential, tracker-owned parallel, and external/custom parallel modes,
+- and strong determinism/validation expectations.
+
+This is deliberately a later topic, not the main current branch.
 
 ---
 
@@ -297,13 +314,22 @@ The recent runtime/scalability phase produced:
 
 That means the exact cluster-solver topic is no longer the same kind of urgent blocker it was at the start of the phase.
 
-### 7.2 OR-Tools should be kept, but not over-weighted
+### 7.2 The local-association ownership phase also achieved its main goal
 
-The experimental OR-Tools backend was useful and should remain available for comparison and future hybrid/K-best experiments, but the current repeated-solve CP-SAT path is not the main next runtime answer.
+The recent local-association phase produced:
 
-### 7.3 Timing instrumentation changed the picture
+- a tracker-owned default distance hypothesiser,
+- explicit NLL-based local scoring,
+- removal of the old PDA/beta-oriented main-path semantics,
+- and measurable `expand_ms` wins from conservative math/runtime cleanup.
 
-The new timing breakdown was important because it revealed that, once the exact solver improved, the dominant replay bottleneck moved to local expansion. That should directly shape what comes next.
+That means the “own the local association path” topic is no longer the same kind of open-ended restructuring task it was at the start of that phase.
+
+### 7.3 Timing instrumentation changed the picture again
+
+The timing work first revealed that exact cluster solving stopped being the main bottleneck, and then the local-association optimization work revealed that the next likely leverage point is **expansion volume** rather than only more inner-kernel math optimization.
+
+That should directly shape what comes next.
 
 ### 7.4 Code organization is real, but should still be attached to real work
 
@@ -315,13 +341,13 @@ There is still tracker-internal organization work worth doing, but most of it sh
 
 The immediate post-phase workflow should likely be:
 
-1. refresh `CURRENT_STATE` and roadmap to match the new baseline,
-2. leave `NEXT_STEPS` as historical context for the just-completed solver phase,
-3. decide deliberately which next branch to take,
-4. only then draft a fresh `NEXT_STEPS` for that branch,
-5. then do a targeted implementation pass.
+1. refresh `CURRENT_STATE`, `NEXT_STEPS`, and roadmap to match the new baseline,
+2. treat the just-completed local-association phase as done,
+3. start the next branch with an analysis/review pass on expansion volume,
+4. then do a targeted implementation pass,
+5. then re-evaluate whether the following step should be another volume-control pass, a quality pass, or a later architectural topic.
 
-That avoids prematurely committing to the wrong next branch before the recent timing data is absorbed properly.
+That avoids prematurely mixing expansion-volume control, quality tuning, and parallelization design into one branch.
 
 ---
 
@@ -330,10 +356,10 @@ That avoids prematurely committing to the wrong next branch before the recent ti
 At the current checkpoint, the best summary is:
 
 1. The track-oriented architectural transition is complete enough to treat as the stable baseline.
-2. The recent runtime/scalability phase succeeded in improving the exact cluster solver enough to make branch-and-bound the default backend.
-3. The main replay bottleneck is now local expansion / hypothesis generation rather than exact cluster solving.
-4. Scoring/local-branching design and internal birth/existence semantics remain the two other major unresolved design areas.
-5. Approximation semantics, validation, observability, and code organization should continue to advance together with those deeper topics rather than as isolated phases.
-6. The next concrete implementation phase should be chosen after a deliberate look at the refreshed roadmap and the new timing evidence.
+2. The recent solver phase succeeded in improving the exact cluster solver enough to make branch-and-bound the default backend.
+3. The recent local-association phase succeeded in establishing a tracker-owned distance-hypothesiser baseline with explicit NLL scoring and meaningful `expand_ms` wins.
+4. The main replay bottleneck is now best interpreted as **local expansion volume**, not exact cluster solving and not only local-association math.
+5. Internal birth/existence semantics and output-quality review remain high-priority follow-up topics, but do not have to block the next runtime-focused step.
+6. Parallelization should stay a later, explicit, opt-in architectural topic rather than being mixed into the current next phase.
 
-In other words: the tracker is now in a good place to pause, reset the docs, and choose the next deeper branch from a stronger baseline than before.
+In other words: the tracker is now in a good place to consolidate the docs, acknowledge what the recent phase achieved, and move on to a targeted expansion-volume reduction phase from a stronger baseline than before.
