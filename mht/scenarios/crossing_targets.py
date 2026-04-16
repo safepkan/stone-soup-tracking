@@ -31,7 +31,7 @@ np.random.seed(2001)
 _PROB_DETECT = 0.9
 _GATE_LEVEL = 8.0  # chi-square gate level (2D)
 _V_BOUNDS = np.array([[-5.0, 30.0], [-5.0, 30.0]])  # surveillance area bounds
-_LAMBDA_V = 5.0  # mean number of clutter points over full area
+_LAMBDA_V = 5.0  # mean number of clutter points over full area per scan
 
 # Derived quantities
 _PROB_GATE = chi2.cdf(_GATE_LEVEL, 2)  # gating probability
@@ -151,16 +151,17 @@ def create_crossing_scenario(
                     )
                 )
 
-            # Clutter
-            for _ in range(np.random.poisson(_LAMBDA_V)):
-                x = np.random.uniform(*_V_BOUNDS[0])
-                y = np.random.uniform(*_V_BOUNDS[1])
-                detections.add(
-                    Clutter(
-                        [[x], [y]],
-                        timestamp=gt_state.timestamp,
-                    )
+        # Clutter (once per scan, over full surveillance area)
+        scan_timestamp = start_time + datetime.timedelta(seconds=k)
+        for _ in range(np.random.poisson(_LAMBDA_V)):
+            x = np.random.uniform(*_V_BOUNDS[0])
+            y = np.random.uniform(*_V_BOUNDS[1])
+            detections.add(
+                Clutter(
+                    [[x], [y]],
+                    timestamp=scan_timestamp,
                 )
+            )
 
         scans.append(detections)
 

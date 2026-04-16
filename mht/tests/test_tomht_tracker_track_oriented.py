@@ -2,43 +2,24 @@ from __future__ import annotations
 
 import datetime
 import unittest
-from typing import cast
+from typing import Iterable, cast
 
 import numpy as np
 from stonesoup.initiator.simple import SimpleMeasurementInitiator
 from stonesoup.types.detection import Detection, MissedDetection
+from stonesoup.types.hypothesis import SingleDistanceHypothesis
+from stonesoup.types.multihypothesis import MultipleHypothesis
 from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
 
 
-class _ScriptedHypothesis:
-    def __init__(
-        self,
-        *,
-        measurement,
-        prediction: GaussianState,
-        updated_state: GaussianState,
-        log_delta: float,
-        is_miss: bool,
-    ) -> None:
-        self.measurement = measurement
-        self.prediction = prediction
-        self.updated_state = updated_state
-        self.log_delta = float(log_delta)
-        self.probability = 1.0
-        self.weight = 1.0
-        self._is_miss = bool(is_miss)
-
-    def __bool__(self) -> bool:
-        return not self._is_miss
-
-
 class _ScriptedHypothesiser:
     """Per-(timestamp,track_id) scripted local hypotheses for deterministic tests."""
 
     def __init__(self) -> None:
+        self.predictor = _NoopPredictor()
         self._script: dict[
             tuple[datetime.datetime, int], list[tuple[int | None, float]]
         ] = {}
@@ -52,36 +33,40 @@ class _ScriptedHypothesiser:
     ) -> None:
         self._script[(timestamp, track_id)] = list(options)
 
-    def hypothesise(self, track: Track, detections, timestamp: datetime.datetime):
+    def hypothesise(
+        self,
+        track: Track,
+        detections: Iterable[Detection],
+        timestamp: datetime.datetime,
+        **kwargs,
+    ) -> MultipleHypothesis:
+        del kwargs
+        detections_list = list(detections)
         track_id = int(track.metadata["track_id"])
         options = self._script.get((timestamp, track_id), [(None, 0.0)])
         prediction = cast(GaussianState, track.states[-1])
 
-        out = []
+        out: list[SingleDistanceHypothesis] = []
         for det_index, log_delta in options:
             if det_index is None:
                 out.append(
-                    _ScriptedHypothesis(
-                        measurement=MissedDetection(timestamp=timestamp),
+                    SingleDistanceHypothesis(
                         prediction=prediction,
-                        updated_state=prediction,
-                        log_delta=log_delta,
-                        is_miss=True,
+                        measurement=MissedDetection(timestamp=timestamp),
+                        distance=-float(log_delta),
                     )
                 )
                 continue
 
-            detection = detections[int(det_index)]
+            detection = detections_list[int(det_index)]
             out.append(
-                _ScriptedHypothesis(
-                    measurement=detection,
+                SingleDistanceHypothesis(
                     prediction=prediction,
-                    updated_state=_state_from_detection(detection, timestamp),
-                    log_delta=log_delta,
-                    is_miss=False,
+                    measurement=detection,
+                    distance=-float(log_delta),
                 )
             )
-        return out
+        return MultipleHypothesis(out, normalise=False)
 
 
 class _NoopPredictor:
@@ -91,17 +76,26 @@ class _NoopPredictor:
 
 
 class _ScriptedUpdater:
-    def update(self, hypothesis: _ScriptedHypothesis) -> GaussianState:
-        return hypothesis.updated_state
+    def update(self, hypothesis) -> GaussianState:
+        measurement = getattr(hypothesis, "measurement", None)
+        if not isinstance(measurement, Detection):
+            raise RuntimeError("Detection-associated update expected.")
+        timestamp = measurement.timestamp
+        if timestamp is None:
+            prediction = getattr(hypothesis, "prediction", None)
+            timestamp = getattr(prediction, "timestamp", None)
+        if timestamp is None:
+            raise RuntimeError("Timestamp required for scripted updater.")
+        return _state_from_detection(measurement, timestamp)
 
 
 class _ManualScoringModel:
     def __init__(self, *, per_unused_penalty: float = 0.5) -> None:
         self.per_unused_penalty = float(per_unused_penalty)
 
-    def score_track_hypotheses(self, *, track, hypotheses, ctx) -> dict[int, float]:
-        del track, ctx
-        return {id(hyp): float(hyp.log_delta) for hyp in hypotheses}
+    def score_track_hypotheses(self, *, hypotheses, ctx) -> list[float]:
+        del ctx
+        return [-float(hypothesis.distance) for hypothesis in hypotheses]
 
     def score_unused_detections(self, *, used_det_keys: set[int], ctx) -> float:
         unused = len(ctx.detections) - len(used_det_keys)
@@ -169,9 +163,8 @@ def _build_tracker(
             collect_stats=False,
         )
     return TOMHTTracker(
-        predictor=_NoopPredictor(),
+        hypothesiser=hypothesiser,
         updater=updater,
-        hypothesis_generator=hypothesiser,
         initiator=initiator,
         params=params,
         scoring_model=_ManualScoringModel(per_unused_penalty=0.5),

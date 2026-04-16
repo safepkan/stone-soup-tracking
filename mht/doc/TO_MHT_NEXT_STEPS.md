@@ -1,5 +1,64 @@
 # TO-MHT Next Steps
 
+## Update (2026-04-16): baseline cleanup around scoring/replay overrides
+
+- Implemented: stale replay override templates for removed `hypothesis_backend`
+  parameter were removed from `replay/overrides/`, and replay README references
+  were updated accordingly.
+- Clarified: scoring contract now explicitly documents that
+  `used_det_keys`/`used_det_key` are local indices into the current
+  `ScanContext.detections`.
+- Clarified: current solver-preparation path assumes
+  `score_unused_detections(...)` is affine in number of used detections.
+  Revisit/removal/replacement of this concept is deferred to a later scoring
+  redesign pass.
+
+## Update (2026-04-16): explicit NLL scoring model restored
+
+- Implemented: `ScoringModel.score_track_hypotheses(...)` is restored and now
+  owns explicit local LLR scoring from distance hypotheses.
+- Implemented: default `NLLScoringModel` now scores:
+  - hit: `log(P_D) - log(lambda) - NLL`
+  - miss: `log(1 - P_D)`
+- Implemented: tracker local expansion now obtains local `log_delta` values
+  from `score_track_hypotheses(...)` rather than implicitly using
+  `-hypothesis.distance`.
+- Implemented: tracker-owned default distance hypothesiser miss distance is a
+  sentinel (ignored by scoring), while detection distance remains `NLL`.
+
+## Update (2026-04-15): local-expansion seam reframed as distance hypothesiser
+
+- Implemented: local expansion now consumes a narrow distance-hypothesiser
+  contract via Stone Soup `MultipleHypothesis` of
+  `SingleDistanceHypothesis` objects (one miss + gated detections, each with
+  `distance`).
+- Updated in 2026-04-16 follow-up: tracker local delta is now explicitly scored
+  by `ScoringModel` from `NLL` distance plus `P_D`/`lambda` terms.
+- Implemented: `TOMHTTracker` constructor now enforces exactly one of
+  `predictor` or `hypothesiser` (with required `updater` in both cases).
+- Implemented: tracker-owned default local hypothesiser is now
+  `TrackerOwnedNLLDistanceHypothesiser` with Mahalanobis-threshold-first gating
+  semantics.
+- Updated in 2026-04-16 follow-up: scoring contract again includes local track
+  scoring (`score_track_hypotheses`) with explicit NLL semantics.
+- Implemented: transitional compatibility shims for
+  `hypothesis_backend`/`prob_gate`/beta-ratio local semantics were removed from
+  the main tracker path.
+
+## Update (2026-04-13): first conservative ownership step implemented
+
+- Implemented: main-path local expansion now runs through tracker-owned PDA-based
+  logic (`mht/tomht_hypothesiser.py`) instead of relying on generic
+  `hypothesis_generator.hypothesise(...)` in the default `"local_pda"` path.
+- Implemented: Stone Soup `PDAHypothesiser` was used as the behavior/structure
+  baseline for the owned path.
+- Implemented: `RobustPDAHypothesiser` was moved to explicit compatibility-only
+  backend usage (`"robust_pda"`), no longer the preferred runtime path.
+- Implemented: distinct backend naming now separates tracker-owned
+  `"local_pda"` from legacy Stone Soup `"stonesoup_pda"` usage.
+- Remaining in this subphase: cheap pre-gating (for example rectangular gate),
+  deeper expansion profiling, and optimization passes.
+
 ## Next architectural subphase
 
 **Local expansion / hypothesis-generation ownership and performance**

@@ -15,17 +15,26 @@ Canonical input:
 
 - `replay/inputs/cpi_replay_2025-12-10_173948.mcap`
 
-Run from the `l2-sp` clone root (or any equivalent clone that contains
-`python.pipeline.batch_mcap_replay`):
+The canonical replay input is versioned in this repo (`stone-soup-tracking`).
+When running from the `l2-sp` clone root (or any equivalent clone that
+contains `python.pipeline.batch_mcap_replay`), pass input/output paths that
+point into this repo. For input, use either:
+
+- a relative path into this repo (for sibling clones):
+  `../stone-soup-tracking/replay/inputs/cpi_replay_2025-12-10_173948.mcap`
+- or an absolute path:
+  `/Users/patrik/Git/stone-soup-tracking/replay/inputs/cpi_replay_2025-12-10_173948.mcap`
+
+Example from `l2-sp` root (relative-path form):
 
 ```bash
 source venv/bin/activate
 python -m python.pipeline.batch_mcap_replay \
-  replay/inputs/cpi_replay_2025-12-10_173948.mcap \
+  ../stone-soup-tracking/replay/inputs/cpi_replay_2025-12-10_173948.mcap \
   --include-tracker \
   --tracker-type stonesoup-mht \
   --max-cpis 400 \
-  --output-path replay/outputs/standard_replay_default
+  --output-path ../stone-soup-tracking/replay/outputs/standard_replay_default
 ```
 
 ## Using JSON Overrides
@@ -35,12 +44,12 @@ Pass a JSON file with TOMHT parameter overrides:
 ```bash
 source venv/bin/activate
 python -m python.pipeline.batch_mcap_replay \
-  replay/inputs/cpi_replay_2025-12-10_173948.mcap \
+  ../stone-soup-tracking/replay/inputs/cpi_replay_2025-12-10_173948.mcap \
   --include-tracker \
   --tracker-type stonesoup-mht \
   --max-cpis 400 \
-  --tracker-param-override-file replay/overrides/tracker_backend_ortools.json \
-  --output-path replay/outputs/standard_replay_ortools
+  --tracker-param-override-file ../stone-soup-tracking/replay/overrides/tracker_backend_ortools.json \
+  --output-path ../stone-soup-tracking/replay/outputs/standard_replay_ortools
 ```
 
 Available backend override templates:
@@ -48,8 +57,9 @@ Available backend override templates:
 - `replay/overrides/tracker_backend_branch_and_bound.json`
 - `replay/overrides/tracker_backend_exhaustive.json`
 - `replay/overrides/tracker_backend_ortools.json`
-- `replay/overrides/tracker_hypothesis_backend_pda.json`
-- `replay/overrides/tracker_hypothesis_backend_robust_pda.json`
+
+Legacy `hypothesis_backend` override templates were removed as that parameter is
+no longer part of `TOMHTParams`.
 
 ## Standard Replay Regression
 

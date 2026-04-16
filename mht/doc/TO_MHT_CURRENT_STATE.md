@@ -1,5 +1,38 @@
 # TO-MHT Current State
 
+## Update (2026-04-16): explicit NLL-to-LLR local scoring
+
+- Local track-hypothesis scoring is now explicit in `NLLScoringModel` via:
+  - detection: `log(P_D) - log(lambda) - NLL`
+  - miss: `log(1 - P_D)`
+- Unit contract is now explicit in code/docs: `lambda` must be expressed in the
+  same measurement-space coordinates/units as the hypothesiser NLL
+  (`-log p(z|x)`), so coordinate scaling terms cancel in the hit score.
+- Local expansion still consumes Stone Soup distance hypotheses, but tracker
+  local score is no longer computed implicitly as `-distance`.
+- The tracker-owned default distance hypothesiser now emits:
+  - miss with sentinel distance (ignored by scoring),
+  - detection hypotheses with `distance = NLL` and Mahalanobis gating.
+- `TOMHTParams.scoring_mode` default is now `"nll"`.
+
+## Update (2026-04-15): main path switched to distance-hypothesiser semantics
+
+- `TOMHTTracker` local expansion now consumes Stone Soup
+  `MultipleHypothesis[SingleDistanceHypothesis]` output directly.
+- The tracker-owned default local association object is now
+  `TrackerOwnedNLLDistanceHypothesiser`, with explicit
+  `mahalanobis_gate_threshold` (non-squared Mahalanobis) main-path gating
+  semantics.
+- Constructor wiring now requires exactly one of `predictor` or `hypothesiser`
+  (with `updater` always required); custom hypothesiser injection remains
+  supported via the distance contract.
+- `ScoringModel` now owns explicit local NLL-to-LLR score construction plus
+  tracker-level additive extras (unused detections and births). PDA/beta
+  local-score normalization is no longer in the main local-expansion flow.
+- Legacy compatibility knobs from that transition period are now removed from
+  the main tracker path (`hypothesis_backend`, `prob_gate`, and beta-ratio
+  scoring aliasing).
+
 ## Update (2026-04-13): replay regression now preserves replayed MCAP artifacts
 
 - `replay/standard_replay_regression.py` now copies the replay-produced MCAP
@@ -10,19 +43,9 @@
   still relying on existing `replay/.gitignore` behavior so baseline MCAP files
   remain local (not versioned).
 
-## Update (2026-04-12): legacy replay path now respects `hypothesis_backend` override
-
-- In `TOMHTTracker` legacy positional compatibility mode
-  (`TOMHTTracker(hypothesiser,updater,...)`), a non-default
-  `TOMHTParams.hypothesis_backend` now forces tracker-owned backend construction
-  from the legacy hypothesiser's predictor/updater dependencies.
-- This keeps old call sites working while allowing JSON
-  `tomht_params.hypothesis_backend` replay overrides to actually switch between
-  `"pda"` and `"robust_pda"`.
-
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface cleanup, determinism, output-history restoration, solver-seam extraction, exact-backend experiments, timing-instrumentation work, and smoke-output golden-regression workflow setup completed through **2026-04-13**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, interface cleanup, determinism, output-history restoration, solver-seam extraction, exact-backend experiments, timing-instrumentation work, and smoke-output golden-regression workflow setup completed through **2026-04-16**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -73,21 +96,39 @@ The external interface remains Stone Soup-oriented:
 
 - detections are Stone Soup `Detection`,
 - output tracks are Stone Soup `Track`,
-- `predictor` and `updater` are now the primary constructor boundary objects,
-- local hypothesis generation is still PDA-style in this phase via a transitional internal backend path,
+- constructor now accepts exactly one of:
+  - `predictor` (+ tracker-owned default distance hypothesiser), or
+  - `hypothesiser` (custom distance hypothesiser injection),
+- `updater` remains required in both constructor modes,
+- local expansion consumes distance options directly instead of PDA-normalized
+  hypothesis probabilities,
 - output `Track` metadata is an explicit TOMHT-owned projection from the current active leaf node rather than arbitrary propagated metadata.
 
-### Transitional constructor boundary
+### Constructor and local-association boundary
 
-The tracker constructor now centers on `predictor` + `updater`.
+The tracker now has a narrow distance-hypothesiser seam:
 
-Local branching still uses a hypothesis-generator object internally, but this is currently treated as a **transitional implementation detail**, not the intended long-term public abstraction. Constructor precedence is:
+- input: `(track,detections,timestamp)`
+- output: Stone Soup `MultipleHypothesis` containing exactly one missed
+  `SingleDistanceHypothesis` plus zero or more gated detection
+  `SingleDistanceHypothesis` entries
+- each detection hypothesis carries `distance = NLL`; missed-detection distance
+  is a sentinel and is ignored by local score construction.
 
-1. explicit `hypothesis_generator`
-2. deprecated `hypothesiser` compatibility path
-3. internally constructed backend from `TOMHTParams.hypothesis_backend` (`"pda"` or `"robust_pda"`)
+Default local association is tracker-owned (`TrackerOwnedNLLDistanceHypothesiser`)
+and uses explicit Mahalanobis-threshold gating semantics
+(`mahalanobis_gate_threshold`).
 
-Default scoring setup no longer reads operational values from hypothesiser attributes. It now uses explicit tracker parameters such as `prob_detect`, `prob_gate`, and `clutter_density`.
+`ScoringModel` now owns local track-hypothesis scoring plus tracker-level extras:
+
+- `score_track_hypotheses(...)`
+- `score_unused_detections(...)`
+- `score_birth(...)`
+- `used_det_keys`/`used_det_key` are local detection indices into
+  `ScanContext.detections` for the scoring call.
+- current solver pre-baking assumes `score_unused_detections(...)` is affine in
+  the number of used detections; broader/non-linear alternatives are deferred to
+  a later scoring redesign pass.
 
 ---
 
@@ -253,13 +294,16 @@ Current positioning:
 
 ### Local expansion
 
-Local expansion is still Stone Soup-boundary-driven in this phase:
+Local expansion is now distance-hypothesis driven:
 
 - for each active leaf, reconstruct a compatibility `Track`,
-- call the local hypothesis generator,
-- score local hypotheses through the scoring model,
+- call the configured distance hypothesiser,
+- require one missed-detection hypothesis plus zero or more gated detection
+  hypotheses,
+- derive local score via `ScoringModel.score_track_hypotheses(...)` using the
+  explicit NLL/LLR contract,
 - create child nodes for kept hypotheses,
-- always keep a miss hypothesis if the generator returned one,
+- always retain a miss hypothesis,
 - then apply an optional per-tree local leaf cap.
 
 ### Local leaf cap
@@ -347,16 +391,20 @@ These mechanisms are pragmatic, not final. They should be understood as explicit
 
 ## Scoring state
 
-Scoring remains based on the default beta-ratio-style model in `tomht_scoring.py` unless an explicit alternative scoring model is supplied.
+Scoring now uses an explicit NLL-to-LLR additive model in
+`tomht_scoring.py` unless an explicit alternative scoring model is supplied.
 
 Current default behavior:
 
-- scores local track hypotheses using PDA-style β-ratio approximations,
-- applies a linear current-scan clutter correction that is now pre-baked into cluster leaf scores before exact solve,
+- local hypothesis scoring is computed in `NLLScoringModel` from hypothesiser
+  distance (`NLL`) plus explicit hit/miss constants,
+- applies a linear current-scan clutter correction that is pre-baked into
+  cluster leaf scores before exact solve,
 - applies a fixed birth penalty for births,
 - logs scoring diagnostics at tracker construction time.
 
-This scoring should still be understood as **pragmatic and serviceable**, not final.
+This scoring split should still be understood as **pragmatic and serviceable**,
+not final.
 
 ---
 
@@ -557,10 +605,12 @@ This now looks like the most immediate runtime bottleneck on the primary replay 
 Overload splitting and historical-conflict relaxation are useful and explicit, but still not conceptually final.
 
 ### 3. Scoring design
-The beta-ratio scoring model remains pragmatic rather than fully settled.
+The simple tracker-level extras model remains pragmatic rather than fully settled.
 
 ### 4. Local hypothesis-generation ownership
-The public constructor boundary has shifted to predictor/updater, but local branching is still internally driven by a PDA-style generator path. This is an intentional transitional state.
+The ownership split is now explicit (hypothesiser owns local distances; scoring
+owns only tracker-level extras), but deeper local-expansion performance work is
+still pending.
 
 ### 5. Internal birth / existence semantics
 Internal births remain simple, heuristic, and secondary. Their current semantics appear more permissive with respect to false-start persistence than the pre-transition behavior.

@@ -370,10 +370,9 @@ def run_tomht(
         params = TOMHTParams(
             prob_detect=config.prob_detect,
             clutter_density=config.clutter_density,
-            hypothesis_backend="pda",
             max_children_per_track=5,
             max_missed=5,
-            prob_gate=0.9999,
+            mahalanobis_gate_threshold=4.292,
             birth_log_penalty=15.0,
         )
     else:
@@ -389,18 +388,17 @@ def run_tomht(
         params = TOMHTParams(
             prob_detect=config.prob_detect,
             clutter_density=config.clutter_density,
-            hypothesis_backend="robust_pda",
             max_global_hypotheses=10,
             max_children_per_track=3,
             max_missed=5,
             max_births_per_scan=2,
             birth_log_penalty=2.0,
             unused_det_log_penalty=4.0,
-            prob_gate=0.99,
+            mahalanobis_gate_threshold=3.035,
         )
     tracker = TOMHTTracker(
-        predictor,
-        updater,
+        updater=updater,
+        predictor=predictor,
         initiator=initiator,
         params=_apply_debug_overrides(params),
         params_overrides=params_overrides,

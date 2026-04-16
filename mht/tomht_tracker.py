@@ -2,7 +2,12 @@
 
 Typical usage pattern:
 ```python
-tracker = TOMHTTracker(predictor,updater,initiator=initiator,params=params)
+tracker = TOMHTTracker(
+    updater=updater,
+    predictor=predictor,
+    initiator=initiator,
+    params=params,
+)
 t,map_tracks = tracker.update_tracker(time,detections)
 tracker.add_external_starts(t,confirmed_starts_at_t)  # optional, same timestamp
 map_tracks = tracker.tracks  # or use ``map_tracks`` from update_tracker()
@@ -28,7 +33,6 @@ import os
 import resource
 import sys
 import time as wall_clock
-import warnings
 from itertools import product
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
@@ -38,17 +42,18 @@ from ordered_set import OrderedSet
 import numpy as np
 
 from stonesoup.base import Property
-from stonesoup.hypothesiser.probability import PDAHypothesiser
+from stonesoup.hypothesiser.base import Hypothesiser
 from stonesoup.initiator.base import Initiator
 from stonesoup.predictor.base import Predictor
-from stonesoup.types.detection import Detection
+from stonesoup.types.detection import Detection, MissedDetection
+from stonesoup.types.hypothesis import SingleDistanceHypothesis, SingleHypothesis
+from stonesoup.types.multihypothesis import MultipleHypothesis
 from stonesoup.types.state import State
 from stonesoup.types.track import Track
 from stonesoup.types.update import Update
 from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.updater.base import Updater
 
-from mht.helpers.hypothesiser import RobustPDAHypothesiser
 from mht.tomht_cluster_solver import (
     ClusterSolver,
     ClusterSolverDiagnostics,
@@ -72,6 +77,7 @@ from mht.tomht_output import (
     reconstruct_track_from_committed_prefix_and_leaf_node,
     reconstruct_track_from_leaf_node,
 )
+from mht.tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from mht.tomht_scoring import (
     ScoringModel,
     make_default_scoring_model,
@@ -144,13 +150,15 @@ class TOMHTParams:
     historical_conflict_relaxation_enabled: bool = True
 
     # Scoring / numerical behavior.
-    scoring_mode: str = "beta_ratio"
+    scoring_mode: str = "nll"
     log_epsilon: float = 1e-12
     prob_detect: float = 0.9
-    prob_gate: float = 0.99
+    # Main-path gate control: Mahalanobis threshold (non-squared).
+    mahalanobis_gate_threshold: float = 3.0
+    # Clutter density lambda in measurement-space units:
+    # detections per unit measurement-volume per scan. Must match the same
+    # measurement coordinates used by the hypothesiser NLL computation.
     clutter_density: float = 0.0
-    # Transitional knob while constructor API shifts to predictor/updater ownership.
-    hypothesis_backend: str = "pda"
 
     # MAP-only N-scan pruning: boundary is b = k - N.
     ns_scan_window: int = 6
@@ -345,18 +353,37 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # Stone Soup 1.8 under Python 3.14 can miss PEP-563 style class annotations
     # when resolving Property types, so keep explicit cls there.
     if sys.version_info >= (3, 14):
-        predictor = Property(
-            Predictor, doc="Predictor used by tracker-owned hypothesis generation."
-        )
         updater = Property(
-            Updater, doc="Updater used to generate posteriors from selected hypotheses."
+            Updater,
+            doc="Updater supplied by caller. Required for tracker runtime use.",
+        )
+        predictor = Property(
+            Predictor | None,
+            default=None,
+            doc="Predictor supplied by caller (or None when using custom hypothesiser).",
+        )
+        hypothesiser = Property(
+            Hypothesiser | None,
+            default=None,
+            doc=(
+                "Optional custom distance hypothesiser supplied by caller "
+                "(or None when using predictor-driven default construction)."
+            ),
         )
     else:
-        predictor: Predictor = Property(
-            doc="Predictor used by tracker-owned hypothesis generation."
-        )
         updater: Updater = Property(
-            doc="Updater used to generate posteriors from selected hypotheses."
+            doc="Updater supplied by caller. Required for tracker runtime use.",
+        )
+        predictor: Predictor | None = Property(
+            default=None,
+            doc="Predictor supplied by caller (or None when using custom hypothesiser).",
+        )
+        hypothesiser: Hypothesiser | None = Property(
+            default=None,
+            doc=(
+                "Optional custom distance hypothesiser supplied by caller "
+                "(or None when using predictor-driven default construction)."
+            ),
         )
 
     _last_nscan_boundary_scan_index: int | None
@@ -364,6 +391,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     _last_nscan_committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
     _committed_boundary_by_track_id: dict[int, int]
     _committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
+    _updater: Updater
+    _hypothesiser: Hypothesiser
 
     # =========================================================================
     # Public API
@@ -371,11 +400,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     def __init__(
         self,
+        updater: Updater,
         predictor: Predictor | None = None,
-        updater: Updater | None = None,
+        hypothesiser: Hypothesiser | None = None,
         *,
-        hypothesis_generator: object | None = None,
-        hypothesiser: PDAHypothesiser | None = None,
         detector: Any | None = None,
         initiator: Initiator | None = None,
         params: TOMHTParams = TOMHTParams(),
@@ -386,19 +414,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         Parameters
         ----------
-        predictor : Predictor | None
-            Tracker-owned predictor. Primary public dependency.
-        updater : Updater | None
+        updater : Updater
             Updater used for posterior state generation from selected hypotheses.
-            Primary public dependency.
-        hypothesis_generator : object | None
-            Transitional escape hatch for local association generation.
-            Must provide ``hypothesise(track,detections,timestamp)``.
-            This is not a long-term public surface.
-        hypothesiser : PDAHypothesiser | None
-            Deprecated compatibility path for older call sites. Prefer
-            ``hypothesis_generator`` or backend selection via
-            ``TOMHTParams.hypothesis_backend``.
+            This is always required.
+        predictor : Predictor | None
+            Predictor used to construct the tracker-owned default distance
+            hypothesiser.
+        hypothesiser : Hypothesiser | None
+            Explicit custom Stone Soup hypothesiser returning distance
+            hypotheses. Exactly one of ``predictor``
+            or ``hypothesiser`` must be provided. For detection hypotheses,
+            ``distance`` is expected to be ``-log p(z|x)`` at the predicted
+            measurement (NLL only), without detection-probability or
+            clutter-density factors.
         detector : Any | None
             Optional detector used when iterating over the tracker.
         initiator : Initiator | None
@@ -408,42 +436,28 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         params_overrides : Mapping[str, Any] | None
             Optional field-level overrides applied onto ``params``.
         scoring_model : ScoringModel | None
-            Optional scoring model. If omitted, a default is built from tracker
-            parameters. This hook is expected to evolve as scoring semantics are
-            refined; it should be treated as transitional rather than a stable
-            long-term extension point.
+            Optional scoring model for local track hypotheses plus tracker-level
+            additive extras (unused detections and births). Local hypothesis
+            scoring includes hit/miss terms such as detection probability and
+            clutter density, where clutter density must be specified in the same
+            measurement-space units as the hypothesiser's NLL.
         """
-        explicit_hypothesis_backend_override = (
-            isinstance(params_overrides, Mapping)
-            and "hypothesis_backend" in params_overrides
-        )
         params = self._apply_params_overrides(params, params_overrides)
-        resolved_predictor, resolved_updater, resolved_hypothesis_generator = (
-            self._resolve_hypothesis_generator_dependencies(
-                predictor=predictor,
-                updater=updater,
-                hypothesis_generator=hypothesis_generator,
-                hypothesiser=hypothesiser,
-                params=params,
-                explicit_hypothesis_backend_override=(
-                    explicit_hypothesis_backend_override
-                ),
-            )
-        )
         super().__init__(
-            predictor=resolved_predictor,
-            updater=resolved_updater,
+            predictor=predictor,
+            updater=updater,
+            hypothesiser=hypothesiser,
         )
-        self.hypothesis_generator = resolved_hypothesis_generator
+        self._updater = self.updater
+        self._hypothesiser = self._resolve_hypothesiser(params=params)
         self.detector = detector
         self.params = params
         self.initiator = initiator
         if scoring_model is None:
             scoring_model = make_default_scoring_model(
                 scoring_mode=params.scoring_mode,
-                log_epsilon=params.log_epsilon,
-                prob_gate=params.prob_gate,
                 prob_detect=params.prob_detect,
+                log_epsilon=params.log_epsilon,
                 clutter_density=params.clutter_density,
                 unused_det_log_penalty=params.unused_det_log_penalty,
                 birth_log_penalty=params.birth_log_penalty,
@@ -485,30 +499,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._stats: list[ScanStats] = []
         self.reset_stats()
 
-    @property
-    def hypothesis_generator(self) -> object:
-        """Temporary escape hatch for overriding local hypothesis generation."""
-        return self._hypothesis_generator
-
-    @hypothesis_generator.setter
-    def hypothesis_generator(self, value: object) -> None:
-        """Temporary escape hatch for overriding local hypothesis generation."""
-        if not hasattr(value, "hypothesise"):
-            raise TypeError(
-                "hypothesis_generator must provide a hypothesise(track,detections,timestamp) method."
-            )
-        self._hypothesis_generator = value
-
-    @property
-    def hypothesiser(self):
-        """Deprecated compatibility alias for ``hypothesis_generator``."""
-        return self.hypothesis_generator
-
-    @hypothesiser.setter
-    def hypothesiser(self, value) -> None:
-        """Deprecated compatibility alias for ``hypothesis_generator``."""
-        self.hypothesis_generator = value
-
     @staticmethod
     def _make_cluster_solver(cluster_solver_backend: str) -> ClusterSolver:
         """Construct one exact cluster-solver backend by configured name."""
@@ -544,148 +534,35 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             f"cluster_solver={type(self._cluster_solver).__name__}"
         )
 
-    def _resolve_hypothesis_generator_dependencies(
+    def _resolve_hypothesiser(
         self,
         *,
-        predictor: Predictor | None,
-        updater: Updater | None,
-        hypothesis_generator: object | None,
-        hypothesiser: PDAHypothesiser | None,
         params: TOMHTParams,
-        explicit_hypothesis_backend_override: bool = False,
-    ) -> tuple[Predictor, Updater, object]:
-        """Resolve transitional local-hypothesis backend wiring with precedence."""
-        resolved_predictor = predictor
-        resolved_updater = updater
-        legacy_positional_hypothesiser: object | None = None
-        default_hypothesis_backend = TOMHTParams().hypothesis_backend
+    ) -> Hypothesiser:
+        """Resolve constructor mode into the active runtime hypothesiser."""
+        predictor = self.predictor
+        hypothesiser = self.hypothesiser
 
-        # Legacy positional compatibility: TOMHTTracker(hypothesiser,updater,...)
-        if (
-            hypothesis_generator is None
-            and hypothesiser is None
-            and predictor is not None
-            and hasattr(predictor, "hypothesise")
-            and not hasattr(predictor, "predict")
-        ):
-            hypothesiser = predictor  # type: ignore[assignment]
-            legacy_positional_hypothesiser = predictor
-            resolved_predictor = None
+        has_predictor = predictor is not None
+        has_hypothesiser = hypothesiser is not None
+        if has_predictor == has_hypothesiser:
+            raise TypeError("Provide exactly one of predictor or hypothesiser.")
 
-        if hypothesis_generator is not None:
-            resolved_hypothesis_generator = hypothesis_generator
-        elif hypothesiser is not None:
-            if legacy_positional_hypothesiser is not None and (
-                params.hypothesis_backend != default_hypothesis_backend
-                or explicit_hypothesis_backend_override
-            ):
-                # Keep legacy positional compatibility, but allow non-default
-                # params.hypothesis_backend overrides (e.g. JSON replay config)
-                # to select tracker-owned backend construction.
-                resolved_predictor = getattr(
-                    legacy_positional_hypothesiser, "predictor", None
-                )
-                if resolved_updater is None:
-                    resolved_updater = getattr(
-                        legacy_positional_hypothesiser, "updater", None
-                    )
-                if resolved_predictor is None:
-                    raise TypeError(
-                        "Legacy positional hypothesiser override requires a "
-                        "predictor attribute when params.hypothesis_backend "
-                        "selects a non-default backend."
-                    )
-                if resolved_updater is None:
-                    raise TypeError(
-                        "Legacy positional hypothesiser override requires an "
-                        "updater (argument or hypothesiser.updater) when "
-                        "params.hypothesis_backend selects a non-default backend."
-                    )
-                resolved_hypothesis_generator = (
-                    self._build_default_hypothesis_generator(
-                        predictor=resolved_predictor,
-                        updater=resolved_updater,
-                        params=params,
-                    )
-                )
-            else:
-                warnings.warn(
-                    "TOMHTTracker(..., hypothesiser=...) is deprecated; pass "
-                    "hypothesis_generator=... or rely on params.hypothesis_backend.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                resolved_hypothesis_generator = hypothesiser
-        else:
-            if resolved_predictor is None:
-                raise TypeError(
-                    "predictor is required when hypothesis_generator/hypothesiser "
-                    "is not provided."
-                )
-            if resolved_updater is None:
-                raise TypeError(
-                    "updater is required when hypothesis_generator/hypothesiser "
-                    "is not provided."
-                )
-            resolved_hypothesis_generator = self._build_default_hypothesis_generator(
-                predictor=resolved_predictor,
-                updater=resolved_updater,
-                params=params,
+        if has_predictor:
+            assert predictor is not None
+            return TrackerOwnedNLLDistanceHypothesiser(
+                predictor=predictor,
+                updater=self.updater,
+                mahalanobis_gate_threshold=params.mahalanobis_gate_threshold,
             )
 
-        if resolved_hypothesis_generator is None or not hasattr(
-            resolved_hypothesis_generator, "hypothesise"
-        ):
-            raise TypeError(
-                "hypothesis_generator must provide a hypothesise(track,detections,timestamp) method."
-            )
-
-        if resolved_predictor is None:
-            resolved_predictor = getattr(
-                resolved_hypothesis_generator, "predictor", None
-            )
+        assert hypothesiser is not None
+        resolved_predictor = getattr(hypothesiser, "predictor", None)
         if resolved_predictor is None:
             raise TypeError(
-                "predictor is required (or must be available on the provided hypothesis generator)."
+                "A provided hypothesiser must expose predictor for tracker wiring."
             )
-
-        if resolved_updater is None:
-            resolved_updater = getattr(resolved_hypothesis_generator, "updater", None)
-        if resolved_updater is None:
-            raise TypeError(
-                "updater is required (or must be available on the provided hypothesis generator)."
-            )
-
-        return resolved_predictor, resolved_updater, resolved_hypothesis_generator
-
-    @staticmethod
-    def _build_default_hypothesis_generator(
-        *,
-        predictor: Predictor,
-        updater: Updater,
-        params: TOMHTParams,
-    ) -> object:
-        """Build the transitional default local-hypothesis backend."""
-        if params.hypothesis_backend == "pda":
-            return PDAHypothesiser(
-                predictor,
-                updater,
-                params.clutter_density,
-                prob_gate=params.prob_gate,
-                prob_detect=params.prob_detect,
-            )
-        if params.hypothesis_backend == "robust_pda":
-            return RobustPDAHypothesiser(
-                predictor,
-                updater,
-                params.clutter_density,
-                prob_gate=params.prob_gate,
-                prob_detect=params.prob_detect,
-            )
-        raise ValueError(
-            "Unsupported TOMHTParams.hypothesis_backend="
-            f"{params.hypothesis_backend!r}. Expected one of: 'pda', 'robust_pda'."
-        )
+        return hypothesiser
 
     @staticmethod
     def _apply_params_overrides(
@@ -1169,25 +1046,49 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # Local Expansion and Simple Lifecycle
     # =========================================================================
 
-    def _candidate_from_hypothesis(
+    @staticmethod
+    def _validate_distance_hypothesis(
+        hyp: SingleHypothesis,
+    ) -> SingleDistanceHypothesis:
+        """Validate one local distance hypothesis from the configured hypothesiser."""
+        if not isinstance(hyp, SingleDistanceHypothesis):
+            raise TypeError(
+                "Distance hypothesiser must yield SingleDistanceHypothesis items."
+            )
+        if not isinstance(hyp.measurement, (Detection, MissedDetection)):
+            raise TypeError(
+                "Distance hypothesis measurement must be Detection or MissedDetection."
+            )
+        if not np.isfinite(float(hyp.distance)):
+            raise ValueError("Distance hypothesis distance must be finite.")
+        return hyp
+
+    def _candidate_from_distance_hypothesis(
         self,
         *,
         leaf_node: TrackHypothesisNode,
-        hypothesis: Any,
-        ctx: ScanContext,
+        hypothesis: SingleDistanceHypothesis,
         log_delta: float,
+        ctx: ScanContext,
     ) -> LocalChildCandidate:
-        """Map one Stone Soup hypothesis to one child node candidate."""
-        if not hypothesis:
-            state = getattr(hypothesis, "prediction")
+        """Map one distance hypothesis to one child node candidate."""
+        if isinstance(hypothesis.measurement, MissedDetection):
+            state = hypothesis.prediction
             used_det_key = None
             assoc_label = TOMHTTracker.ASSOC_MISS
             state_kind = "prediction"
             missed_count = int(leaf_node.missed_count) + 1
             last_det_key = leaf_node.last_det_key
         else:
-            state = self.updater.update(hypothesis)
-            det_index = int(ctx.det_index_by_obj[id(hypothesis.measurement)])
+            detection = hypothesis.measurement
+            det_index_raw = ctx.det_index_by_obj.get(id(detection))
+            if det_index_raw is None:
+                raise ValueError(
+                    "Distance detection hypothesis must reference one of the "
+                    "input detection objects for this scan."
+                )
+            det_index = int(det_index_raw)
+            state = self._updater.update(hypothesis)
             used_det_key = (ctx.scan_index, det_index)
             assoc_label = det_index
             state_kind = "update"
@@ -1226,52 +1127,69 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> list[LocalChildCandidate]:
         """Build retained local continuation candidates for one active leaf."""
         track = reconstruct_track_from_leaf_node(leaf_node)
-        hypothesise = getattr(self.hypothesis_generator, "hypothesise")
-        multi_hypotheses = hypothesise(track, ctx.detections, ctx.timestamp)
-        hypotheses = list(multi_hypotheses)
-
-        hyp_scores = self.scoring_model.score_track_hypotheses(
-            track=track,
+        raw_hypotheses = self._hypothesiser.hypothesise(
+            track, ctx.detections, ctx.timestamp
+        )
+        if not isinstance(raw_hypotheses, MultipleHypothesis):
+            raise TypeError(
+                "Distance hypothesiser must return stonesoup MultipleHypothesis."
+            )
+        hypotheses = [
+            self._validate_distance_hypothesis(hyp)
+            for hyp in raw_hypotheses.single_hypotheses
+        ]
+        local_log_deltas = self.scoring_model.score_track_hypotheses(
             hypotheses=hypotheses,
             ctx=ctx,
         )
+        if len(local_log_deltas) != len(hypotheses):
+            raise RuntimeError(
+                "score_track_hypotheses must return one score per hypothesis."
+            )
+        if any(not np.isfinite(float(score)) for score in local_log_deltas):
+            raise ValueError("score_track_hypotheses produced a non-finite score.")
 
-        def _score_for_sort(hyp) -> float:
-            score = hyp_scores.get(id(hyp))
-            if score is not None:
-                return float(score)
-            p = getattr(hyp, "probability", None)
-            if p is not None:
-                try:
-                    return float(p)
-                except Exception:
-                    return 0.0
-            w = getattr(hyp, "weight", 0.0)
-            try:
-                return float(w)
-            except Exception:
-                return 0.0
+        miss_hypotheses = [
+            hyp for hyp in hypotheses if isinstance(hyp.measurement, MissedDetection)
+        ]
+        if len(miss_hypotheses) != 1:
+            raise ValueError(
+                "Distance hypothesiser must return exactly one missed-detection "
+                "SingleDistanceHypothesis."
+            )
 
-        def _sort_key(hyp) -> tuple[float, int]:
-            p = _score_for_sort(hyp)
-            if not hyp:
-                return (p, -1)
-            return (p, -ctx.det_index_by_obj.get(id(hyp.measurement), 10**9))
+        scored_rows = list(enumerate(zip(hypotheses, local_log_deltas)))
+        miss_row_index = next(
+            row_index
+            for row_index, (hyp, _) in scored_rows
+            if isinstance(hyp.measurement, MissedDetection)
+        )
 
-        sorted_hypotheses = sorted(hypotheses, key=_sort_key, reverse=True)
-        kept = sorted_hypotheses[: self.params.max_children_per_track]
-        miss = next((h for h in sorted_hypotheses if not h), None)
-        if miss is not None and miss not in kept:
-            kept.append(miss)
+        def _sort_key(
+            row: tuple[int, tuple[SingleDistanceHypothesis, float]],
+        ) -> tuple[float, int]:
+            _, (hyp, score) = row
+            if isinstance(hyp.measurement, MissedDetection):
+                return (float(score), -1)
+            return (
+                float(score),
+                -ctx.det_index_by_obj.get(id(hyp.measurement), 10**9),
+            )
+
+        sorted_rows = sorted(scored_rows, key=_sort_key, reverse=True)
+        kept_rows = sorted_rows[: self.params.max_children_per_track]
+        kept_row_indices = {row_index for row_index, _ in kept_rows}
+        if miss_row_index not in kept_row_indices:
+            kept_rows.append(scored_rows[miss_row_index])
 
         out = [
-            self._candidate_from_hypothesis(
+            self._candidate_from_distance_hypothesis(
                 leaf_node=leaf_node,
                 hypothesis=hyp,
+                log_delta=float(log_delta),
                 ctx=ctx,
-                log_delta=float(hyp_scores.get(id(hyp), 0.0)),
             )
-            for hyp in kept
+            for _, (hyp, log_delta) in kept_rows
         ]
         out.sort(key=lambda c: c.log_delta, reverse=True)
         return out
