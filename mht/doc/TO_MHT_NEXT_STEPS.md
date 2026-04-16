@@ -1,25 +1,30 @@
 # TO-MHT Next Steps
 
-## Update (2026-04-16): conservative local NLL optimization pass implemented
+## Update (2026-04-16): Cholesky local-association math pass implemented
 
 - Implemented in `TrackerOwnedNLLDistanceHypothesiser`:
   - conservative rectangular pre-gating from raw covariance diagonal before
     full Mahalanobis/NLL work,
   - one-entry exact-equality covariance-prep reuse (`np.array_equal(...)`) with
-    prepared `logdet` reuse in the NLL path,
+    prepared SPD covariance reuse in the NLL path,
+  - prepared covariance payload now includes Cholesky factor `L`, with
+    `logdet = 2 * sum(log(diag(L)))`,
+  - full Mahalanobis/NLL path now uses triangular solve (`L y = x`,
+    `d2 = y^T y`) rather than direct solve on full covariance,
   - scan-time prediction reuse when `detection_timestamp == timestamp`,
   - one-entry measurement-prediction reuse when both `prediction` and
     `measurement_model` match by object identity (`is`).
 - Kept unchanged in this pass:
   - full Mahalanobis-threshold gate remains authoritative,
-  - Mahalanobis/NLL math path and scoring semantics remain unchanged,
-  - no Cholesky-based distance/logdet switch yet.
+  - rectangular pre-gating semantics remain unchanged,
+  - miss handling and scoring semantics remain unchanged.
 - Validation:
+  - `pytest mht/tests/test_tomht_hypothesiser.py` passed,
   - `make smoke_compare` exact normalized match,
-  - `make replay_compare` exact normalized match.
+  - `make replay_compare` exact normalized match,
+  - `python pre_commit.py --no-dirty` passed.
 - Timing snapshots (`make smoke_compare_timing`, `make replay_compare_timing`)
-  show reduced `expand_ms`; the dedicated Cholesky math-kernel optimization
-  remains a separate next step.
+  showed lower `expand_ms` in both smoke scenarios and standard replay.
 
 ## Update (2026-04-16): baseline-quality concerns logged
 

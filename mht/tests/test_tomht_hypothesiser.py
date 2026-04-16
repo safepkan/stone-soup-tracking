@@ -98,13 +98,17 @@ class TOMHTHypothesiserMathHelpersTest(unittest.TestCase):
         self.assertEqual([timestamp], predictor.calls)
         self.assertEqual(1, updater.calls)
 
-    def test_prepare_innovation_covariance_includes_logdet(self) -> None:
+    def test_prepare_innovation_covariance_includes_cholesky_and_logdet(self) -> None:
         covariance = np.array([[2.0, 0.3], [0.3, 1.0]], dtype=float)
         prepared = TrackerOwnedNLLDistanceHypothesiser._prepare_innovation_covariance(
             covariance
         )
-        expected_logdet = float(np.linalg.slogdet(prepared.covariance_spd)[1])
+        expected_logdet = 2.0 * float(np.sum(np.log(np.diag(prepared.cholesky_factor))))
         self.assertAlmostEqual(expected_logdet, prepared.logdet)
+        np.testing.assert_allclose(
+            prepared.cholesky_factor @ prepared.cholesky_factor.T,
+            prepared.covariance_spd,
+        )
 
     def test_rectangular_pre_gate_from_covariance_uses_raw_diagonal(self) -> None:
         covariance = np.array([[4.0, 100.0], [100.0, 3.0]], dtype=float)
@@ -173,6 +177,34 @@ class TOMHTHypothesiserMathHelpersTest(unittest.TestCase):
                     gate_threshold_squared,
                 )
             )
+
+    def test_log_likelihood_and_gate_distance_matches_full_solve(self) -> None:
+        covariance = np.array([[2.0, 1.2], [1.2, 1.5]], dtype=float)
+        innovation = np.array([0.7, -0.3], dtype=float)
+        prepared = TrackerOwnedNLLDistanceHypothesiser._prepare_innovation_covariance(
+            covariance
+        )
+
+        log_likelihood, gate_distance_squared = (
+            TrackerOwnedNLLDistanceHypothesiser._log_likelihood_and_gate_distance(
+                innovation, prepared
+            )
+        )
+
+        innovation_col = innovation.reshape(-1, 1)
+        full_solve = np.linalg.solve(prepared.covariance_spd, innovation_col)
+        expected_gate_distance_squared = float(
+            (innovation_col.T @ full_solve).reshape(())
+        )
+        self.assertAlmostEqual(expected_gate_distance_squared, gate_distance_squared)
+
+        ndim = innovation_col.shape[0]
+        expected_log_likelihood = -0.5 * (
+            ndim * np.log(2.0 * np.pi)
+            + prepared.logdet
+            + expected_gate_distance_squared
+        )
+        self.assertAlmostEqual(expected_log_likelihood, log_likelihood)
 
     def test_covariance_prep_cache_reuses_only_exact_equal_input(self) -> None:
         hypothesiser = cast(

@@ -24,6 +24,7 @@ class _PreparedCovariance:
     covariance_spd: np.ndarray
     diagonal: np.ndarray
     logdet: float
+    cholesky_factor: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -222,12 +223,12 @@ class TrackerOwnedNLLDistanceHypothesiser(Hypothesiser):
         covariance: np.ndarray,
         relative_eigenvalue_floor: float = 1e-9,
     ) -> _PreparedCovariance:
-        """Return SPD covariance prep bundle (matrix, diagonal, and logdet)."""
+        """Return SPD covariance prep bundle with Cholesky-ready quantities."""
         if relative_eigenvalue_floor <= 0.0:
             raise ValueError("relative_eigenvalue_floor must be > 0.")
         covariance = 0.5 * (covariance + covariance.T)
         try:
-            np.linalg.cholesky(covariance)
+            cholesky_factor = np.linalg.cholesky(covariance)
             covariance_spd = covariance
         except np.linalg.LinAlgError:
             eigenvalues, eigenvectors = np.linalg.eigh(covariance)
@@ -245,11 +246,16 @@ class TrackerOwnedNLLDistanceHypothesiser(Hypothesiser):
             eigenvalue_floor = relative_eigenvalue_floor * covariance_scale
             floored = np.maximum(eigenvalues, eigenvalue_floor)
             covariance_spd = (eigenvectors * floored) @ eigenvectors.T
+            cholesky_factor = np.linalg.cholesky(covariance_spd)
+
+        # For SPD covariance S = L L^T, log |S| = 2 * sum(log(diag(L))).
+        logdet = 2.0 * float(np.sum(np.log(np.diag(cholesky_factor))))
 
         return _PreparedCovariance(
             covariance_spd=covariance_spd,
             diagonal=np.diag(covariance_spd).astype(float, copy=False),
-            logdet=float(np.linalg.slogdet(covariance_spd)[1]),
+            logdet=logdet,
+            cholesky_factor=cholesky_factor,
         )
 
     @staticmethod
@@ -259,8 +265,8 @@ class TrackerOwnedNLLDistanceHypothesiser(Hypothesiser):
     ) -> tuple[float, float]:
         """Return ``(log_likelihood, squared_mahalanobis)`` from prepared covariance."""
         innovation_col = innovation.reshape(-1, 1)
-        solved = np.linalg.solve(prepared_covariance.covariance_spd, innovation_col)
-        squared_mahalanobis = float((innovation_col.T @ solved).reshape(()))
+        whitened = np.linalg.solve(prepared_covariance.cholesky_factor, innovation_col)
+        squared_mahalanobis = float(np.linalg.norm(whitened) ** 2)
         ndim = int(innovation_col.shape[0])
         log_likelihood = -0.5 * (
             ndim * log(2.0 * pi) + prepared_covariance.logdet + squared_mahalanobis

@@ -1,6 +1,6 @@
 # TO-MHT Current State
 
-## Update (2026-04-16): conservative NLL hypothesiser optimization pass
+## Update (2026-04-16): Cholesky local-association math pass
 
 - `TrackerOwnedNLLDistanceHypothesiser` now applies a conservative rectangular
   pre-gate before full Mahalanobis/NLL evaluation:
@@ -11,7 +11,11 @@
 - Covariance-side preparation in the local NLL/gating path now uses a
   one-entry exact-equality cache per `hypothesise(...)` call:
   - reuse only when `np.array_equal(...)` is true for the covariance input,
-  - prepared payload now includes SPD covariance, diagonal, and `logdet`,
+  - prepared payload now includes SPD covariance, diagonal, Cholesky factor
+    `L`, and `logdet`,
+  - `logdet` is computed from Cholesky (`2 * sum(log(diag(L)))`),
+  - full Mahalanobis/NLL now uses triangular solve on `L` (`L y = x`,
+    `d2 = y^T y`) rather than a direct solve on full covariance,
   - no approximate-equality reuse.
 - Scan-time prediction reuse is now explicit in local expansion:
   - when `detection_timestamp == timestamp`, detection-hypothesis prediction
@@ -26,8 +30,7 @@
   - `make replay_compare` matched baseline exactly (normalized logs).
 - Timing status from comparison helpers:
   - `expand_ms` decreased in both smoke scenarios and in standard replay,
-  - no local-association math-kernel change was made yet (Cholesky-based
-    solve/logdet remains a deferred follow-up step).
+  - this pass implements the local-association math-kernel change via Cholesky.
 
 ## Update (2026-04-16): current output-quality note before baseline refresh
 
