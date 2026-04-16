@@ -1,5 +1,16 @@
 # TO-MHT Next Steps
 
+## Update (2026-04-16): baseline-quality concerns logged
+
+- Logged for dedicated follow-up quality pass:
+  - false starts are still somewhat high in smoke/scenario output,
+  - replay can show somewhat more target swapping / track jumping.
+- Planned near-term sequencing:
+  1. refresh smoke/replay baselines to current intended behavior,
+  2. proceed with expansion-path optimization work (including rectangular
+     pre-gating),
+  3. run a focused output-quality review/tuning pass.
+
 ## Update (2026-04-16): baseline cleanup around scoring/replay overrides
 
 - Implemented: stale replay override templates for removed `hypothesis_backend`

@@ -188,6 +188,23 @@ def _parse_numeric_fields(line: str) -> dict[str, float]:
 
 
 def _build_timing_summary_from_scan_lines(lines: list[str]) -> list[str]:
+    def _percentile(values: list[float], quantile: float) -> float:
+        if not values:
+            return 0.0
+        sorted_values = sorted(values)
+        if quantile <= 0.0:
+            return sorted_values[0]
+        if quantile >= 1.0:
+            return sorted_values[-1]
+        rank = (len(sorted_values) - 1) * quantile
+        lower_idx = int(rank)
+        upper_idx = min(lower_idx + 1, len(sorted_values) - 1)
+        fraction = rank - float(lower_idx)
+        return (
+            sorted_values[lower_idx] * (1.0 - fraction)
+            + sorted_values[upper_idx] * fraction
+        )
+
     wall_ms_samples: list[float] = []
     phase_samples_by_key: dict[str, list[float]] = {}
     node_samples: list[float] = []
@@ -226,6 +243,10 @@ def _build_timing_summary_from_scan_lines(lines: list[str]) -> list[str]:
             f"scan_wall_ms count={len(wall_ms_samples)} "
             f"med={statistics.median(wall_ms_samples):.3f} "
             f"mean={statistics.mean(wall_ms_samples):.3f} "
+            f"p65={_percentile(wall_ms_samples, 0.65):.3f} "
+            f"p80={_percentile(wall_ms_samples, 0.80):.3f} "
+            f"p90={_percentile(wall_ms_samples, 0.90):.3f} "
+            f"p95={_percentile(wall_ms_samples, 0.95):.3f} "
             f"max={max(wall_ms_samples):.3f}"
         )
     for phase_key in phase_samples_by_key:
@@ -234,6 +255,10 @@ def _build_timing_summary_from_scan_lines(lines: list[str]) -> list[str]:
             "SUMMARY_FROM_SCANS timing_phase "
             f"{phase_key} count={len(samples)} "
             f"med={statistics.median(samples):.3f} "
+            f"p65={_percentile(samples, 0.65):.3f} "
+            f"p80={_percentile(samples, 0.80):.3f} "
+            f"p90={_percentile(samples, 0.90):.3f} "
+            f"p95={_percentile(samples, 0.95):.3f} "
             f"max={max(samples):.3f}"
         )
     if node_samples or maxrss_samples:

@@ -1,5 +1,16 @@
 # TO-MHT Current State
 
+## Update (2026-04-16): current output-quality note before baseline refresh
+
+- Smoke/scenario behavior remains somewhat noisy, with false track starts still
+  higher than desired.
+- Recorded-data replay remains broadly reasonable after the latest scoring/local
+  association changes, but shows somewhat more target swapping / track jumping
+  in some segments.
+- These are now treated as known baseline-quality concerns to inspect more
+  closely in a dedicated follow-up pass; they are not considered blockers for
+  proceeding with the next expansion-path optimization step.
+
 ## Update (2026-04-16): explicit NLL-to-LLR local scoring
 
 - Local track-hypothesis scoring is now explicit in `NLLScoringModel` via:

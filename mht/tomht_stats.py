@@ -187,6 +187,24 @@ def print_summary_stats(
             return 0.0
         return float(sum(values)) / float(len(values))
 
+    def _percentile(values: list[int] | list[float], quantile: float) -> float:
+        """Linear-interpolated percentile in [0.0, 1.0]."""
+        if not values:
+            return 0.0
+        sorted_values = sorted(float(value) for value in values)
+        if quantile <= 0.0:
+            return sorted_values[0]
+        if quantile >= 1.0:
+            return sorted_values[-1]
+        rank = (len(sorted_values) - 1) * quantile
+        lower_idx = int(rank)
+        upper_idx = min(lower_idx + 1, len(sorted_values) - 1)
+        fraction = rank - float(lower_idx)
+        return (
+            sorted_values[lower_idx] * (1.0 - fraction)
+            + sorted_values[upper_idx] * fraction
+        )
+
     trees = [s.active_trees for s in stats]
     leaves = [s.active_leaves for s in stats]
     clusters = [s.cluster_count for s in stats]
@@ -277,24 +295,28 @@ def print_summary_stats(
         "SUMMARY timing "
         f"scan_wall_ms med={median(scan_wall_ms):.1f} "
         f"mean={_mean(scan_wall_ms):.1f} "
+        f"p65={_percentile(scan_wall_ms, 0.65):.1f} "
+        f"p80={_percentile(scan_wall_ms, 0.80):.1f} "
+        f"p90={_percentile(scan_wall_ms, 0.90):.1f} "
+        f"p95={_percentile(scan_wall_ms, 0.95):.1f} "
         f"max={max(scan_wall_ms):.1f}"
     )
     print(
         "SUMMARY timing_phases "
-        f"prep_ctx_ms med={median(prep_ctx_ms):.1f} max={max(prep_ctx_ms):.1f} "
+        f"prep_ctx_ms med={median(prep_ctx_ms):.1f} p65={_percentile(prep_ctx_ms, 0.65):.1f} p80={_percentile(prep_ctx_ms, 0.80):.1f} p90={_percentile(prep_ctx_ms, 0.90):.1f} p95={_percentile(prep_ctx_ms, 0.95):.1f} max={max(prep_ctx_ms):.1f} "
         "pre_expand_validate_ms "
-        f"med={median(pre_expand_validate_ms):.1f} max={max(pre_expand_validate_ms):.1f} "
-        f"expand_ms med={median(expand_ms):.1f} max={max(expand_ms):.1f} "
+        f"med={median(pre_expand_validate_ms):.1f} p65={_percentile(pre_expand_validate_ms, 0.65):.1f} p80={_percentile(pre_expand_validate_ms, 0.80):.1f} p90={_percentile(pre_expand_validate_ms, 0.90):.1f} p95={_percentile(pre_expand_validate_ms, 0.95):.1f} max={max(pre_expand_validate_ms):.1f} "
+        f"expand_ms med={median(expand_ms):.1f} p65={_percentile(expand_ms, 0.65):.1f} p80={_percentile(expand_ms, 0.80):.1f} p90={_percentile(expand_ms, 0.90):.1f} p95={_percentile(expand_ms, 0.95):.1f} max={max(expand_ms):.1f} "
         "post_expand_prune_validate_ms "
-        f"med={median(post_expand_prune_validate_ms):.1f} max={max(post_expand_prune_validate_ms):.1f} "
-        f"births_ms med={median(births_ms):.1f} max={max(births_ms):.1f} "
+        f"med={median(post_expand_prune_validate_ms):.1f} p65={_percentile(post_expand_prune_validate_ms, 0.65):.1f} p80={_percentile(post_expand_prune_validate_ms, 0.80):.1f} p90={_percentile(post_expand_prune_validate_ms, 0.90):.1f} p95={_percentile(post_expand_prune_validate_ms, 0.95):.1f} max={max(post_expand_prune_validate_ms):.1f} "
+        f"births_ms med={median(births_ms):.1f} p65={_percentile(births_ms, 0.65):.1f} p80={_percentile(births_ms, 0.80):.1f} p90={_percentile(births_ms, 0.90):.1f} p95={_percentile(births_ms, 0.95):.1f} max={max(births_ms):.1f} "
         "cluster_build_solve_ms "
-        f"med={median(cluster_build_and_solve_ms):.1f} max={max(cluster_build_and_solve_ms):.1f} "
-        f"post_solve_prune_ms med={median(post_solve_prune_ms):.1f} max={max(post_solve_prune_ms):.1f} "
-        f"map_merge_ms med={median(map_merge_ms):.1f} max={max(map_merge_ms):.1f} "
-        f"nscan_lifecycle_ms med={median(nscan_lifecycle_ms):.1f} max={max(nscan_lifecycle_ms):.1f} "
-        f"cleanup_ms med={median(cleanup_ms):.1f} max={max(cleanup_ms):.1f} "
-        f"other_ms med={median(other_ms):.1f} max={max(other_ms):.1f}"
+        f"med={median(cluster_build_and_solve_ms):.1f} p65={_percentile(cluster_build_and_solve_ms, 0.65):.1f} p80={_percentile(cluster_build_and_solve_ms, 0.80):.1f} p90={_percentile(cluster_build_and_solve_ms, 0.90):.1f} p95={_percentile(cluster_build_and_solve_ms, 0.95):.1f} max={max(cluster_build_and_solve_ms):.1f} "
+        f"post_solve_prune_ms med={median(post_solve_prune_ms):.1f} p65={_percentile(post_solve_prune_ms, 0.65):.1f} p80={_percentile(post_solve_prune_ms, 0.80):.1f} p90={_percentile(post_solve_prune_ms, 0.90):.1f} p95={_percentile(post_solve_prune_ms, 0.95):.1f} max={max(post_solve_prune_ms):.1f} "
+        f"map_merge_ms med={median(map_merge_ms):.1f} p65={_percentile(map_merge_ms, 0.65):.1f} p80={_percentile(map_merge_ms, 0.80):.1f} p90={_percentile(map_merge_ms, 0.90):.1f} p95={_percentile(map_merge_ms, 0.95):.1f} max={max(map_merge_ms):.1f} "
+        f"nscan_lifecycle_ms med={median(nscan_lifecycle_ms):.1f} p65={_percentile(nscan_lifecycle_ms, 0.65):.1f} p80={_percentile(nscan_lifecycle_ms, 0.80):.1f} p90={_percentile(nscan_lifecycle_ms, 0.90):.1f} p95={_percentile(nscan_lifecycle_ms, 0.95):.1f} max={max(nscan_lifecycle_ms):.1f} "
+        f"cleanup_ms med={median(cleanup_ms):.1f} p65={_percentile(cleanup_ms, 0.65):.1f} p80={_percentile(cleanup_ms, 0.80):.1f} p90={_percentile(cleanup_ms, 0.90):.1f} p95={_percentile(cleanup_ms, 0.95):.1f} max={max(cleanup_ms):.1f} "
+        f"other_ms med={median(other_ms):.1f} p65={_percentile(other_ms, 0.65):.1f} p80={_percentile(other_ms, 0.80):.1f} p90={_percentile(other_ms, 0.90):.1f} p95={_percentile(other_ms, 0.95):.1f} max={max(other_ms):.1f}"
     )
     print(
         "SUMMARY memory "
