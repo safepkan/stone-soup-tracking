@@ -1,5 +1,34 @@
 # TO-MHT Current State
 
+## Update (2026-04-16): conservative NLL hypothesiser optimization pass
+
+- `TrackerOwnedNLLDistanceHypothesiser` now applies a conservative rectangular
+  pre-gate before full Mahalanobis/NLL evaluation:
+  - per-axis check uses `innovation_k^2 <= gamma * S_kk`,
+    with `gamma = mahalanobis_gate_threshold^2` and `S_kk` from the raw
+    innovation covariance diagonal,
+  - full Mahalanobis thresholding remains the authoritative gate.
+- Covariance-side preparation in the local NLL/gating path now uses a
+  one-entry exact-equality cache per `hypothesise(...)` call:
+  - reuse only when `np.array_equal(...)` is true for the covariance input,
+  - prepared payload now includes SPD covariance, diagonal, and `logdet`,
+  - no approximate-equality reuse.
+- Scan-time prediction reuse is now explicit in local expansion:
+  - when `detection_timestamp == timestamp`, detection-hypothesis prediction
+    reuses the already computed scan-time prediction instead of re-calling the
+    predictor.
+- One-entry measurement-prediction reuse is now applied conservatively:
+  - if both `prediction` object and `measurement_model` object are the same as
+    the previous detection (`is` identity check), local expansion reuses the
+    previous `measurement_prediction`.
+- Regression status:
+  - `make smoke_compare` matched baseline exactly (normalized logs),
+  - `make replay_compare` matched baseline exactly (normalized logs).
+- Timing status from comparison helpers:
+  - `expand_ms` decreased in both smoke scenarios and in standard replay,
+  - no local-association math-kernel change was made yet (Cholesky-based
+    solve/logdet remains a deferred follow-up step).
+
 ## Update (2026-04-16): current output-quality note before baseline refresh
 
 - Smoke/scenario behavior remains somewhat noisy, with false track starts still
