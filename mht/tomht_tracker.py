@@ -3284,8 +3284,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             split_from = snapshot.overload_split_origin_cluster_id
             split_tag = "" if split_from is None else f" split_from={split_from}"
             print(
-                f"cluster={snapshot.cluster_id} tracks={list(snapshot.track_ids)} "
-                f"{split_tag}"
+                f"cluster={snapshot.cluster_id} tracks={list(snapshot.track_ids)}{split_tag} "
                 f"globals={len(snapshot.rebuilt_globals)} "
                 f"comb_eval={snapshot.evaluated_combinations} "
                 f"comb_feas={snapshot.feasible_combinations} "
