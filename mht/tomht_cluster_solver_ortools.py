@@ -20,8 +20,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import math
-import os
-import resource
 import time as wall_clock
 from typing import Any
 
@@ -36,6 +34,12 @@ from .tomht_cluster_solver import (
     TopKSolutionHeap,
     score_selected_leaf_ids_if_exact_feasible,
     validate_cluster_solver_problem,
+)
+from .utils import (
+    env_flag as _env_flag,
+    env_float as _env_float,
+    get_process_maxrss_mb as _get_process_maxrss_mb,
+    ns_to_ms as _ns_to_ms,
 )
 
 
@@ -112,7 +116,7 @@ class ORToolsClusterSolver:
         self._last_profile = None
         profiling_enabled = self._profiling_enabled
         solve_start_ns = wall_clock.perf_counter_ns() if profiling_enabled else 0
-        maxrss_before_raw = _process_maxrss_raw() if profiling_enabled else 0.0
+        maxrss_before_mb = _get_process_maxrss_mb() if profiling_enabled else 0.0
 
         model_vars_and_keys_ns = 0
         model_exactly_one_ns = 0
@@ -331,7 +335,7 @@ class ORToolsClusterSolver:
                 + model_conflict_constraints_ns
                 + model_objective_ns
             )
-            maxrss_after_raw = _process_maxrss_raw()
+            maxrss_after_mb = _get_process_maxrss_mb()
             solve_call_mean_ns = (
                 int(round(solve_calls_total_ns / solves_attempted))
                 if solves_attempted > 0
@@ -365,10 +369,10 @@ class ORToolsClusterSolver:
                     "nogood_add_total": _ns_to_ms(nogood_add_ns),
                     "finalize_total": _ns_to_ms(finalize_ns),
                 },
-                "memory_maxrss_raw": {
-                    "maxrss_before": float(maxrss_before_raw),
-                    "maxrss_after": float(maxrss_after_raw),
-                    "maxrss_delta": float(maxrss_after_raw - maxrss_before_raw),
+                "memory_maxrss_mb": {
+                    "maxrss_before": float(maxrss_before_mb),
+                    "maxrss_after": float(maxrss_after_mb),
+                    "maxrss_delta": float(maxrss_after_mb - maxrss_before_mb),
                 },
             }
             self._last_profile = profile
@@ -406,28 +410,6 @@ class ORToolsClusterSolver:
         return scaled
 
 
-def _env_flag(name: str, *, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"", "0", "false", "no", "off"}:
-        return False
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    return default
-
-
-def _env_float(name: str, *, default: float) -> float:
-    value = os.getenv(name)
-    if value is None:
-        return float(default)
-    try:
-        return float(value)
-    except ValueError:
-        return float(default)
-
-
 def _cp_sat_status_name(status: int) -> str:
     if status == cp_model.OPTIMAL:
         return "OPTIMAL"
@@ -440,11 +422,3 @@ def _cp_sat_status_name(status: int) -> str:
     if status == cp_model.UNKNOWN:
         return "UNKNOWN"
     return f"STATUS_{status}"
-
-
-def _ns_to_ms(ns: int) -> float:
-    return float(ns) / 1_000_000.0
-
-
-def _process_maxrss_raw() -> float:
-    return float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)

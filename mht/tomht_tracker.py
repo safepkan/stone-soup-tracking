@@ -30,7 +30,6 @@ from __future__ import annotations
 from dataclasses import dataclass, fields, replace
 import datetime
 import os
-import resource
 import sys
 import time as wall_clock
 from itertools import product
@@ -93,6 +92,7 @@ from .tomht_stats import (
     print_scan_stats as print_scan_stats_report,
     print_summary_stats as print_summary_stats_report,
 )
+from .utils import get_process_maxrss_mb
 
 # ============================================================================
 # Tracker-Local Support Structures / Params
@@ -707,7 +707,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         # 8) Post-scan instrumentation.
         scan_wall_ms = (wall_clock.perf_counter_ns() - scan_wall_start_ns) / 1e6
-        maxrss_mb = self._get_process_maxrss_mb()
+        maxrss_mb = get_process_maxrss_mb()
         node_count_total = len(self._nodes_by_id)
         active_leaves = sum(
             len(tree.active_leaf_node_ids)
@@ -896,14 +896,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         det_list = list(detections)
         det_list.sort(key=self._det_sort_key)
         return det_list
-
-    @staticmethod
-    def _get_process_maxrss_mb() -> float:
-        """Return process peak RSS in MB with platform-normalized units."""
-        ru = resource.getrusage(resource.RUSAGE_SELF)
-        if sys.platform == "darwin":
-            return float(ru.ru_maxrss) / (1024.0 * 1024.0)
-        return float(ru.ru_maxrss) / 1024.0
 
     @staticmethod
     def _current_scan_det_indices_from_keys(
