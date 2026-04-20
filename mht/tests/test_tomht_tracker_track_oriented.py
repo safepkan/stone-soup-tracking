@@ -5,12 +5,17 @@ import unittest
 from typing import Iterable, cast
 
 import numpy as np
+from stonesoup.base import Property
+from stonesoup.deleter.base import Deleter
+from stonesoup.deleter.error import CovarianceBasedDeleter
+from stonesoup.deleter.time import UpdateTimeDeleter, UpdateTimeStepsDeleter
 from stonesoup.initiator.simple import SimpleMeasurementInitiator
 from stonesoup.types.detection import Detection, MissedDetection
 from stonesoup.types.hypothesis import SingleDistanceHypothesis
 from stonesoup.types.multihypothesis import MultipleHypothesis
 from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
+from stonesoup.types.update import Update
 
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
 
@@ -69,6 +74,50 @@ class _ScriptedHypothesiser:
         return MultipleHypothesis(out, normalise=False)
 
 
+class _ScriptedPredictingHypothesiser(_ScriptedHypothesiser):
+    """Scripted hypotheses that build fresh per-scan prediction states."""
+
+    def hypothesise(
+        self,
+        track: Track,
+        detections: Iterable[Detection],
+        timestamp: datetime.datetime,
+        **kwargs,
+    ) -> MultipleHypothesis:
+        del kwargs
+        detections_list = list(detections)
+        track_id = int(track.metadata["track_id"])
+        options = self._script.get((timestamp, track_id), [(None, 0.0)])
+        prior = track.states[-1]
+        prediction = GaussianState(
+            state_vector=np.asarray(prior.state_vector, dtype=float).copy(),
+            covar=np.asarray(prior.covar, dtype=float).copy(),
+            timestamp=timestamp,
+        )
+
+        out: list[SingleDistanceHypothesis] = []
+        for det_index, log_delta in options:
+            if det_index is None:
+                out.append(
+                    SingleDistanceHypothesis(
+                        prediction=prediction,
+                        measurement=MissedDetection(timestamp=timestamp),
+                        distance=-float(log_delta),
+                    )
+                )
+                continue
+
+            detection = detections_list[int(det_index)]
+            out.append(
+                SingleDistanceHypothesis(
+                    prediction=prediction,
+                    measurement=detection,
+                    distance=-float(log_delta),
+                )
+            )
+        return MultipleHypothesis(out, normalise=False)
+
+
 class _NoopPredictor:
     def predict(self, prior, timestamp=None, **kwargs):
         del prior, timestamp, kwargs
@@ -87,6 +136,25 @@ class _ScriptedUpdater:
         if timestamp is None:
             raise RuntimeError("Timestamp required for scripted updater.")
         return _state_from_detection(measurement, timestamp)
+
+
+class _ScriptedUpdaterWithUpdateStates(_ScriptedUpdater):
+    def update(self, hypothesis):
+        measurement = getattr(hypothesis, "measurement", None)
+        if not isinstance(measurement, Detection):
+            raise RuntimeError("Detection-associated update expected.")
+        timestamp = measurement.timestamp
+        if timestamp is None:
+            prediction = getattr(hypothesis, "prediction", None)
+            timestamp = getattr(prediction, "timestamp", None)
+        if timestamp is None:
+            raise RuntimeError("Timestamp required for scripted updater.")
+        posterior_state = _state_from_detection(measurement, timestamp)
+        return Update.from_state(
+            posterior_state,
+            hypothesis=hypothesis,
+            timestamp=timestamp,
+        )
 
 
 class _ManualScoringModel:
@@ -117,6 +185,17 @@ class _CaptureInitiator:
         del timestamp
         self.last_received = list(detections)
         return list(self._born)
+
+
+class _MetadataMissCountDeleter(Deleter):
+    threshold: int = Property(
+        default=1, doc="Delete when metadata missed_count >= threshold."
+    )
+
+    def check_for_deletion(self, track: Track, **kwargs) -> bool:
+        del kwargs
+        misses = int(track.metadata.get("missed_count", 0))
+        return misses >= int(self.threshold)
 
 
 def _state(x: float, timestamp: datetime.datetime) -> GaussianState:
@@ -153,6 +232,7 @@ def _build_tracker(
     hypothesiser: _ScriptedHypothesiser,
     updater: _ScriptedUpdater,
     initiator: SimpleMeasurementInitiator | None = None,
+    deleter: Deleter | None = None,
     params: TOMHTParams | None = None,
 ) -> TOMHTTracker:
     if params is None:
@@ -166,6 +246,7 @@ def _build_tracker(
         hypothesiser=hypothesiser,
         updater=updater,
         initiator=initiator,
+        deleter=deleter,
         params=params,
         scoring_model=_ManualScoringModel(per_unused_penalty=0.5),
     )
@@ -251,6 +332,168 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
 
         tracker.update_tracker(t1, [])
 
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertEqual(set(), tracker.tracks)
+
+    def test_configured_deleter_lane_overrides_native_max_missed_policy(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            deleter=_MetadataMissCountDeleter(threshold=99),
+            params=TOMHTParams(
+                max_missed=0,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        hypothesiser.set_options(timestamp=t1, track_id=0, options=[(None, 0.0)])
+
+        tracker.update_tracker(t1, [])
+
+        self.assertIn(0, tracker.track_trees_by_track_id)
+        leaf_id = next(iter(tracker.track_trees_by_track_id[0].active_leaf_node_ids))
+        self.assertEqual(1, tracker._nodes_by_id[leaf_id].missed_count)
+
+    def test_configured_deleter_lane_can_delete_tracks(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            deleter=_MetadataMissCountDeleter(threshold=1),
+            params=TOMHTParams(
+                max_missed=999,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        hypothesiser.set_options(timestamp=t1, track_id=0, options=[(None, 0.0)])
+
+        tracker.update_tracker(t1, [])
+
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertEqual(set(), tracker.tracks)
+
+    def test_builtin_covariance_based_deleter_deletes_track(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            deleter=CovarianceBasedDeleter(covar_trace_thresh=0.1),
+            params=TOMHTParams(
+                max_missed=999,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        hypothesiser.set_options(timestamp=t1, track_id=0, options=[(None, 0.0)])
+        tracker.update_tracker(t1, [])
+
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertEqual(set(), tracker.tracks)
+
+    def test_builtin_update_time_steps_deleter_behavior(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+        t2 = t1 + datetime.timedelta(seconds=1)
+        t3 = t2 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedPredictingHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdaterWithUpdateStates(),
+            deleter=UpdateTimeStepsDeleter(time_steps_since_update=2),
+            params=TOMHTParams(
+                max_missed=999,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+
+        hypothesiser.set_options(
+            timestamp=t1, track_id=0, options=[(0, 5.0), (None, 0.0)]
+        )
+        tracker.update_tracker(t1, [_detection(1.0, 1.0, t1)])
+        self.assertIn(0, tracker.track_trees_by_track_id)
+
+        hypothesiser.set_options(timestamp=t2, track_id=0, options=[(None, 0.0)])
+        tracker.update_tracker(t2, [])
+        self.assertIn(0, tracker.track_trees_by_track_id)
+
+        hypothesiser.set_options(timestamp=t3, track_id=0, options=[(None, 0.0)])
+        tracker.update_tracker(t3, [])
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertEqual(set(), tracker.tracks)
+
+    def test_builtin_update_time_deleter_behavior(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+        t2 = t1 + datetime.timedelta(seconds=1)
+        t3 = t2 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedPredictingHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdaterWithUpdateStates(),
+            deleter=UpdateTimeDeleter(time_since_update=datetime.timedelta(seconds=1)),
+            params=TOMHTParams(
+                max_missed=999,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+
+        hypothesiser.set_options(
+            timestamp=t1, track_id=0, options=[(0, 5.0), (None, 0.0)]
+        )
+        tracker.update_tracker(t1, [_detection(1.0, 1.0, t1)])
+        self.assertIn(0, tracker.track_trees_by_track_id)
+
+        hypothesiser.set_options(timestamp=t2, track_id=0, options=[(None, 0.0)])
+        tracker.update_tracker(t2, [])
+        self.assertIn(0, tracker.track_trees_by_track_id)
+
+        hypothesiser.set_options(timestamp=t3, track_id=0, options=[(None, 0.0)])
+        tracker.update_tracker(t3, [])
         self.assertEqual({}, tracker.track_trees_by_track_id)
         self.assertEqual(set(), tracker.tracks)
 

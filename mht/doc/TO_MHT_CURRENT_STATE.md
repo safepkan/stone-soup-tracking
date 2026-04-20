@@ -10,6 +10,7 @@ Update (2026-04-20): core TO-MHT modules now use package-relative intra-module i
 Update (2026-04-20): shared tracker/scoring context typing now starts in `mht/tomht_types.py` (`ScanContext`), reducing cross-module coupling and making room for additional shared type definitions.
 Update (2026-04-20): runtime utility helpers now live in `mht/utils.py` (`env_flag`, `env_float`, `ns_to_ms`, cross-platform `get_process_maxrss_mb`) and are reused by tracker and OR-Tools profiling paths.
 Update (2026-04-20): TOMHT output `Track.id` is now stable by default (internal integer track ID instead of Stone Soup auto-UUID), and constructor injection (`output_track_id_mapper`) allows mapping internal integer IDs to integration-specific public ID objects while keeping TOMHT internals dependency-free.
+Update (2026-04-20): post-N-scan whole-track lifecycle now has two lanes: default node-native miss-threshold policy (`max_missed`) and optional injected Stone Soup `Deleter` policy (`deleter=` in tracker constructor). `track_miss_termination_mode` remains the leaf-selection mode for either lane.
 
 ---
 
@@ -161,7 +162,7 @@ The tracker’s current runtime pipeline is:
 5. recompute clusters from current trees,
 6. rebuild feasible globals per cluster through the exact cluster-solver contract (default backend = branch-and-bound exact search), with optional overload splitting first and optional narrow historical-relaxation retry around the exact solve,
 7. post-solve prune each cluster tree frontier to leaves supported by retained rebuilt globals,
-8. merge cluster MAP selections into full-scan MAP, apply MAP-only N-scan pruning, then apply whole-track miss lifecycle,
+8. merge cluster MAP selections into full-scan MAP, apply MAP-only N-scan pruning, then apply whole-track lifecycle (node-native miss-threshold by default, optional Stone Soup deleter when configured),
 9. reclaim unreachable node storage, keep last-scan debug snapshots, and return MAP output tracks.
 
 This is the main runtime story the code now implements.

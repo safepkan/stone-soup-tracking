@@ -41,6 +41,7 @@ from ordered_set import OrderedSet
 import numpy as np
 
 from stonesoup.base import Property
+from stonesoup.deleter.base import Deleter
 from stonesoup.hypothesiser.base import Hypothesiser
 from stonesoup.initiator.base import Initiator
 from stonesoup.predictor.base import Predictor
@@ -121,10 +122,12 @@ class TOMHTParams:
     # The high default keeps this in a tractability guardrail role, not as the
     # primary pruning mechanism.
     max_leaves_per_track_tree: int | None = 500
-    # Base miss threshold used for post-N-scan whole-track termination.
+    # Base miss threshold used by node-native post-N-scan whole-track lifecycle.
     # Effective threshold uses an N-scan-aware floor (see helper below).
     max_missed: int = 5
-    # Whole-track miss termination mode applied after N-scan pruning.
+    # Whole-track candidate-leaf selection mode applied after N-scan pruning.
+    # This controls which leaves are evaluated for lifecycle termination in both
+    # lanes (node-native and optional Stone Soup deleter lane).
     # - "all_active_leaves": terminate only if all active leaves exceed threshold
     # - "map_leaf": terminate if MAP leaf exceeds threshold
     # - "global_k_leaves": terminate if all retained rebuilt-global leaves exceed
@@ -327,7 +330,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     7. Post-solve prune each cluster tree frontier to leaves supported by at
        least one retained rebuilt top-K global for that cluster.
     8. Merge cluster MAP selections into full-scan MAP, then apply MAP-only
-       N-scan tree pruning and whole-track miss-based lifecycle.
+       N-scan tree pruning and whole-track lifecycle (node-native miss policy
+       by default, or optional Stone Soup deleter when configured).
     9. Keep last-scan debug snapshots and return MAP output tracks.
 
     Behavior notes for readability:
@@ -385,6 +389,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     _committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
     _updater: Updater
     _hypothesiser: Hypothesiser
+    _deleter: Deleter | None
     _output_track_id_mapper: Callable[[int], object]
 
     # =========================================================================
@@ -399,6 +404,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         *,
         detector: Any | None = None,
         initiator: Initiator | None = None,
+        deleter: Deleter | None = None,
         params: TOMHTParams = TOMHTParams(),
         params_overrides: Mapping[str, Any] | None = None,
         scoring_model: ScoringModel | None = None,
@@ -425,6 +431,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             Optional detector used when iterating over the tracker.
         initiator : Initiator | None
             Optional initiator for internal birth track creation.
+        deleter : Deleter | None
+            Optional Stone Soup deleter used for post-N-scan whole-track
+            termination decisions. When provided, deleter-based lifecycle
+            supersedes node-native miss-threshold lifecycle.
         params : TOMHTParams
             Tracker configuration.
         params_overrides : Mapping[str, Any] | None
@@ -451,9 +461,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._output_track_id_mapper = self._resolve_output_track_id_mapper(
             output_track_id_mapper
         )
+        if deleter is not None and not hasattr(deleter, "check_for_deletion"):
+            raise TypeError(
+                "deleter must provide check_for_deletion(track, **kwargs) when provided."
+            )
         self.detector = detector
         self.params = params
         self.initiator = initiator
+        self._deleter = deleter
         if scoring_model is None:
             scoring_model = make_default_scoring_model(
                 scoring_mode=params.scoring_mode,
@@ -699,10 +714,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
         )
-        map_global = self._apply_post_n_scan_track_miss_lifecycle(
+        map_global = self._apply_post_n_scan_track_lifecycle(
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
             scan_index=scan_index,
+            timestamp=ctx.timestamp,
         )
         self._maybe_validate_pruning_feasibility(
             stage="post_n_scan_pruning",
@@ -2841,7 +2857,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     # =========================================================================
-    # Post-N-Scan Whole-Track Miss Lifecycle
+    # Post-N-Scan Whole-Track Lifecycle
     # =========================================================================
 
     @staticmethod
@@ -2962,6 +2978,86 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         self._remove_empty_trees()
         return self._filter_map_global_to_live_trees(map_global)
+
+    def _apply_post_n_scan_track_deleter_lifecycle(
+        self,
+        *,
+        map_global: GlobalHypothesis,
+        cluster_snapshots: list[ClusterRebuildSnapshot],
+        scan_index: int,
+        timestamp: datetime.datetime,
+    ) -> GlobalHypothesis:
+        """Apply whole-track lifecycle using the configured Stone Soup deleter."""
+        del scan_index  # reserved for potential future diagnostics.
+        deleter = self._deleter
+        if deleter is None:
+            raise RuntimeError(
+                "Deleter lifecycle requested without a configured deleter."
+            )
+        mode = self._normalized_track_miss_termination_mode(
+            self.params.track_miss_termination_mode
+        )
+
+        terminated_track_ids: list[int] = []
+        for track_id, tree in sorted(self.track_trees_by_track_id.items()):
+            leaves = self._track_miss_termination_leaves(
+                track_id=track_id,
+                tree=tree,
+                mode=mode,
+                map_global=map_global,
+                cluster_snapshots=cluster_snapshots,
+            )
+            if not leaves:
+                continue
+
+            committed_states = list(tree.committed_states)
+            leaf_delete_decisions: list[bool] = []
+            for leaf in leaves:
+                candidate_track = reconstruct_track_from_committed_prefix_and_leaf_node(
+                    committed_states=committed_states,
+                    leaf_node=leaf,
+                    output_track_id_mapper=self._output_track_id_mapper,
+                )
+                should_delete = bool(
+                    deleter.check_for_deletion(candidate_track, timestamp=timestamp)
+                )
+                leaf_delete_decisions.append(should_delete)
+            if leaf_delete_decisions and all(leaf_delete_decisions):
+                terminated_track_ids.append(track_id)
+
+        if terminated_track_ids:
+            for track_id in terminated_track_ids:
+                self.track_trees_by_track_id.pop(track_id, None)
+            print(
+                "TRACK_LIFECYCLE "
+                f"lane=deleter deleter={type(deleter).__name__} "
+                f"mode={mode} terminated={terminated_track_ids}"
+            )
+
+        self._remove_empty_trees()
+        return self._filter_map_global_to_live_trees(map_global)
+
+    def _apply_post_n_scan_track_lifecycle(
+        self,
+        *,
+        map_global: GlobalHypothesis,
+        cluster_snapshots: list[ClusterRebuildSnapshot],
+        scan_index: int,
+        timestamp: datetime.datetime,
+    ) -> GlobalHypothesis:
+        """Apply post-N-scan whole-track lifecycle using the configured lane."""
+        if self._deleter is not None:
+            return self._apply_post_n_scan_track_deleter_lifecycle(
+                map_global=map_global,
+                cluster_snapshots=cluster_snapshots,
+                scan_index=scan_index,
+                timestamp=timestamp,
+            )
+        return self._apply_post_n_scan_track_miss_lifecycle(
+            map_global=map_global,
+            cluster_snapshots=cluster_snapshots,
+            scan_index=scan_index,
+        )
 
     # =========================================================================
     # Node Retention / Cleanup
