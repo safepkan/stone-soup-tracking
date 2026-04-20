@@ -1,15 +1,16 @@
 """Tracker scoring contract for TO-MHT local/global additive terms."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from math import log
-from typing import TYPE_CHECKING, Protocol, Sequence
+from typing import Protocol, Sequence
 
 from stonesoup.types.detection import MissedDetection
 from stonesoup.types.hypothesis import SingleDistanceHypothesis
 from stonesoup.types.track import Track
 
-if TYPE_CHECKING:
-    from mht.tomht_tracker import ScanContext
+from .tomht_types import ScanContext
 
 LocalDetectionIndex = int
 
@@ -19,7 +20,7 @@ class ScoringModel(Protocol):
         self,
         *,
         hypotheses: Sequence[SingleDistanceHypothesis],
-        ctx: "ScanContext",
+        ctx: ScanContext,
     ) -> list[float]:
         """Return one local log-delta per hypothesis (same order as input)."""
 
@@ -27,7 +28,7 @@ class ScoringModel(Protocol):
         self,
         *,
         used_det_keys: set[LocalDetectionIndex],
-        ctx: "ScanContext",
+        ctx: ScanContext,
     ) -> float:
         """Return a cluster-level log-delta for clutter / unused detections.
 
@@ -44,7 +45,7 @@ class ScoringModel(Protocol):
         *,
         birth_track: Track,
         used_det_key: LocalDetectionIndex | None,
-        ctx: "ScanContext",
+        ctx: ScanContext,
     ) -> float:
         """Return a log-delta to add for a birth (usually negative).
 
@@ -111,7 +112,7 @@ class NLLScoringModel:
         self,
         *,
         hypotheses: Sequence[SingleDistanceHypothesis],
-        ctx: "ScanContext",
+        ctx: ScanContext,
     ) -> list[float]:
         del ctx
         log_hit_base = self._log_hit_base()
@@ -126,7 +127,7 @@ class NLLScoringModel:
         return out
 
     def score_unused_detections(
-        self, *, used_det_keys: set[LocalDetectionIndex], ctx: "ScanContext"
+        self, *, used_det_keys: set[LocalDetectionIndex], ctx: ScanContext
     ) -> float:
         unused = len(ctx.detections) - len(used_det_keys)
         if unused <= 0:
@@ -138,7 +139,7 @@ class NLLScoringModel:
         *,
         birth_track: Track,
         used_det_key: LocalDetectionIndex | None,
-        ctx: "ScanContext",
+        ctx: ScanContext,
     ) -> float:
         del birth_track, used_det_key, ctx
         return -self.birth_log_penalty

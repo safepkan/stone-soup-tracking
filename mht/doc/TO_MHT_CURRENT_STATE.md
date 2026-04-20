@@ -6,6 +6,9 @@ This document describes the tracker as it exists after the track-oriented TO-MHT
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
+Update (2026-04-20): core TO-MHT modules now use package-relative intra-module imports (for example `.tomht_model`, `.tomht_cluster_solver`) so the tracker package can be relocated within the repo without hard-coding `mht` in internal dependencies.
+Update (2026-04-20): shared tracker/scoring context typing now starts in `mht/tomht_types.py` (`ScanContext`), reducing cross-module coupling and making room for additional shared type definitions.
+
 ---
 
 ## Bottom line

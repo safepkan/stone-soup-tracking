@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from itertools import product
 
-from mht.tomht_model import DetectionKey
+from .tomht_model import DetectionKey
 
-from mht.tomht_cluster_solver import (
+from .tomht_cluster_solver import (
     ClusterSolverDiagnostics,
     ClusterSolverProblem,
     ClusterSolverResult,

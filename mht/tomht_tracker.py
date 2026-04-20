@@ -54,7 +54,7 @@ from stonesoup.types.update import Update
 from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.updater.base import Updater
 
-from mht.tomht_cluster_solver import (
+from .tomht_cluster_solver import (
     ClusterSolver,
     ClusterSolverDiagnostics,
     ClusterSolverLeafOption,
@@ -63,8 +63,9 @@ from mht.tomht_cluster_solver import (
     ClusterSolverTrackOptions,
     missing_cluster_solver_diagnostics,
 )
-from mht.tomht_cluster_solver_exhaustive import ExhaustiveClusterSolver
-from mht.tomht_model import (
+from .tomht_cluster_solver_branch_and_bound import BranchAndBoundClusterSolver
+from .tomht_cluster_solver_exhaustive import ExhaustiveClusterSolver
+from .tomht_model import (
     ClusterRebuildSnapshot,
     DetectionKey,
     GlobalHypothesis,
@@ -73,17 +74,18 @@ from mht.tomht_model import (
     TrackHypothesisNode,
     TrackTree,
 )
-from mht.tomht_output import (
+from .tomht_output import (
     reconstruct_track_from_committed_prefix_and_leaf_node,
     reconstruct_track_from_leaf_node,
 )
-from mht.tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
-from mht.tomht_scoring import (
+from .tomht_types import ScanContext
+from .tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
+from .tomht_scoring import (
     ScoringModel,
     make_default_scoring_model,
     maybe_log_scoring_diagnostics,
 )
-from mht.tomht_stats import (
+from .tomht_stats import (
     BirthStats,
     RebuildStats,
     ScanStats,
@@ -185,16 +187,6 @@ class TOMHTParams:
     debug_births_max: int = 5
     debug_globals_max: int = 5
     collect_stats: bool = True
-
-
-@dataclass(frozen=True)
-class ScanContext:
-    """Per-scan context passed into scoring and pipeline helpers."""
-
-    scan_index: int
-    timestamp: datetime.datetime
-    detections: list[Detection]
-    det_index_by_obj: dict[int, int]
 
 
 @dataclass(frozen=True)
@@ -506,13 +498,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         if backend == "exhaustive":
             return ExhaustiveClusterSolver()
         if backend in {"branch_and_bound", "branch-and-bound", "bnb"}:
-            from mht.tomht_cluster_solver_branch_and_bound import (
-                BranchAndBoundClusterSolver,
-            )
-
             return BranchAndBoundClusterSolver()
         if backend in {"ortools", "ortools_cp_sat", "cp_sat"}:
-            from mht.tomht_cluster_solver_ortools import ORToolsClusterSolver
+            from .tomht_cluster_solver_ortools import ORToolsClusterSolver
 
             return ORToolsClusterSolver()
         raise ValueError(

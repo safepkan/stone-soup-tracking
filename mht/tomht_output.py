@@ -3,7 +3,7 @@
 from stonesoup.types.track import Track
 from stonesoup.types.state import State
 
-from mht.tomht_model import TrackHypothesisNode
+from .tomht_model import TrackHypothesisNode
 
 
 def lineage_from_leaf_node(leaf_node: TrackHypothesisNode) -> list[TrackHypothesisNode]:

@@ -27,7 +27,7 @@ from typing import Any
 
 from ortools.sat.python import cp_model
 
-from mht.tomht_cluster_solver import (
+from .tomht_cluster_solver import (
     ClusterSolverDiagnostics,
     ClusterSolverLeafOption,
     ClusterSolverProblem,

@@ -7,7 +7,7 @@ import datetime
 from statistics import median
 from typing import Mapping
 
-from mht.tomht_model import NScanCommitmentSnapshot
+from .tomht_model import NScanCommitmentSnapshot
 
 
 @dataclass(frozen=True)

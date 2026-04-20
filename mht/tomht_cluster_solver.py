@@ -12,7 +12,7 @@ import heapq
 from math import prod
 from typing import Mapping, Protocol
 
-from mht.tomht_model import DetectionKey
+from .tomht_model import DetectionKey
 
 
 @dataclass(frozen=True)
