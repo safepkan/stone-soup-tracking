@@ -34,7 +34,7 @@ import sys
 import time as wall_clock
 from itertools import product
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from ordered_set import OrderedSet
 
@@ -385,6 +385,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     _committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
     _updater: Updater
     _hypothesiser: Hypothesiser
+    _output_track_id_mapper: Callable[[int], object]
 
     # =========================================================================
     # Public API
@@ -401,6 +402,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         params: TOMHTParams = TOMHTParams(),
         params_overrides: Mapping[str, Any] | None = None,
         scoring_model: ScoringModel | None = None,
+        output_track_id_mapper: Callable[[int], object] | None = None,
     ) -> None:
         """Construct the tracker with Stone Soup components and TO-MHT params.
 
@@ -433,6 +435,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             scoring includes hit/miss terms such as detection probability and
             clutter density, where clutter density must be specified in the same
             measurement-space units as the hypothesiser's NLL.
+        output_track_id_mapper : Callable[[int], object] | None
+            Optional mapping from the tracker-internal integer logical track ID
+            to the public Stone Soup ``Track.id`` object for MAP outputs.
+            Defaults to pass-through integer IDs.
         """
         params = self._apply_params_overrides(params, params_overrides)
         super().__init__(
@@ -442,6 +448,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         self._updater = self.updater
         self._hypothesiser = self._resolve_hypothesiser(params=params)
+        self._output_track_id_mapper = self._resolve_output_track_id_mapper(
+            output_track_id_mapper
+        )
         self.detector = detector
         self.params = params
         self.initiator = initiator
@@ -582,6 +591,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 f"Unknown TOMHTParams override key(s): {invalid_keys_str}."
             )
         return replace(params, **overrides)
+
+    @staticmethod
+    def _resolve_output_track_id_mapper(
+        output_track_id_mapper: Callable[[int], object] | None,
+    ) -> Callable[[int], object]:
+        """Resolve and validate output Track.id mapping strategy."""
+        if output_track_id_mapper is None:
+            return lambda track_id: int(track_id)
+        if not callable(output_track_id_mapper):
+            raise TypeError("output_track_id_mapper must be callable when provided.")
+        return output_track_id_mapper
 
     def reset_stats(self) -> None:
         """Clear collected ScanStats and the last per-scan snapshot."""
@@ -808,6 +828,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 reconstruct_track_from_committed_prefix_and_leaf_node(
                     committed_states=committed_states,
                     leaf_node=leaf_node,
+                    output_track_id_mapper=self._output_track_id_mapper,
                 )
             )
         return output_tracks

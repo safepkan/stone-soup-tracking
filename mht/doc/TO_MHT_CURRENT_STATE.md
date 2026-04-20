@@ -9,6 +9,7 @@ It is a **current-state snapshot**, not a roadmap and not a full design history.
 Update (2026-04-20): core TO-MHT modules now use package-relative intra-module imports (for example `.tomht_model`, `.tomht_cluster_solver`) so the tracker package can be relocated within the repo without hard-coding `mht` in internal dependencies.
 Update (2026-04-20): shared tracker/scoring context typing now starts in `mht/tomht_types.py` (`ScanContext`), reducing cross-module coupling and making room for additional shared type definitions.
 Update (2026-04-20): runtime utility helpers now live in `mht/utils.py` (`env_flag`, `env_float`, `ns_to_ms`, cross-platform `get_process_maxrss_mb`) and are reused by tracker and OR-Tools profiling paths.
+Update (2026-04-20): TOMHT output `Track.id` is now stable by default (internal integer track ID instead of Stone Soup auto-UUID), and constructor injection (`output_track_id_mapper`) allows mapping internal integer IDs to integration-specific public ID objects while keeping TOMHT internals dependency-free.
 
 ---
 

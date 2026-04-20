@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import datetime
 import unittest
-from typing import Iterable, cast
+from typing import Callable, Iterable, cast
 
 import numpy as np
 from stonesoup.types.detection import MissedDetection
@@ -96,7 +97,25 @@ class _ZeroScoringModel:
         return 0.0
 
 
-def _build_tracker() -> TOMHTTracker:
+@dataclass(frozen=True, order=True, unsafe_hash=True, slots=True)
+class _SystemTrackId:
+    id: int
+    metadata: dict = field(default_factory=dict, compare=False, hash=False, repr=False)
+
+    def __iter__(self):
+        return iter((self.id,))
+
+    def __int__(self):
+        return self.id
+
+    def __str__(self):
+        return f"sys:{self.id}"
+
+
+def _build_tracker(
+    *,
+    output_track_id_mapper: Callable[[int], object] | None = None,
+) -> TOMHTTracker:
     params = TOMHTParams(
         debug_display_scan_stats=False,
         debug_display_hypotheses=False,
@@ -108,6 +127,7 @@ def _build_tracker() -> TOMHTTracker:
         updater=_NoopUpdater(),
         params=params,
         scoring_model=_ZeroScoringModel(),
+        output_track_id_mapper=output_track_id_mapper,
     )
 
 
@@ -323,6 +343,41 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
 
         self.assertEqual(2, len(tracker.track_trees_by_track_id))
         self.assertEqual([0, 1], sorted(tracker.track_trees_by_track_id.keys()))
+
+    def test_map_output_tracks_default_track_id_is_stable_integer(self) -> None:
+        tracker = _build_tracker()
+        t0 = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_external_start(t0)])
+
+        output_track_t0 = next(iter(tracker.get_map_output_tracks()))
+        self.assertEqual(0, output_track_t0.id)
+        self.assertIsInstance(output_track_t0.id, int)
+
+        tracker.update_tracker(t1, [])
+        output_track_t1 = next(iter(tracker.get_map_output_tracks()))
+        self.assertEqual(0, output_track_t1.id)
+        self.assertIsInstance(output_track_t1.id, int)
+
+    def test_map_output_tracks_support_custom_track_id_mapping(self) -> None:
+        tracker = _build_tracker(
+            output_track_id_mapper=lambda track_id: _SystemTrackId(
+                id=track_id,
+                metadata={"origin": "test"},
+            )
+        )
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_external_start(timestamp)])
+
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        self.assertIsInstance(output_track.id, _SystemTrackId)
+        self.assertEqual(0, int(output_track.id))
+        self.assertEqual("sys:0", str(output_track.id))
+        self.assertEqual({"origin": "test"}, output_track.id.metadata)
 
 
 if __name__ == "__main__":

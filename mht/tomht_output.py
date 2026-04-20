@@ -1,5 +1,7 @@
 """Stone Soup output-adapter helpers for TOMHT node-based internals."""
 
+from collections.abc import Callable
+
 from stonesoup.types.track import Track
 from stonesoup.types.state import State
 
@@ -63,7 +65,7 @@ def reconstruct_track_from_leaf_node(leaf_node: TrackHypothesisNode) -> Track:
     This adapter exists for APIs that currently expect Track instances.
     """
     lineage = lineage_from_leaf_node(leaf_node)
-    tr = Track([node.state for node in lineage])
+    tr = Track([node.state for node in lineage], id=int(leaf_node.track_id))
     tr.metadata.update(output_track_metadata_from_leaf_node(leaf_node))
     return tr
 
@@ -72,10 +74,17 @@ def reconstruct_track_from_committed_prefix_and_leaf_node(
     *,
     committed_states: list[State],
     leaf_node: TrackHypothesisNode,
+    output_track_id_mapper: Callable[[int], object] | None = None,
 ) -> Track:
     """Reconstruct output track from committed prefix plus unresolved lineage."""
     lineage = lineage_from_leaf_node(leaf_node)
     unresolved_states = [node.state for node in lineage]
-    tr = Track([*committed_states, *unresolved_states])
+    internal_track_id = int(leaf_node.track_id)
+    mapped_output_track_id = (
+        internal_track_id
+        if output_track_id_mapper is None
+        else output_track_id_mapper(internal_track_id)
+    )
+    tr = Track([*committed_states, *unresolved_states], id=mapped_output_track_id)
     tr.metadata.update(output_track_metadata_from_leaf_node(leaf_node))
     return tr
