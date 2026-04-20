@@ -11,6 +11,7 @@ Update (2026-04-20): shared tracker/scoring context typing now starts in `mht/to
 Update (2026-04-20): runtime utility helpers now live in `mht/utils.py` (`env_flag`, `env_float`, `ns_to_ms`, cross-platform `get_process_maxrss_mb`) and are reused by tracker and OR-Tools profiling paths.
 Update (2026-04-20): TOMHT output `Track.id` is now stable by default (internal integer track ID instead of Stone Soup auto-UUID), and constructor injection (`output_track_id_mapper`) allows mapping internal integer IDs to integration-specific public ID objects while keeping TOMHT internals dependency-free.
 Update (2026-04-20): post-N-scan whole-track lifecycle now has two lanes: default node-native miss-threshold policy (`max_missed`) and optional injected Stone Soup `Deleter` policy (`deleter=` in tracker constructor). `track_miss_termination_mode` remains the leaf-selection mode for either lane.
+Update (2026-04-20): expansion timing instrumentation now splits `expand_ms` into explicit hypothesiser and updater components (`expand_hypothesise_ms`, `expand_update_ms`) plus call counts, so replay timing can attribute expansion cost between `hypothesise()` and `update()` directly.
 
 ---
 
@@ -443,6 +444,7 @@ Instrumentation also reports **per-scan timing-phase breakdowns**:
 - prep/context
 - pre-expand validation
 - local expansion
+- expansion hypothesiser/update split and call counts
 - post-expand prune/validation
 - births
 - cluster build + solve

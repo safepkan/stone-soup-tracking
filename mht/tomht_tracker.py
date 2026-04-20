@@ -202,6 +202,16 @@ class LocalChildCandidate:
     log_delta: float
 
 
+@dataclass
+class _ExpansionCallStats:
+    """Per-scan expansion timing/call counters for key Stone Soup callbacks."""
+
+    hypothesise_calls: int = 0
+    hypothesise_wall_ns: int = 0
+    update_calls: int = 0
+    update_wall_ns: int = 0
+
+
 @dataclass(frozen=True)
 class _ClusterWorkItem:
     """Transient per-scan cluster build input."""
@@ -659,7 +669,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         phase_start_ns = wall_clock.perf_counter_ns()
 
         # 1) Expand every tree locally.
-        self._expand_all_track_trees(ctx)
+        expansion_call_stats = _ExpansionCallStats()
+        self._expand_all_track_trees(ctx, expansion_call_stats=expansion_call_stats)
         expand_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
         phase_start_ns = wall_clock.perf_counter_ns()
 
@@ -754,6 +765,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             prep_ctx_ms=float(prep_ctx_ms),
             pre_expand_validate_ms=float(pre_expand_validate_ms),
             expand_ms=float(expand_ms),
+            expand_hypothesise_calls=int(expansion_call_stats.hypothesise_calls),
+            expand_hypothesise_ms=float(expansion_call_stats.hypothesise_wall_ns / 1e6),
+            expand_update_calls=int(expansion_call_stats.update_calls),
+            expand_update_ms=float(expansion_call_stats.update_wall_ns / 1e6),
             post_expand_prune_validate_ms=float(post_expand_prune_validate_ms),
             births_ms=float(births_ms),
             cluster_build_and_solve_ms=float(cluster_build_and_solve_ms),
@@ -1087,6 +1102,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         hypothesis: SingleDistanceHypothesis,
         log_delta: float,
         ctx: ScanContext,
+        expansion_call_stats: _ExpansionCallStats,
     ) -> LocalChildCandidate:
         """Map one distance hypothesis to one child node candidate."""
         if isinstance(hypothesis.measurement, MissedDetection):
@@ -1105,7 +1121,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                     "input detection objects for this scan."
                 )
             det_index = int(det_index_raw)
+            update_start_ns = wall_clock.perf_counter_ns()
             state = self._updater.update(hypothesis)
+            expansion_call_stats.update_calls += 1
+            expansion_call_stats.update_wall_ns += (
+                wall_clock.perf_counter_ns() - update_start_ns
+            )
             used_det_key = (ctx.scan_index, det_index)
             assoc_label = det_index
             state_kind = "update"
@@ -1141,11 +1162,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self,
         leaf_node: TrackHypothesisNode,
         ctx: ScanContext,
+        expansion_call_stats: _ExpansionCallStats,
     ) -> list[LocalChildCandidate]:
         """Build retained local continuation candidates for one active leaf."""
         track = reconstruct_track_from_leaf_node(leaf_node)
+        hypothesise_start_ns = wall_clock.perf_counter_ns()
         raw_hypotheses = self._hypothesiser.hypothesise(
             track, ctx.detections, ctx.timestamp
+        )
+        expansion_call_stats.hypothesise_calls += 1
+        expansion_call_stats.hypothesise_wall_ns += (
+            wall_clock.perf_counter_ns() - hypothesise_start_ns
         )
         if not isinstance(raw_hypotheses, MultipleHypothesis):
             raise TypeError(
@@ -1205,19 +1232,30 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 hypothesis=hyp,
                 log_delta=float(log_delta),
                 ctx=ctx,
+                expansion_call_stats=expansion_call_stats,
             )
             for _, (hyp, log_delta) in kept_rows
         ]
         out.sort(key=lambda c: c.log_delta, reverse=True)
         return out
 
-    def _expand_one_track_tree(self, tree: TrackTree, ctx: ScanContext) -> None:
+    def _expand_one_track_tree(
+        self,
+        tree: TrackTree,
+        ctx: ScanContext,
+        *,
+        expansion_call_stats: _ExpansionCallStats,
+    ) -> None:
         """Expand all active leaves in one tree, then apply pre-solve cap guardrail."""
         new_leaf_ids: set[int] = set()
 
         for leaf_id in sorted(tree.active_leaf_node_ids):
             leaf = self._nodes_by_id[leaf_id]
-            candidates = self._candidates_for_track_leaf(leaf, ctx)
+            candidates = self._candidates_for_track_leaf(
+                leaf,
+                ctx,
+                expansion_call_stats=expansion_call_stats,
+            )
             for cand in candidates:
                 new_leaf_ids.add(cand.child_node.node_id)
 
@@ -1244,10 +1282,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         return {node.node_id for node in ranked[: int(max_leaves)]}
 
-    def _expand_all_track_trees(self, ctx: ScanContext) -> None:
+    def _expand_all_track_trees(
+        self,
+        ctx: ScanContext,
+        *,
+        expansion_call_stats: _ExpansionCallStats,
+    ) -> None:
         """Run local expansion for all current persistent track trees."""
         for tree in self.track_trees_by_track_id.values():
-            self._expand_one_track_tree(tree, ctx)
+            self._expand_one_track_tree(
+                tree,
+                ctx,
+                expansion_call_stats=expansion_call_stats,
+            )
 
     def _remove_empty_trees(self) -> None:
         """Drop any tree that has no surviving active leaves."""

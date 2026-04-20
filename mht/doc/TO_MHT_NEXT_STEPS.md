@@ -4,6 +4,8 @@
 
 **Local expansion volume reduction / pre-expansion control**
 
+Update (2026-04-20): timing output now includes explicit expansion-call attribution (`expand_hypothesise_ms` / `expand_update_ms` and call counts), which closes part of the "characterize expansion volume/cost" prerequisite and makes it easier to separate hypothesis-generation vs state-update time on replay.
+
 The recent local-association phase is now complete enough that the tracker has:
 
 - a tracker-owned default distance hypothesiser,

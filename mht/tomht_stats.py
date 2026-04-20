@@ -38,6 +38,10 @@ class ScanTimingBreakdown:
     prep_ctx_ms: float = 0.0
     pre_expand_validate_ms: float = 0.0
     expand_ms: float = 0.0
+    expand_hypothesise_calls: int = 0
+    expand_hypothesise_ms: float = 0.0
+    expand_update_calls: int = 0
+    expand_update_ms: float = 0.0
     post_expand_prune_validate_ms: float = 0.0
     births_ms: float = 0.0
     cluster_build_and_solve_ms: float = 0.0
@@ -103,6 +107,12 @@ def print_scan_stats(
         + float(breakdown.cleanup_ms)
     )
     phase_other_ms = max(float(scan_stats.scan_wall_ms) - phase_accounted_ms, 0.0)
+    expand_other_ms = max(
+        float(breakdown.expand_ms)
+        - float(breakdown.expand_hypothesise_ms)
+        - float(breakdown.expand_update_ms),
+        0.0,
+    )
 
     print(
         f"SCAN scan={scan_stats.scan_index} t={timestamp} "
@@ -135,6 +145,11 @@ def print_scan_stats(
         f"prep_ctx_ms={breakdown.prep_ctx_ms:.3f} "
         f"pre_expand_validate_ms={breakdown.pre_expand_validate_ms:.3f} "
         f"expand_ms={breakdown.expand_ms:.3f} "
+        f"expand_hypothesise_calls={breakdown.expand_hypothesise_calls} "
+        f"expand_hypothesise_ms={breakdown.expand_hypothesise_ms:.3f} "
+        f"expand_update_calls={breakdown.expand_update_calls} "
+        f"expand_update_ms={breakdown.expand_update_ms:.3f} "
+        f"expand_other_ms={expand_other_ms:.3f} "
         "post_expand_prune_validate_ms="
         f"{breakdown.post_expand_prune_validate_ms:.3f} "
         f"births_ms={breakdown.births_ms:.3f} "
@@ -231,6 +246,21 @@ def print_summary_stats(
     prep_ctx_ms = [s.timing_breakdown.prep_ctx_ms for s in stats]
     pre_expand_validate_ms = [s.timing_breakdown.pre_expand_validate_ms for s in stats]
     expand_ms = [s.timing_breakdown.expand_ms for s in stats]
+    expand_hypothesise_ms = [s.timing_breakdown.expand_hypothesise_ms for s in stats]
+    expand_update_ms = [s.timing_breakdown.expand_update_ms for s in stats]
+    expand_other_ms = [
+        max(
+            float(s.timing_breakdown.expand_ms)
+            - float(s.timing_breakdown.expand_hypothesise_ms)
+            - float(s.timing_breakdown.expand_update_ms),
+            0.0,
+        )
+        for s in stats
+    ]
+    expand_hypothesise_calls = [
+        float(s.timing_breakdown.expand_hypothesise_calls) for s in stats
+    ]
+    expand_update_calls = [float(s.timing_breakdown.expand_update_calls) for s in stats]
     post_expand_prune_validate_ms = [
         s.timing_breakdown.post_expand_prune_validate_ms for s in stats
     ]
@@ -307,6 +337,16 @@ def print_summary_stats(
         "pre_expand_validate_ms "
         f"med={median(pre_expand_validate_ms):.1f} p65={_percentile(pre_expand_validate_ms, 0.65):.1f} p80={_percentile(pre_expand_validate_ms, 0.80):.1f} p90={_percentile(pre_expand_validate_ms, 0.90):.1f} p95={_percentile(pre_expand_validate_ms, 0.95):.1f} max={max(pre_expand_validate_ms):.1f} "
         f"expand_ms med={median(expand_ms):.1f} p65={_percentile(expand_ms, 0.65):.1f} p80={_percentile(expand_ms, 0.80):.1f} p90={_percentile(expand_ms, 0.90):.1f} p95={_percentile(expand_ms, 0.95):.1f} max={max(expand_ms):.1f} "
+        "expand_hypothesise_ms "
+        f"med={median(expand_hypothesise_ms):.1f} p65={_percentile(expand_hypothesise_ms, 0.65):.1f} p80={_percentile(expand_hypothesise_ms, 0.80):.1f} p90={_percentile(expand_hypothesise_ms, 0.90):.1f} p95={_percentile(expand_hypothesise_ms, 0.95):.1f} max={max(expand_hypothesise_ms):.1f} "
+        "expand_update_ms "
+        f"med={median(expand_update_ms):.1f} p65={_percentile(expand_update_ms, 0.65):.1f} p80={_percentile(expand_update_ms, 0.80):.1f} p90={_percentile(expand_update_ms, 0.90):.1f} p95={_percentile(expand_update_ms, 0.95):.1f} max={max(expand_update_ms):.1f} "
+        "expand_other_ms "
+        f"med={median(expand_other_ms):.1f} p65={_percentile(expand_other_ms, 0.65):.1f} p80={_percentile(expand_other_ms, 0.80):.1f} p90={_percentile(expand_other_ms, 0.90):.1f} p95={_percentile(expand_other_ms, 0.95):.1f} max={max(expand_other_ms):.1f} "
+        "expand_hypothesise_calls "
+        f"med={median(expand_hypothesise_calls):.1f} mean={_mean(expand_hypothesise_calls):.2f} max={max(expand_hypothesise_calls):.1f} "
+        "expand_update_calls "
+        f"med={median(expand_update_calls):.1f} mean={_mean(expand_update_calls):.2f} max={max(expand_update_calls):.1f} "
         "post_expand_prune_validate_ms "
         f"med={median(post_expand_prune_validate_ms):.1f} p65={_percentile(post_expand_prune_validate_ms, 0.65):.1f} p80={_percentile(post_expand_prune_validate_ms, 0.80):.1f} p90={_percentile(post_expand_prune_validate_ms, 0.90):.1f} p95={_percentile(post_expand_prune_validate_ms, 0.95):.1f} max={max(post_expand_prune_validate_ms):.1f} "
         f"births_ms med={median(births_ms):.1f} p65={_percentile(births_ms, 0.65):.1f} p80={_percentile(births_ms, 0.80):.1f} p90={_percentile(births_ms, 0.90):.1f} p95={_percentile(births_ms, 0.95):.1f} max={max(births_ms):.1f} "

@@ -571,6 +571,12 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         )
         self.assertGreaterEqual(timings.cluster_build_and_solve_ms, 0.0)
         self.assertGreaterEqual(timings.expand_ms, 0.0)
+        self.assertGreaterEqual(timings.expand_hypothesise_calls, 0)
+        self.assertGreaterEqual(timings.expand_update_calls, 0)
+        self.assertLessEqual(
+            timings.expand_hypothesise_ms + timings.expand_update_ms,
+            timings.expand_ms + 1.0,
+        )
         self.assertLessEqual(
             phase_sum, tracker.last_scan_stats.scan_wall_ms + 1.0
         )  # keep tolerance for measurement overhead/noise
