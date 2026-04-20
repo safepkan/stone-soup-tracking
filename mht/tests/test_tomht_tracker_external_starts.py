@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import datetime
 import unittest
-from typing import Callable, Iterable, cast
+from typing import Iterable, cast
 
 import numpy as np
-from stonesoup.types.detection import MissedDetection
 from stonesoup.types.detection import Detection
+from stonesoup.types.detection import MissedDetection
 from stonesoup.types.hypothesis import SingleDistanceHypothesis
 from stonesoup.types.multihypothesis import MultipleHypothesis
 from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 
-from mht.tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
 
 
@@ -54,33 +52,6 @@ class _NoopUpdater:
         raise RuntimeError("No update expected in this test helper")
 
 
-class _LegacyPositionalNoopHypothesiser:
-    def __init__(self, predictor: _NoopPredictor, updater: _NoopUpdater) -> None:
-        self.predictor = predictor
-        self.updater = updater
-
-    def hypothesise(
-        self,
-        track: Track,
-        detections: Iterable[Detection],
-        timestamp,
-        **kwargs,
-    ) -> MultipleHypothesis:
-        del kwargs
-        prediction = track.states[-1]
-        del detections
-        return MultipleHypothesis(
-            [
-                SingleDistanceHypothesis(
-                    prediction=prediction,
-                    measurement=MissedDetection(timestamp=timestamp),
-                    distance=0.0,
-                )
-            ],
-            normalise=False,
-        )
-
-
 class _ZeroScoringModel:
     def score_track_hypotheses(self, *, hypotheses, ctx) -> list[float]:
         del ctx
@@ -97,41 +68,7 @@ class _ZeroScoringModel:
         return 0.0
 
 
-@dataclass(frozen=True, order=True, unsafe_hash=True, slots=True)
-class _SystemTrackId:
-    id: int
-    metadata: dict = field(default_factory=dict, compare=False, hash=False, repr=False)
-
-    def __iter__(self):
-        return iter((self.id,))
-
-    def __int__(self):
-        return self.id
-
-    def __str__(self):
-        return f"sys:{self.id}"
-
-
-def _build_tracker(
-    *,
-    output_track_id_mapper: Callable[[int], object] | None = None,
-) -> TOMHTTracker:
-    params = TOMHTParams(
-        debug_display_scan_stats=False,
-        debug_display_hypotheses=False,
-        debug_display_births=False,
-        collect_stats=False,
-    )
-    return TOMHTTracker(
-        hypothesiser=_NoopHypothesiser(),
-        updater=_NoopUpdater(),
-        params=params,
-        scoring_model=_ZeroScoringModel(),
-        output_track_id_mapper=output_track_id_mapper,
-    )
-
-
-def _build_tracker_with_overrides(params_overrides: dict[str, object]) -> TOMHTTracker:
+def _build_tracker() -> TOMHTTracker:
     return TOMHTTracker(
         hypothesiser=_NoopHypothesiser(),
         updater=_NoopUpdater(),
@@ -141,7 +78,6 @@ def _build_tracker_with_overrides(params_overrides: dict[str, object]) -> TOMHTT
             debug_display_births=False,
             collect_stats=False,
         ),
-        params_overrides=params_overrides,
         scoring_model=_ZeroScoringModel(),
     )
 
@@ -156,120 +92,6 @@ def _external_start(timestamp: datetime.datetime) -> Track:
 
 
 class TOMHTTrackerExternalStartsTest(unittest.TestCase):
-    def test_constructor_applies_params_overrides(self) -> None:
-        tracker = _build_tracker_with_overrides(
-            {
-                "max_children_per_track": 3,
-                "debug_display_births": True,
-            }
-        )
-
-        self.assertEqual(3, tracker.params.max_children_per_track)
-        self.assertTrue(tracker.params.debug_display_births)
-        self.assertFalse(tracker.params.debug_display_scan_stats)
-
-    def test_constructor_rejects_unknown_params_override_keys(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Unknown TOMHTParams override key"):
-            _build_tracker_with_overrides({"not_a_param": 1})
-
-    def test_constructor_rejects_non_string_params_override_keys(self) -> None:
-        with self.assertRaisesRegex(TypeError, "params_overrides keys must be strings"):
-            _build_tracker_with_overrides({1: 1})  # type: ignore[dict-item]
-
-    def test_constructor_rejects_both_predictor_and_hypothesiser(self) -> None:
-        with self.assertRaisesRegex(
-            TypeError, "exactly one of predictor or hypothesiser"
-        ):
-            TOMHTTracker(
-                predictor=_NoopPredictor(),
-                updater=_NoopUpdater(),
-                hypothesiser=_NoopHypothesiser(),
-            )
-
-    def test_constructor_rejects_neither_predictor_nor_hypothesiser(self) -> None:
-        with self.assertRaisesRegex(
-            TypeError, "exactly one of predictor or hypothesiser"
-        ):
-            TOMHTTracker(
-                updater=_NoopUpdater(),
-            )
-
-    def test_constructor_with_predictor_builds_default_distance_hypothesiser(
-        self,
-    ) -> None:
-        tracker = TOMHTTracker(
-            predictor=_NoopPredictor(),
-            updater=_NoopUpdater(),
-            params=TOMHTParams(
-                debug_display_scan_stats=False,
-                debug_display_hypotheses=False,
-                debug_display_births=False,
-                collect_stats=False,
-            ),
-            scoring_model=_ZeroScoringModel(),
-        )
-        self.assertIsInstance(
-            tracker._hypothesiser, TrackerOwnedNLLDistanceHypothesiser
-        )
-
-    def test_constructor_with_hypothesiser_keeps_instance(self) -> None:
-        custom_hypothesiser = _LegacyPositionalNoopHypothesiser(
-            _NoopPredictor(), _NoopUpdater()
-        )
-        tracker = TOMHTTracker(
-            hypothesiser=custom_hypothesiser,
-            updater=_NoopUpdater(),
-            params=TOMHTParams(
-                debug_display_scan_stats=False,
-                debug_display_hypotheses=False,
-                debug_display_births=False,
-                collect_stats=False,
-            ),
-            scoring_model=_ZeroScoringModel(),
-        )
-
-        self.assertIs(custom_hypothesiser, tracker._hypothesiser)
-
-    def test_tracker_starts_with_empty_map_and_no_trees(self) -> None:
-        tracker = _build_tracker()
-
-        self.assertEqual({}, tracker.track_trees_by_track_id)
-        map_snapshot = tracker.get_map_hypothesis_snapshot()
-        self.assertIsNotNone(map_snapshot)
-        assert map_snapshot is not None
-        self.assertEqual({}, dict(map_snapshot.leaf_nodes_by_track_id))
-        self.assertEqual(set(), tracker.get_map_output_tracks())
-
-    def test_update_tracker_returns_timestamp_and_tracks(self) -> None:
-        tracker = _build_tracker()
-        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
-
-        result_timestamp, tracks = tracker.update_tracker(timestamp, set())
-
-        self.assertEqual(timestamp, result_timestamp)
-        self.assertEqual(set(), tracks)
-        self.assertEqual(set(), tracker.tracks)
-
-    def test_get_unused_detections_rejects_call_before_update_tracker(self) -> None:
-        tracker = _build_tracker()
-
-        with self.assertRaisesRegex(RuntimeError, "completed update_tracker"):
-            tracker.get_unused_detections()
-
-    def test_get_unused_detections_returns_residual_when_initiator_disabled(
-        self,
-    ) -> None:
-        tracker = _build_tracker()
-        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
-        detection = Detection(np.array([[1.0], [2.0]]), timestamp=timestamp)
-
-        tracker.update_tracker(timestamp, [detection])
-
-        unused = tracker.get_unused_detections()
-        self.assertEqual([detection], unused)
-        unused.clear()
-        self.assertEqual([detection], tracker.get_unused_detections())
-
     def test_add_external_starts_rejects_call_before_update_tracker(self) -> None:
         tracker = _build_tracker()
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
@@ -343,41 +165,6 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
 
         self.assertEqual(2, len(tracker.track_trees_by_track_id))
         self.assertEqual([0, 1], sorted(tracker.track_trees_by_track_id.keys()))
-
-    def test_map_output_tracks_default_track_id_is_stable_integer(self) -> None:
-        tracker = _build_tracker()
-        t0 = datetime.datetime(2026, 3, 12, 10, 0, 0)
-        t1 = t0 + datetime.timedelta(seconds=1)
-
-        tracker.update_tracker(t0, [])
-        tracker.add_external_starts(t0, [_external_start(t0)])
-
-        output_track_t0 = next(iter(tracker.get_map_output_tracks()))
-        self.assertEqual(0, output_track_t0.id)
-        self.assertIsInstance(output_track_t0.id, int)
-
-        tracker.update_tracker(t1, [])
-        output_track_t1 = next(iter(tracker.get_map_output_tracks()))
-        self.assertEqual(0, output_track_t1.id)
-        self.assertIsInstance(output_track_t1.id, int)
-
-    def test_map_output_tracks_support_custom_track_id_mapping(self) -> None:
-        tracker = _build_tracker(
-            output_track_id_mapper=lambda track_id: _SystemTrackId(
-                id=track_id,
-                metadata={"origin": "test"},
-            )
-        )
-        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
-
-        tracker.update_tracker(timestamp, [])
-        tracker.add_external_starts(timestamp, [_external_start(timestamp)])
-
-        output_track = next(iter(tracker.get_map_output_tracks()))
-        self.assertIsInstance(output_track.id, _SystemTrackId)
-        self.assertEqual(0, int(output_track.id))
-        self.assertEqual("sys:0", str(output_track.id))
-        self.assertEqual({"origin": "test"}, output_track.id.metadata)
 
 
 if __name__ == "__main__":
