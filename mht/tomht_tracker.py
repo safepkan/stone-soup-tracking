@@ -45,15 +45,24 @@ from stonesoup.deleter.base import Deleter
 from stonesoup.hypothesiser.base import Hypothesiser
 from stonesoup.initiator.base import Initiator
 from stonesoup.predictor.base import Predictor
-from stonesoup.types.detection import Detection, MissedDetection
-from stonesoup.types.hypothesis import SingleDistanceHypothesis, SingleHypothesis
-from stonesoup.types.multihypothesis import MultipleHypothesis
+from stonesoup.types.detection import Detection
 from stonesoup.types.state import State
 from stonesoup.types.track import Track
-from stonesoup.types.update import Update
 from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.updater.base import Updater
 
+from .tomht_births import (
+    birth_guardrail_block_reason,
+    birth_used_key,
+    residual_detection_indices_after_expansion,
+    select_internal_birth_candidates,
+)
+from .tomht_clustering import (
+    ClusterWorkItem as _ClusterWorkItem,
+    OverloadSplitSummary as _OverloadSplitSummary,
+    apply_overload_splitting_to_clusters,
+    build_track_clusters,
+)
 from .tomht_cluster_solver import (
     ClusterSolver,
     ClusterSolverDiagnostics,
@@ -65,6 +74,10 @@ from .tomht_cluster_solver import (
 )
 from .tomht_cluster_solver_branch_and_bound import BranchAndBoundClusterSolver
 from .tomht_cluster_solver_exhaustive import ExhaustiveClusterSolver
+from .tomht_expansion import (
+    ExpansionCallStats as _ExpansionCallStats,
+    expand_all_track_trees,
+)
 from .tomht_model import (
     ClusterRebuildSnapshot,
     DetectionKey,
@@ -76,8 +89,9 @@ from .tomht_model import (
 )
 from .tomht_output import (
     reconstruct_track_from_committed_prefix_and_leaf_node,
-    reconstruct_track_from_leaf_node,
 )
+from .tomht_params import TOMHTParams
+from .tomht_pruning import apply_post_solve_supported_leaf_pruning
 from .tomht_types import ScanContext
 from .tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from .tomht_scoring import (
@@ -93,134 +107,15 @@ from .tomht_stats import (
     print_scan_stats as print_scan_stats_report,
     print_summary_stats as print_summary_stats_report,
 )
+from .tomht_utils import (
+    format_detection_key_sample,
+    sorted_detections,
+)
 from .utils import get_process_maxrss_mb
 
 # ============================================================================
-# Tracker-Local Support Structures / Params
+# Tracker-Local Support Structures
 # ============================================================================
-
-
-@dataclass(frozen=True)
-class TOMHTParams:
-    """Flat tracker configuration for the track-oriented TO-MHT implementation.
-
-    Stable operational controls:
-    - per-leaf local branching and local frontier safety-valves,
-    - whole-track miss termination after N-scan pruning,
-    - MAP-only N-scan pruning window,
-    - optional debug/stat visibility toggles.
-
-    Compatibility note:
-    ``max_global_hypotheses`` is retained as a cap for how many rebuilt globals
-    are kept per cluster for debug/snapshot storage; it is no longer a persistent
-    beam frontier carried scan-to-scan.
-    """
-
-    # Local expansion / lifecycle controls.
-    max_children_per_track: int = 5
-    # Optional pre-solve per-tree frontier cap used only as a safety valve.
-    # The high default keeps this in a tractability guardrail role, not as the
-    # primary pruning mechanism.
-    max_leaves_per_track_tree: int | None = 500
-    # Base miss threshold used by node-native post-N-scan whole-track lifecycle.
-    # Effective threshold uses an N-scan-aware floor (see helper below).
-    max_missed: int = 5
-    # Whole-track candidate-leaf selection mode applied after N-scan pruning.
-    # This controls which leaves are evaluated for lifecycle termination in both
-    # lanes (node-native and optional Stone Soup deleter lane).
-    # - "all_active_leaves": terminate only if all active leaves exceed threshold
-    # - "map_leaf": terminate if MAP leaf exceeds threshold
-    # - "global_k_leaves": terminate if all retained rebuilt-global leaves exceed
-    #   threshold (fallback to active leaves if unavailable after N-scan)
-    track_miss_termination_mode: str = "map_leaf"
-
-    # Rebuilt-global storage cap (debug/inspection cap, not persistent beam state).
-    max_global_hypotheses: int = 20
-    # Exact cluster-solver backend.
-    # - "branch_and_bound": default exact DFS branch-and-bound backend
-    # - "exhaustive": exact reference/fallback backend
-    # - "ortools": experimental CP-SAT backend
-    cluster_solver_backend: str = "branch_and_bound"
-    # Optional hard cap for one cluster's projected Cartesian leaf combinations.
-    # If exceeded, cluster rebuild fails explicitly (no adaptive trimming/retry).
-    max_projected_cluster_combinations: int | None = None
-    # Optional approximate overload mitigation:
-    # when a cluster's projected Cartesian combinations exceed this threshold,
-    # iteratively sever weakest conflict edges and solve resulting subclusters.
-    overload_split_enabled: bool = True
-    overload_split_projected_combination_threshold: int | None = 500_000
-    overload_split_max_edge_removals_per_cluster: int | None = None
-    # Narrow safety-net: if an exact cluster is infeasible, allow relaxation only
-    # for forced historical keys that are already shared across tracks.
-    historical_conflict_relaxation_enabled: bool = True
-
-    # Scoring / numerical behavior.
-    scoring_mode: str = "nll"
-    log_epsilon: float = 1e-12
-    prob_detect: float = 0.9
-    # Main-path gate control: Mahalanobis threshold (non-squared).
-    mahalanobis_gate_threshold: float = 3.0
-    # Clutter density lambda in measurement-space units:
-    # detections per unit measurement-volume per scan. Must match the same
-    # measurement coordinates used by the hypothesiser NLL computation.
-    clutter_density: float = 0.0
-
-    # MAP-only N-scan pruning: boundary is b = k - N.
-    ns_scan_window: int = 6
-
-    # Internal birth handling (kept intentionally simple in this phase).
-    max_births_per_scan: int = 2
-    birth_log_penalty: float = 8.0
-    unused_det_log_penalty: float = 0.2
-    # Birth load guards: skip births once frontier growth is already high.
-    birth_skip_if_active_trees_above: int | None = 40
-    birth_skip_if_active_leaves_above: int | None = 200
-
-    # Birth sanity guards.
-    birth_max_abs_pos: float = 1e5
-    birth_max_covar_trace: float = 1e12
-
-    # Debug / instrumentation toggles.
-    debug_display_detections: bool = False
-    debug_display_config: bool = False
-    debug_display_scan_stats: bool = True
-    debug_display_hypotheses: bool = True
-    debug_display_births: bool = True
-    debug_display_map_miss_hist: bool = False
-    debug_births_max: int = 5
-    debug_globals_max: int = 5
-    collect_stats: bool = True
-
-
-@dataclass(frozen=True)
-class LocalChildCandidate:
-    """One retained local child candidate produced from one leaf expansion."""
-
-    track_id: int
-    child_node: TrackHypothesisNode
-    used_det_key: DetectionKey | None
-    log_delta: float
-
-
-@dataclass
-class _ExpansionCallStats:
-    """Per-scan expansion timing/call counters for key Stone Soup callbacks."""
-
-    hypothesise_calls: int = 0
-    hypothesise_wall_ns: int = 0
-    update_calls: int = 0
-    update_wall_ns: int = 0
-
-
-@dataclass(frozen=True)
-class _ClusterWorkItem:
-    """Transient per-scan cluster build input."""
-
-    cluster_id: int
-    track_ids: tuple[int, ...]
-    current_scan_det_keys_by_track_id: dict[int, set[DetectionKey]]
-    conflict_links: tuple[tuple[int, int, tuple[DetectionKey, ...]], ...]
-    overload_split_origin_cluster_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -236,29 +131,6 @@ class _ClusterCurrentScanScoreDecomposition:
 
     per_hit_log_bonus: float
     constant_log_offset: float
-
-
-@dataclass(frozen=True)
-class _OverloadSplitRemovedEdge:
-    """One removed conflict-graph edge during overload decomposition."""
-
-    left_track_id: int
-    right_track_id: int
-    shared_history_key_count: int
-
-
-@dataclass(frozen=True)
-class _OverloadSplitSummary:
-    """Compact instrumentation for one original cluster overload split pass."""
-
-    original_cluster_id: int
-    original_track_ids: tuple[int, ...]
-    projected_before: int
-    projected_threshold: int
-    removed_edges: tuple[_OverloadSplitRemovedEdge, ...]
-    resulting_subclusters: tuple[tuple[int, ...], ...]
-    projected_after_by_subcluster: tuple[int, ...]
-    stopping_reason: str
 
 
 @dataclass(frozen=True)
@@ -650,7 +522,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         scan_index = (
             0 if self._last_scan_index is None else int(self._last_scan_index) + 1
         )
-        det_list = self._sorted_detections(detections)
+        det_list = sorted_detections(detections)
         det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}
         ctx = ScanContext(
             scan_index=scan_index,
@@ -912,51 +784,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     # =========================================================================
-    # Scan Pipeline Utilities
-    # =========================================================================
-
-    @staticmethod
-    def _det_sort_key(det: Detection) -> tuple:
-        """Stable per-scan ordering key for detections."""
-        ts = getattr(det, "timestamp", None)
-        ts_key: tuple[int, float | str]
-        if ts is None:
-            ts_key = (0, 0.0)
-        elif hasattr(ts, "timestamp"):
-            ts_key = (1, float(ts.timestamp()))
-        elif isinstance(ts, (int, float)):
-            ts_key = (2, float(ts))
-        else:
-            ts_key = (3, str(ts))
-
-        vec = np.asarray(det.state_vector).ravel()
-
-        def _elem_key(x) -> tuple[int, float | str]:
-            try:
-                xf = float(x)
-                if np.isfinite(xf):
-                    return (0, xf)
-                return (0, float("inf"))
-            except Exception:
-                return (1, str(x))
-
-        vec_key = tuple(_elem_key(x) for x in vec)
-        return (ts_key, len(vec_key), vec_key)
-
-    def _sorted_detections(self, detections: Iterable[Detection]) -> list[Detection]:
-        """Return a deterministic list copy of scan detections."""
-        det_list = list(detections)
-        det_list.sort(key=self._det_sort_key)
-        return det_list
-
-    @staticmethod
-    def _current_scan_det_indices_from_keys(
-        keys: Iterable[DetectionKey], scan_index: int
-    ) -> set[int]:
-        """Return detection indices from keys that belong to ``scan_index``."""
-        return {det_idx for (key_scan, det_idx) in keys if key_scan == scan_index}
-
-    # =========================================================================
     # Node/Tree Construction Helpers
     # =========================================================================
 
@@ -1078,210 +905,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # Local Expansion and Simple Lifecycle
     # =========================================================================
 
-    @staticmethod
-    def _validate_distance_hypothesis(
-        hyp: SingleHypothesis,
-    ) -> SingleDistanceHypothesis:
-        """Validate one local distance hypothesis from the configured hypothesiser."""
-        if not isinstance(hyp, SingleDistanceHypothesis):
-            raise TypeError(
-                "Distance hypothesiser must yield SingleDistanceHypothesis items."
-            )
-        if not isinstance(hyp.measurement, (Detection, MissedDetection)):
-            raise TypeError(
-                "Distance hypothesis measurement must be Detection or MissedDetection."
-            )
-        if not np.isfinite(float(hyp.distance)):
-            raise ValueError("Distance hypothesis distance must be finite.")
-        return hyp
-
-    def _candidate_from_distance_hypothesis(
-        self,
-        *,
-        leaf_node: TrackHypothesisNode,
-        hypothesis: SingleDistanceHypothesis,
-        log_delta: float,
-        ctx: ScanContext,
-        expansion_call_stats: _ExpansionCallStats,
-    ) -> LocalChildCandidate:
-        """Map one distance hypothesis to one child node candidate."""
-        if isinstance(hypothesis.measurement, MissedDetection):
-            state = hypothesis.prediction
-            used_det_key = None
-            assoc_label = TOMHTTracker.ASSOC_MISS
-            state_kind = "prediction"
-            missed_count = int(leaf_node.missed_count) + 1
-            last_det_key = leaf_node.last_det_key
-        else:
-            detection = hypothesis.measurement
-            det_index_raw = ctx.det_index_by_obj.get(id(detection))
-            if det_index_raw is None:
-                raise ValueError(
-                    "Distance detection hypothesis must reference one of the "
-                    "input detection objects for this scan."
-                )
-            det_index = int(det_index_raw)
-            update_start_ns = wall_clock.perf_counter_ns()
-            state = self._updater.update(hypothesis)
-            expansion_call_stats.update_calls += 1
-            expansion_call_stats.update_wall_ns += (
-                wall_clock.perf_counter_ns() - update_start_ns
-            )
-            used_det_key = (ctx.scan_index, det_index)
-            assoc_label = det_index
-            state_kind = "update"
-            missed_count = 0
-            last_det_key = used_det_key
-
-        child_node = self._create_track_hypothesis_node(
-            track_id=leaf_node.track_id,
-            parent=leaf_node,
-            scan_index=ctx.scan_index,
-            timestamp=getattr(state, "timestamp", ctx.timestamp),
-            state=state,
-            state_kind=state_kind,
-            used_det_key=used_det_key,
-            assoc_label=assoc_label,
-            log_delta=log_delta,
-            age=int(leaf_node.age) + 1,
-            hits=int(leaf_node.hits) + (0 if used_det_key is None else 1),
-            missed_count=missed_count,
-            last_det_key=last_det_key,
-            last_det_hit=used_det_key is not None,
-            root_source=leaf_node.root_source,
-            birth_scan_index=leaf_node.birth_scan_index,
-        )
-        return LocalChildCandidate(
-            track_id=leaf_node.track_id,
-            child_node=child_node,
-            used_det_key=used_det_key,
-            log_delta=log_delta,
-        )
-
-    def _candidates_for_track_leaf(
-        self,
-        leaf_node: TrackHypothesisNode,
-        ctx: ScanContext,
-        expansion_call_stats: _ExpansionCallStats,
-    ) -> list[LocalChildCandidate]:
-        """Build retained local continuation candidates for one active leaf."""
-        track = reconstruct_track_from_leaf_node(leaf_node)
-        hypothesise_start_ns = wall_clock.perf_counter_ns()
-        raw_hypotheses = self._hypothesiser.hypothesise(
-            track, ctx.detections, ctx.timestamp
-        )
-        expansion_call_stats.hypothesise_calls += 1
-        expansion_call_stats.hypothesise_wall_ns += (
-            wall_clock.perf_counter_ns() - hypothesise_start_ns
-        )
-        if not isinstance(raw_hypotheses, MultipleHypothesis):
-            raise TypeError(
-                "Distance hypothesiser must return stonesoup MultipleHypothesis."
-            )
-        hypotheses = [
-            self._validate_distance_hypothesis(hyp)
-            for hyp in raw_hypotheses.single_hypotheses
-        ]
-        local_log_deltas = self.scoring_model.score_track_hypotheses(
-            hypotheses=hypotheses,
-            ctx=ctx,
-        )
-        if len(local_log_deltas) != len(hypotheses):
-            raise RuntimeError(
-                "score_track_hypotheses must return one score per hypothesis."
-            )
-        if any(not np.isfinite(float(score)) for score in local_log_deltas):
-            raise ValueError("score_track_hypotheses produced a non-finite score.")
-
-        miss_hypotheses = [
-            hyp for hyp in hypotheses if isinstance(hyp.measurement, MissedDetection)
-        ]
-        if len(miss_hypotheses) != 1:
-            raise ValueError(
-                "Distance hypothesiser must return exactly one missed-detection "
-                "SingleDistanceHypothesis."
-            )
-
-        scored_rows = list(enumerate(zip(hypotheses, local_log_deltas)))
-        miss_row_index = next(
-            row_index
-            for row_index, (hyp, _) in scored_rows
-            if isinstance(hyp.measurement, MissedDetection)
-        )
-
-        def _sort_key(
-            row: tuple[int, tuple[SingleDistanceHypothesis, float]],
-        ) -> tuple[float, int]:
-            _, (hyp, score) = row
-            if isinstance(hyp.measurement, MissedDetection):
-                return (float(score), -1)
-            return (
-                float(score),
-                -ctx.det_index_by_obj.get(id(hyp.measurement), 10**9),
-            )
-
-        sorted_rows = sorted(scored_rows, key=_sort_key, reverse=True)
-        kept_rows = sorted_rows[: self.params.max_children_per_track]
-        kept_row_indices = {row_index for row_index, _ in kept_rows}
-        if miss_row_index not in kept_row_indices:
-            kept_rows.append(scored_rows[miss_row_index])
-
-        out = [
-            self._candidate_from_distance_hypothesis(
-                leaf_node=leaf_node,
-                hypothesis=hyp,
-                log_delta=float(log_delta),
-                ctx=ctx,
-                expansion_call_stats=expansion_call_stats,
-            )
-            for _, (hyp, log_delta) in kept_rows
-        ]
-        out.sort(key=lambda c: c.log_delta, reverse=True)
-        return out
-
-    def _expand_one_track_tree(
-        self,
-        tree: TrackTree,
-        ctx: ScanContext,
-        *,
-        expansion_call_stats: _ExpansionCallStats,
-    ) -> None:
-        """Expand all active leaves in one tree, then apply pre-solve cap guardrail."""
-        new_leaf_ids: set[int] = set()
-
-        for leaf_id in sorted(tree.active_leaf_node_ids):
-            leaf = self._nodes_by_id[leaf_id]
-            candidates = self._candidates_for_track_leaf(
-                leaf,
-                ctx,
-                expansion_call_stats=expansion_call_stats,
-            )
-            for cand in candidates:
-                new_leaf_ids.add(cand.child_node.node_id)
-
-        tree.active_leaf_node_ids = self._apply_pre_solve_leaf_cap_guardrail(
-            new_leaf_ids
-        )
-
-    def _apply_pre_solve_leaf_cap_guardrail(
-        self,
-        leaf_node_ids: set[int],
-    ) -> set[int]:
-        """Apply optional local leaf capping only as a pre-solve tractability valve."""
-        max_leaves = self.params.max_leaves_per_track_tree
-        if max_leaves is None or len(leaf_node_ids) <= max_leaves:
-            return leaf_node_ids
-
-        ranked = sorted(
-            (self._nodes_by_id[node_id] for node_id in leaf_node_ids),
-            key=lambda node: (
-                float(node.accumulated_log_score),
-                -int(node.node_id),
-            ),
-            reverse=True,
-        )
-        return {node.node_id for node in ranked[: int(max_leaves)]}
-
     def _expand_all_track_trees(
         self,
         ctx: ScanContext,
@@ -1289,12 +912,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         expansion_call_stats: _ExpansionCallStats,
     ) -> None:
         """Run local expansion for all current persistent track trees."""
-        for tree in self.track_trees_by_track_id.values():
-            self._expand_one_track_tree(
-                tree,
-                ctx,
-                expansion_call_stats=expansion_call_stats,
-            )
+        expand_all_track_trees(
+            track_trees_by_track_id=self.track_trees_by_track_id,
+            nodes_by_id=self._nodes_by_id,
+            ctx=ctx,
+            hypothesiser=self._hypothesiser,
+            updater=self._updater,
+            scoring_model=self.scoring_model,
+            params=self.params,
+            create_child_node=self._create_track_hypothesis_node,
+            assoc_miss_label=TOMHTTracker.ASSOC_MISS,
+            expansion_call_stats=expansion_call_stats,
+        )
 
     def _remove_empty_trees(self) -> None:
         """Drop any tree that has no surviving active leaves."""
@@ -1319,139 +948,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
         return out
 
-    def _birth_used_key(
-        self,
-        tr: Track,
-        *,
-        scan_index: int,
-        det_index_by_obj: dict[int, int],
-    ) -> DetectionKey | None:
-        """Best-effort extraction of a current-scan used detection key for a birth."""
-        try:
-            last = tr.states[-1]
-            hyp = getattr(last, "hypothesis", None)
-            meas = getattr(hyp, "measurement", None) if hyp is not None else None
-            if meas is None:
-                return None
-            det_index = det_index_by_obj.get(id(meas))
-            if det_index is None:
-                return None
-            return (scan_index, int(det_index))
-        except Exception:
-            return None
-
-    def _birth_is_sane(self, tr: Track) -> bool:
-        """Apply simple numeric sanity checks before accepting an internal birth."""
-        st = tr.states[-1]
-        sv = np.asarray(st.state_vector, dtype=float)
-
-        x = float(sv[0, 0])
-        y = float(sv[2, 0])
-        if not (np.isfinite(x) and np.isfinite(y)):
-            return False
-        if (
-            abs(x) > self.params.birth_max_abs_pos
-            or abs(y) > self.params.birth_max_abs_pos
-        ):
-            return False
-
-        cov = getattr(st, "covar", None)
-        if cov is None:
-            return False
-        cov = np.asarray(cov, dtype=float)
-        if not np.all(np.isfinite(cov)):
-            return False
-        if float(np.trace(cov)) > self.params.birth_max_covar_trace:
-            return False
-
-        return True
-
-    def _birth_holding_track(self, birth: Track) -> Track:
-        """Return the initiator holding-track metadata when available."""
-        holding = birth.metadata.get("holding_track", None)
-        return holding if isinstance(holding, Track) else birth
-
-    def _birth_support_points(self, birth: Track) -> int:
-        """Return update-count support for one birth candidate."""
-        holding = self._birth_holding_track(birth)
-        return sum(1 for state in holding.states if isinstance(state, Update))
-
-    def _birth_support_age_misses(self, birth: Track) -> tuple[int, int, int]:
-        """Return support/age/miss summary for one birth candidate."""
-        holding = self._birth_holding_track(birth)
-        age = len(holding)
-        support = self._birth_support_points(birth)
-        misses = max(age - support, 0)
-        return support, age, misses
-
-    def _birth_covar_trace(self, birth: Track) -> float:
-        """Return covariance-trace quality proxy for one birth candidate."""
-        state = birth.states[-1]
-        cov = getattr(state, "covar", None)
-        if cov is None:
-            return float("inf")
-        cov_arr = np.asarray(cov, dtype=float)
-        if cov_arr.ndim != 2 or cov_arr.shape[0] != cov_arr.shape[1]:
-            return float("inf")
-        trace_val = float(np.trace(cov_arr))
-        if not np.isfinite(trace_val):
-            return float("inf")
-        return trace_val
-
-    def _birth_track_sort_key(
-        self,
-        tr: Track,
-        *,
-        scan_index: int,
-        det_index_by_obj: dict[int, int],
-    ) -> tuple[float, ...]:
-        """Return deterministic heuristic ranking key for internal births."""
-        used_key = self._birth_used_key(
-            tr,
-            scan_index=scan_index,
-            det_index_by_obj=det_index_by_obj,
-        )
-        support, age, misses = self._birth_support_age_misses(tr)
-        cov_trace = self._birth_covar_trace(tr)
-
-        st = tr.states[-1]
-        sv = np.asarray(st.state_vector, dtype=float).reshape(-1)
-
-        def _state_component(idx: int) -> float:
-            if idx >= sv.size:
-                return float("inf")
-            value = float(sv[idx])
-            if not np.isfinite(value):
-                return float("inf")
-            return value
-
-        used_idx = float(10**9 if used_key is None else int(used_key[1]))
-        return (
-            float(-support),
-            float(misses),
-            float(age),
-            cov_trace,
-            used_idx,
-            _state_component(0),  # x
-            _state_component(1),  # vx
-            _state_component(2),  # y
-            _state_component(3),  # vy
-            float(len(tr.states)),
-        )
-
     def _residual_detection_indices_after_step2(self, ctx: ScanContext) -> list[int]:
         """Return current-scan detection indices unused after local expansion."""
-        used_current_scan_det_indices: set[int] = set()
-        for leaf in self._active_leaf_nodes():
-            used_current_scan_det_indices |= self._current_scan_det_indices_from_keys(
-                leaf.detection_history_keys,
-                ctx.scan_index,
-            )
-        return [
-            i
-            for i in range(len(ctx.detections))
-            if i not in used_current_scan_det_indices
-        ]
+        return residual_detection_indices_after_expansion(
+            active_leaf_nodes=self._active_leaf_nodes(),
+            ctx=ctx,
+        )
 
     def _birth_guardrail_block_reason(self) -> str | None:
         """Return a reason when simple load guards should block internal births."""
@@ -1460,16 +962,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             len(tree.active_leaf_node_ids)
             for tree in self.track_trees_by_track_id.values()
         )
-
-        trees_cap = self.params.birth_skip_if_active_trees_above
-        if trees_cap is not None and active_trees > int(trees_cap):
-            return f"active tree count above cap ({active_trees}>{int(trees_cap)})"
-
-        leaves_cap = self.params.birth_skip_if_active_leaves_above
-        if leaves_cap is not None and active_leaves > int(leaves_cap):
-            return f"active leaf count above cap ({active_leaves}>{int(leaves_cap)})"
-
-        return None
+        return birth_guardrail_block_reason(
+            active_trees=active_trees,
+            active_leaves=active_leaves,
+            params=self.params,
+        )
 
     def _run_internal_births(self, ctx: ScanContext) -> BirthStats:
         """Create simple internal birth trees from Step-2 residual detections."""
@@ -1514,20 +1011,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         birth_tracks_created = len(initiated_tracks)
 
-        # Apply heuristic quality ranking before per-scan cap.
-        kept_birth_tracks = [
-            track for track in initiated_tracks if self._birth_is_sane(track)
-        ]
-        # Initiators return sets; make cap selection deterministic across runs.
-        kept_birth_tracks.sort(
-            key=lambda track: self._birth_track_sort_key(
-                track,
-                scan_index=ctx.scan_index,
-                det_index_by_obj=ctx.det_index_by_obj,
-            )
+        kept_birth_tracks = select_internal_birth_candidates(
+            initiated_tracks=initiated_tracks,
+            ctx=ctx,
+            params=self.params,
         )
-        if len(kept_birth_tracks) > self.params.max_births_per_scan:
-            kept_birth_tracks = kept_birth_tracks[: self.params.max_births_per_scan]
         birth_tracks_kept = len(kept_birth_tracks)
 
         if self.params.debug_display_births and kept_birth_tracks:
@@ -1541,7 +1029,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             track_id = self._next_track_id
             self._next_track_id += 1
             state = birth_track.states[-1]
-            used_key = self._birth_used_key(
+            used_key = birth_used_key(
                 birth_track,
                 scan_index=ctx.scan_index,
                 det_index_by_obj=ctx.det_index_by_obj,
@@ -1585,117 +1073,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # Per-Scan Clustering + Global Rebuild
     # =========================================================================
 
-    # --- Cluster graph construction from current tree frontiers ---
-
-    def _current_scan_candidate_keys_for_tree(
-        self,
-        tree: TrackTree,
-        scan_index: int,
-    ) -> set[DetectionKey]:
-        """Return current-scan detection keys present in one tree frontier."""
-        keys: set[DetectionKey] = set()
-        for leaf_id in tree.active_leaf_node_ids:
-            leaf = self._nodes_by_id[leaf_id]
-            if (
-                leaf.used_det_key is not None
-                and int(leaf.used_det_key[0]) == scan_index
-            ):
-                keys.add(leaf.used_det_key)
-        return keys
-
-    def _history_conflict_keys_for_tree(
-        self,
-        tree: TrackTree,
-    ) -> set[DetectionKey]:
-        """Return all detection-history keys present in this tree's active leaves."""
-        keys: set[DetectionKey] = set()
-        for leaf_id in tree.active_leaf_node_ids:
-            leaf = self._nodes_by_id[leaf_id]
-            keys |= set(leaf.detection_history_keys)
-        return keys
-
     def _build_track_clusters(self, ctx: ScanContext) -> list[_ClusterWorkItem]:
         """Build independent clusters from shared active-leaf history detections."""
-        track_ids = sorted(self.track_trees_by_track_id.keys())
-        if not track_ids:
-            return []
-
-        history_keys_by_track: dict[int, set[DetectionKey]] = {
-            track_id: self._history_conflict_keys_for_tree(
-                self.track_trees_by_track_id[track_id],
-            )
-            for track_id in track_ids
-        }
-        current_scan_keys_by_track: dict[int, set[DetectionKey]] = {
-            track_id: self._current_scan_candidate_keys_for_tree(
-                self.track_trees_by_track_id[track_id],
-                ctx.scan_index,
-            )
-            for track_id in track_ids
-        }
-
-        adjacency: dict[int, set[int]] = {track_id: set() for track_id in track_ids}
-        conflict_links: list[tuple[int, int, tuple[DetectionKey, ...]]] = []
-        for i, left_track_id in enumerate(track_ids):
-            for right_track_id in track_ids[i + 1 :]:
-                shared = (
-                    history_keys_by_track[left_track_id]
-                    & history_keys_by_track[right_track_id]
-                )
-                if not shared:
-                    continue
-                adjacency[left_track_id].add(right_track_id)
-                adjacency[right_track_id].add(left_track_id)
-                conflict_links.append(
-                    (
-                        left_track_id,
-                        right_track_id,
-                        tuple(sorted(shared)),
-                    )
-                )
-
-        components: list[list[int]] = []
-        seen: set[int] = set()
-        for seed in track_ids:
-            if seed in seen:
-                continue
-            stack = [seed]
-            component: list[int] = []
-            seen.add(seed)
-            while stack:
-                cur = stack.pop()
-                component.append(cur)
-                for nbr in sorted(adjacency[cur]):
-                    if nbr in seen:
-                        continue
-                    seen.add(nbr)
-                    stack.append(nbr)
-            component.sort()
-            components.append(component)
-
-        out: list[_ClusterWorkItem] = []
-        for cluster_id, component in enumerate(
-            sorted(components, key=lambda c: tuple(c))
-        ):
-            comp_track_ids = tuple(component)
-            comp_track_set = set(comp_track_ids)
-            comp_links = tuple(
-                link
-                for link in conflict_links
-                if link[0] in comp_track_set and link[1] in comp_track_set
-            )
-            out.append(
-                _ClusterWorkItem(
-                    cluster_id=cluster_id,
-                    track_ids=comp_track_ids,
-                    current_scan_det_keys_by_track_id={
-                        track_id: set(current_scan_keys_by_track[track_id])
-                        for track_id in comp_track_ids
-                    },
-                    conflict_links=comp_links,
-                )
-            )
-        return out
+        return build_track_clusters(
+            track_trees_by_track_id=self.track_trees_by_track_id,
+            nodes_by_id=self._nodes_by_id,
+            scan_index=ctx.scan_index,
+        )
 
     def _build_cluster_unused_score_context(
         self,
@@ -1860,225 +1244,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         for leaves in leaf_options:
             projected *= len(leaves)
         return projected
-
-    def _projected_combination_count_for_track_ids(
-        self,
-        track_ids: tuple[int, ...],
-    ) -> int:
-        """Projected Cartesian leaf combinations for one track-id tuple."""
-        projected = 1
-        for track_id in track_ids:
-            tree = self.track_trees_by_track_id[track_id]
-            leaf_count = len(tree.active_leaf_node_ids)
-            if leaf_count <= 0:
-                raise RuntimeError(
-                    "Cluster rebuild encountered a tree with no active leaves. "
-                    "Lifecycle filtering should remove empty trees before clustering."
-                )
-            projected *= leaf_count
-        return projected
-
-    @staticmethod
-    def _edge_pair(
-        left_track_id: int,
-        right_track_id: int,
-    ) -> tuple[int, int]:
-        """Return canonical undirected edge ordering for track-id pairs."""
-        if left_track_id <= right_track_id:
-            return (left_track_id, right_track_id)
-        return (right_track_id, left_track_id)
-
-    # --- Approximation path: overload split before exact subcluster rebuild ---
-
-    @staticmethod
-    def _connected_components_from_pairs(
-        track_ids: tuple[int, ...],
-        edge_pairs: Iterable[tuple[int, int]],
-    ) -> list[tuple[int, ...]]:
-        """Return connected components for the supplied undirected edge set."""
-        adjacency: dict[int, set[int]] = {track_id: set() for track_id in track_ids}
-        for left_track_id, right_track_id in edge_pairs:
-            adjacency[left_track_id].add(right_track_id)
-            adjacency[right_track_id].add(left_track_id)
-
-        components: list[tuple[int, ...]] = []
-        seen: set[int] = set()
-        for seed in sorted(track_ids):
-            if seed in seen:
-                continue
-            stack = [seed]
-            component: list[int] = []
-            seen.add(seed)
-            while stack:
-                cur = stack.pop()
-                component.append(cur)
-                for nbr in sorted(adjacency[cur]):
-                    if nbr in seen:
-                        continue
-                    seen.add(nbr)
-                    stack.append(nbr)
-            components.append(tuple(sorted(component)))
-        components.sort()
-        return components
-
-    @staticmethod
-    def _cluster_edge_strengths(
-        cluster: _ClusterWorkItem,
-    ) -> dict[tuple[int, int], int]:
-        """Return conflict-edge strengths = shared full-history key counts."""
-        strengths: dict[tuple[int, int], int] = {}
-        for left_track_id, right_track_id, shared_keys in cluster.conflict_links:
-            strengths[TOMHTTracker._edge_pair(left_track_id, right_track_id)] = len(
-                shared_keys
-            )
-        return strengths
-
-    def _split_overloaded_cluster(
-        self,
-        *,
-        cluster: _ClusterWorkItem,
-        projected_before: int,
-        threshold: int,
-    ) -> tuple[list[_ClusterWorkItem], _OverloadSplitSummary]:
-        """Approximate one overloaded cluster by severing weakest conflict edges."""
-        remaining_edge_keys_by_pair: dict[tuple[int, int], tuple[DetectionKey, ...]] = {
-            self._edge_pair(left_track_id, right_track_id): tuple(shared_keys)
-            for left_track_id, right_track_id, shared_keys in cluster.conflict_links
-        }
-        edge_strengths = self._cluster_edge_strengths(cluster)
-        removed_edges: list[_OverloadSplitRemovedEdge] = []
-
-        stopping_reason = "all_components_under_threshold"
-        max_removals = self.params.overload_split_max_edge_removals_per_cluster
-        max_removals_int = None if max_removals is None else int(max_removals)
-
-        while True:
-            components = self._connected_components_from_pairs(
-                cluster.track_ids,
-                remaining_edge_keys_by_pair.keys(),
-            )
-            overloaded_components: list[tuple[int, ...]] = []
-            for component_track_ids in components:
-                projected = self._projected_combination_count_for_track_ids(
-                    component_track_ids
-                )
-                if projected > threshold:
-                    overloaded_components.append(component_track_ids)
-            if not overloaded_components:
-                break
-
-            if max_removals_int is not None and len(removed_edges) >= max_removals_int:
-                stopping_reason = "max_edge_removals_reached"
-                break
-
-            weakest: tuple[int, int, int] | None = None
-            for component_track_ids in overloaded_components:
-                component_track_set = set(component_track_ids)
-                for left_track_id, right_track_id in remaining_edge_keys_by_pair:
-                    if (
-                        left_track_id not in component_track_set
-                        or right_track_id not in component_track_set
-                    ):
-                        continue
-                    strength = edge_strengths[(left_track_id, right_track_id)]
-                    candidate = (strength, left_track_id, right_track_id)
-                    if weakest is None or candidate < weakest:
-                        weakest = candidate
-
-            if weakest is None:
-                stopping_reason = "no_edges_left_in_overloaded_component"
-                break
-
-            strength, left_track_id, right_track_id = weakest
-            remaining_edge_keys_by_pair.pop((left_track_id, right_track_id), None)
-            removed_edges.append(
-                _OverloadSplitRemovedEdge(
-                    left_track_id=left_track_id,
-                    right_track_id=right_track_id,
-                    shared_history_key_count=strength,
-                )
-            )
-
-        final_components = self._connected_components_from_pairs(
-            cluster.track_ids,
-            remaining_edge_keys_by_pair.keys(),
-        )
-        subclusters: list[_ClusterWorkItem] = []
-        projected_after_by_subcluster: list[int] = []
-        for component_track_ids in final_components:
-            component_track_set = set(component_track_ids)
-            component_links = tuple(
-                (
-                    left_track_id,
-                    right_track_id,
-                    remaining_edge_keys_by_pair[(left_track_id, right_track_id)],
-                )
-                for left_track_id, right_track_id in sorted(remaining_edge_keys_by_pair)
-                if left_track_id in component_track_set
-                and right_track_id in component_track_set
-            )
-            subclusters.append(
-                _ClusterWorkItem(
-                    cluster_id=-1,
-                    track_ids=component_track_ids,
-                    current_scan_det_keys_by_track_id={
-                        track_id: set(
-                            cluster.current_scan_det_keys_by_track_id[track_id]
-                        )
-                        for track_id in component_track_ids
-                    },
-                    conflict_links=component_links,
-                    overload_split_origin_cluster_id=cluster.cluster_id,
-                )
-            )
-            projected_after_by_subcluster.append(
-                self._projected_combination_count_for_track_ids(component_track_ids)
-            )
-
-        summary = _OverloadSplitSummary(
-            original_cluster_id=cluster.cluster_id,
-            original_track_ids=cluster.track_ids,
-            projected_before=projected_before,
-            projected_threshold=threshold,
-            removed_edges=tuple(removed_edges),
-            resulting_subclusters=tuple(
-                subcluster.track_ids for subcluster in subclusters
-            ),
-            projected_after_by_subcluster=tuple(projected_after_by_subcluster),
-            stopping_reason=stopping_reason,
-        )
-        return subclusters, summary
-
-    def _maybe_split_cluster_under_overload(
-        self,
-        *,
-        cluster: _ClusterWorkItem,
-    ) -> tuple[list[_ClusterWorkItem], _OverloadSplitSummary | None]:
-        """Split one cluster only when projected Cartesian size exceeds threshold."""
-        if not self.params.overload_split_enabled:
-            return [cluster], None
-
-        threshold_raw = self.params.overload_split_projected_combination_threshold
-        if threshold_raw is None:
-            return [cluster], None
-        threshold = int(threshold_raw)
-        if threshold <= 0:
-            raise ValueError(
-                "overload_split_projected_combination_threshold must be positive "
-                "when overload splitting is enabled."
-            )
-
-        projected_before = self._projected_combination_count_for_track_ids(
-            cluster.track_ids
-        )
-        if projected_before <= threshold:
-            return [cluster], None
-
-        return self._split_overloaded_cluster(
-            cluster=cluster,
-            projected_before=projected_before,
-            threshold=threshold,
-        )
 
     @staticmethod
     def _log_overload_split_summary(
@@ -2316,21 +1481,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         return "; ".join(parts)
 
     @staticmethod
-    def _format_detection_key_sample(
-        keys: set[DetectionKey],
-        *,
-        max_items: int = 6,
-    ) -> str:
-        """Return compact stable formatting for detection-key debug samples."""
-        if not keys:
-            return "[]"
-        ordered = sorted(keys)
-        if len(ordered) <= max_items:
-            return str(ordered)
-        head = ordered[:max_items]
-        return f"{head}...(+{len(ordered) - max_items})"
-
-    @staticmethod
     def _forced_detection_history_keys(
         leaves: list[TrackHypothesisNode],
     ) -> set[DetectionKey]:
@@ -2383,7 +1533,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             f"track_ids={list(cluster.track_ids)} "
             f"relaxed_keys={len(relaxed_keys)} "
             "relaxed_sample="
-            f"{self._format_detection_key_sample(relaxed_keys)} "
+            f"{format_detection_key_sample(relaxed_keys)} "
             f"feasible_before={feasible_before} "
             f"feasible_after={feasible_after} "
             f"status={'enabled' if feasible_after > 0 else 'failed'}"
@@ -2407,7 +1557,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 "; "
                 f"relaxed_historical_keys={len(relaxed_historical_keys)} "
                 "relaxed_sample="
-                f"{self._format_detection_key_sample(relaxed_historical_keys)}"
+                f"{format_detection_key_sample(relaxed_historical_keys)}"
             )
         raise RuntimeError(
             "Cluster rebuild found no feasible combination. "
@@ -2565,19 +1715,22 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         if not clusters:
             return [], RebuildStats()
 
-        clusters_for_rebuild_raw: list[_ClusterWorkItem] = []
-        split_summaries: list[_OverloadSplitSummary] = []
-        for cluster in clusters:
-            subclusters, split_summary = self._maybe_split_cluster_under_overload(
-                cluster=cluster
+        leaf_count_by_track_id = {
+            track_id: len(tree.active_leaf_node_ids)
+            for track_id, tree in self.track_trees_by_track_id.items()
+        }
+        clusters_for_rebuild_raw, split_summaries = (
+            apply_overload_splitting_to_clusters(
+                clusters=clusters,
+                leaf_count_by_track_id=leaf_count_by_track_id,
+                params=self.params,
             )
-            clusters_for_rebuild_raw.extend(subclusters)
-            if split_summary is not None:
-                split_summaries.append(split_summary)
-                self._log_overload_split_summary(
-                    scan_index=ctx.scan_index,
-                    summary=split_summary,
-                )
+        )
+        for split_summary in split_summaries:
+            self._log_overload_split_summary(
+                scan_index=ctx.scan_index,
+                summary=split_summary,
+            )
 
         clusters_for_rebuild = [
             replace(cluster, cluster_id=cluster_id)
@@ -2617,50 +1770,15 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     # --- Post-solve pruning + full-scan MAP merge ---
 
-    @staticmethod
-    def _supported_leaf_ids_by_track_from_rebuilt_globals(
-        snapshot: ClusterRebuildSnapshot,
-    ) -> dict[int, set[int]]:
-        """Collect cluster leaf IDs that appear in at least one retained rebuilt global."""
-        supported_by_track_id: dict[int, set[int]] = {
-            track_id: set() for track_id in snapshot.track_ids
-        }
-        for rebuilt_global in snapshot.rebuilt_globals:
-            for track_id, leaf_node in rebuilt_global.leaf_nodes_by_track_id.items():
-                if track_id in supported_by_track_id:
-                    supported_by_track_id[track_id].add(int(leaf_node.node_id))
-        return supported_by_track_id
-
     def _apply_post_solve_supported_leaf_pruning(
         self,
         cluster_snapshots: list[ClusterRebuildSnapshot],
     ) -> None:
         """Prune each cluster tree to leaves supported by retained rebuilt globals."""
-        for snapshot in cluster_snapshots:
-            # Overload-decomposed clusters are approximate; keep their current
-            # frontiers to avoid over-pruning branches that may be needed once
-            # severed weak links reconnect in later scans.
-            if snapshot.overload_split_origin_cluster_id is not None:
-                continue
-
-            # Keep k=0 behavior non-destructive for compatibility/debug edge cases.
-            if not snapshot.rebuilt_globals:
-                continue
-
-            supported_by_track_id = (
-                self._supported_leaf_ids_by_track_from_rebuilt_globals(snapshot)
-            )
-            for track_id in snapshot.track_ids:
-                tree = self.track_trees_by_track_id.get(track_id)
-                if tree is None:
-                    continue
-                supported_leaf_ids = supported_by_track_id.get(track_id, set())
-                if not supported_leaf_ids:
-                    raise RuntimeError(
-                        "Post-solve supported-leaf pruning found no retained leaves "
-                        f"for cluster={snapshot.cluster_id} track_id={track_id}."
-                    )
-                tree.active_leaf_node_ids = set(supported_leaf_ids)
+        apply_post_solve_supported_leaf_pruning(
+            cluster_snapshots=cluster_snapshots,
+            track_trees_by_track_id=self.track_trees_by_track_id,
+        )
 
     @staticmethod
     def _merge_cluster_map_globals(

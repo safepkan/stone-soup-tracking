@@ -12,6 +12,7 @@ Update (2026-04-20): runtime utility helpers now live in `mht/utils.py` (`env_fl
 Update (2026-04-20): TOMHT output `Track.id` is now stable by default (internal integer track ID instead of Stone Soup auto-UUID), and constructor injection (`output_track_id_mapper`) allows mapping internal integer IDs to integration-specific public ID objects while keeping TOMHT internals dependency-free.
 Update (2026-04-20): post-N-scan whole-track lifecycle now has two lanes: default node-native miss-threshold policy (`max_missed`) and optional injected Stone Soup `Deleter` policy (`deleter=` in tracker constructor). `track_miss_termination_mode` remains the leaf-selection mode for either lane.
 Update (2026-04-20): expansion timing instrumentation now splits `expand_ms` into explicit hypothesiser and updater components (`expand_hypothesise_ms`, `expand_update_ms`) plus call counts, so replay timing can attribute expansion cost between `hypothesise()` and `update()` directly.
+Update (2026-05-11): `TOMHTParams` now lives in `mht/tomht_params.py` so extracted helper modules can depend on tracker configuration without importing `TOMHTTracker`; `tomht_tracker.py` still re-exports it for compatibility. Local expansion orchestration now lives in `mht/tomht_expansion.py`, internal-birth candidate helpers now live in `mht/tomht_births.py`, cluster work construction and overload cluster decomposition now live in `mht/tomht_clustering.py`, post-solve supported-leaf pruning now lives in `mht/tomht_pruning.py`, and TOMHT-specific scan/debug helpers now live in `mht/tomht_utils.py`. `TOMHTTracker` still orchestrates the same pipeline, but local expansion/candidate handling, internal-birth residual/candidate utilities, full-history cluster construction, overload-split transformation, retained-global leaf-support pruning, detection sorting, detection-key filtering, and detection-key debug formatting are now isolated behind narrow helper functions.
 
 ---
 
@@ -149,6 +150,34 @@ Per scan, the tracker rebuilds:
 - and scan statistics.
 
 These rebuilt artifacts are retained only as **last-scan inspection/debug snapshots**, not as the persistent search frontier. The compatibility slot `self.global_hypotheses` now contains only the latest merged MAP global for older inspection paths, not a scan-to-scan beam frontier.
+
+Cluster work construction is a helper-layer responsibility: it takes current
+track trees, active leaf nodes, the node table, and the scan index, then returns
+deterministically ordered cluster work items with full-history conflict links and
+current-scan detection-key metadata. Overload decomposition is also handled in
+that helper layer as an explicit transformation from one cluster work item plus
+per-track active leaf counts into subcluster work items and instrumentation. This
+preserves the existing full-history exclusivity and weak-edge split semantics
+while keeping the tracker class focused on orchestration.
+
+Local expansion is also a helper-layer responsibility: `mht/tomht_expansion.py`
+owns distance-hypothesis validation, local candidate scoring/ranking, mandatory
+miss preservation, updater calls, pre-solve leaf capping, and expansion timing
+counters. Persistent node ID allocation and node registration remain owned by
+`TOMHTTracker` through an explicit child-node creation callback.
+
+TOMHT-specific utility helpers are separated from generic runtime utilities:
+`mht/tomht_utils.py` owns deterministic detection sorting, current-scan
+detection-key filtering, and compact detection-key sample formatting, while
+`mht/utils.py` remains for generic environment/runtime helpers.
+
+Internal-birth candidate utilities are split out narrowly: `mht/tomht_births.py`
+owns birth used-key extraction, sanity checks, support/age/miss summaries,
+covariance-trace ranking, deterministic candidate sorting/capping, residual
+detection-index calculation after expansion, and simple birth guardrail
+reasoning. `TOMHTTracker` still owns initiator invocation, `_last_unused_detections`,
+debug printing, birth scoring, ID allocation, root-node creation, and tree
+insertion.
 
 ---
 

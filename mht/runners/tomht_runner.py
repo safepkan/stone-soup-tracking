@@ -44,10 +44,8 @@ from mht.scenarios.crossing_targets import (  # noqa: E402
     external_tomht_tracks_for_crossing,
     tomht_initiator_for_crossing_simple,
 )
-from mht.tomht_tracker import (  # noqa: E402
-    TOMHTTracker,
-    TOMHTParams,
-)
+from mht.tomht_params import TOMHTParams  # noqa: E402
+from mht.tomht_tracker import TOMHTTracker  # noqa: E402
 
 SetupName = Literal["crossing", "bearing_range"]
 OperatingModeName = Literal["CUSTOM", "EXTERNAL", "INTERNAL", "BOTH"]

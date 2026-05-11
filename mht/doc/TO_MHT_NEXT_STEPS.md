@@ -5,6 +5,7 @@
 **Local expansion volume reduction / pre-expansion control**
 
 Update (2026-04-20): timing output now includes explicit expansion-call attribution (`expand_hypothesise_ms` / `expand_update_ms` and call counts), which closes part of the "characterize expansion volume/cost" prerequisite and makes it easier to separate hypothesis-generation vs state-update time on replay.
+Update (2026-05-11): a conservative pre-phase refactor extracted `TOMHTParams`, local expansion orchestration, internal-birth candidate utilities, cluster work construction, overload cluster decomposition, post-solve supported-leaf pruning, and TOMHT-specific scan/debug utilities from `TOMHTTracker` without changing scoring, pruning semantics, clustering semantics, overload-splitting behavior, local expansion behavior, birth behavior, or public API. Birth initiator invocation, scoring, debug output, ID allocation, and tree insertion remain in the tracker because they are still tightly coupled there.
 
 The recent local-association phase is now complete enough that the tracker has:
 
