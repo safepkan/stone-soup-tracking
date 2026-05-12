@@ -349,6 +349,8 @@ For each cluster, the tracker now solves the exact cluster K-best problem throug
 - score = sum of selected leaf scores + cluster constant,
 - retain up to `max_results` best feasible combinations.
 
+Implementation note (2026-05-12): cluster rebuild orchestration now lives in `mht/tomht_cluster_rebuild.py`. `TOMHTTracker` still owns the scan pipeline, but delegates this phase through `rebuild_cluster_globals(...)`; rebuild, solve, overload-split, and historical-relaxation semantics are unchanged.
+
 ### Post-solve supported-leaf pruning
 
 After each cluster rebuild, each non-overload-split cluster tree keeps only leaves that appear in at least one retained rebuilt global for that cluster. This remains the main pruning mechanism that keeps active leaf frontiers globally informed.
