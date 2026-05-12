@@ -189,7 +189,8 @@ counts, empty-tree removal, and unreachable-node cleanup. Expansion, clustering,
 and post-solve pruning now take the store as their persistent-state dependency.
 The store also provides a narrow new-track root insertion helper for internal
 births and external starts. `TOMHTTracker` keeps `track_trees_by_track_id` and
-`_nodes_by_id` as compatibility properties that forward to the store.
+`_nodes_by_id` as compatibility properties that forward to the store; tracker
+implementation code refers to `self._tree_store` directly.
 
 ---
 

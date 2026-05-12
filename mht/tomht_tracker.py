@@ -642,7 +642,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         # 8) Post-scan instrumentation.
         scan_wall_ms = (wall_clock.perf_counter_ns() - scan_wall_start_ns) / 1e6
         maxrss_mb = get_process_maxrss_mb()
-        node_count_total = len(self._nodes_by_id)
+        node_count_total = len(self._tree_store.nodes_by_id)
         active_leaves = self._tree_store.active_leaf_count()
 
         timing_breakdown = ScanTimingBreakdown(
@@ -698,14 +698,15 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         # External starts are assumed to be from currently unused detections,
         # so add them directly to the last MAP view.
+        tree_store = self._tree_store
         merged = dict(self._last_map_global.leaf_nodes_by_track_id)
-        for track_id, tree in self.track_trees_by_track_id.items():
+        for track_id, tree in tree_store.track_trees_by_track_id.items():
             if track_id in merged:
                 continue
             if len(tree.active_leaf_node_ids) != 1:
                 continue
             only_leaf_id = next(iter(tree.active_leaf_node_ids))
-            merged[track_id] = self._nodes_by_id[only_leaf_id]
+            merged[track_id] = tree_store.nodes_by_id[only_leaf_id]
 
         self._last_map_global = GlobalHypothesis(
             leaf_nodes_by_track_id=merged,
@@ -728,9 +729,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         map_snapshot = self.get_map_hypothesis_snapshot()
         if map_snapshot is None:
             return set()
+        tree_store = self._tree_store
         output_tracks: set[Track] = set()
         for leaf_node in map_snapshot.leaf_nodes_by_track_id.values():
-            tree = self.track_trees_by_track_id.get(int(leaf_node.track_id))
+            tree = tree_store.track_trees_by_track_id.get(int(leaf_node.track_id))
             committed_states = [] if tree is None else list(tree.committed_states)
             output_tracks.add(
                 reconstruct_track_from_committed_prefix_and_leaf_node(
@@ -771,7 +773,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def get_track_tree_snapshot(self) -> Mapping[int, dict[str, object]]:
         """Return a read-only snapshot of current persistent tree roots/leaves."""
         out: dict[int, dict[str, object]] = {}
-        for track_id, tree in sorted(self.track_trees_by_track_id.items()):
+        for track_id, tree in sorted(self._tree_store.track_trees_by_track_id.items()):
             out[track_id] = {
                 "root_node_id": int(tree.root_node_id),
                 "active_leaf_node_ids": tuple(sorted(tree.active_leaf_node_ids)),
@@ -975,7 +977,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         """Debug-only guard: fail fast if any cluster is infeasible after pruning."""
         if not self._pruning_feasibility_validation_enabled():
             return
-        if not self.track_trees_by_track_id:
+        if not self._tree_store.track_trees_by_track_id:
             return
 
         clusters = self._build_track_clusters(ctx)
@@ -1044,11 +1046,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         track_ids: tuple[int, ...],
     ) -> list[list[TrackHypothesisNode]]:
         """Materialize sorted active-leaf options for each track in a cluster."""
+        tree_store = self._tree_store
         out: list[list[TrackHypothesisNode]] = []
         for track_id in track_ids:
-            tree = self.track_trees_by_track_id[track_id]
+            tree = tree_store.track_trees_by_track_id[track_id]
             leaves = [
-                self._nodes_by_id[node_id]
+                tree_store.nodes_by_id[node_id]
                 for node_id in sorted(tree.active_leaf_node_ids)
             ]
             if not leaves:
@@ -1257,11 +1260,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         """Return forced committed historical keys shared by multiple tracks."""
         boundary_scan_index = int(ctx.scan_index) - int(self.params.ns_scan_window)
         key_track_count: dict[DetectionKey, int] = {}
+        tree_store = self._tree_store
         for idx, track_id in enumerate(cluster.track_ids):
             leaves = leaf_options[idx]
             forced_keys = self._forced_detection_history_keys(leaves)
-            tree = self.track_trees_by_track_id[track_id]
-            root = self._nodes_by_id[tree.root_node_id]
+            tree = tree_store.track_trees_by_track_id[track_id]
+            root = tree_store.nodes_by_id[tree.root_node_id]
             root_keys = set(root.detection_history_keys)
             forced_committed_keys = {
                 key
@@ -1474,7 +1478,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         leaf_count_by_track_id = {
             track_id: len(tree.active_leaf_node_ids)
-            for track_id, tree in self.track_trees_by_track_id.items()
+            for track_id, tree in self._tree_store.track_trees_by_track_id.items()
         }
         clusters_for_rebuild_raw, split_summaries = (
             apply_overload_splitting_to_clusters(
@@ -1663,13 +1667,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         cluster_snapshots: list[ClusterRebuildSnapshot],
     ) -> _MapNScanPruningPlan:
         """Plan MAP child commits and disagreement diagnostics without mutation."""
+        tree_store = self._tree_store
         root_before_by_track_id: dict[int, TrackHypothesisNode] = {
-            track_id: self._nodes_by_id[tree.root_node_id]
-            for track_id, tree in self.track_trees_by_track_id.items()
+            track_id: tree_store.nodes_by_id[tree.root_node_id]
+            for track_id, tree in tree_store.track_trees_by_track_id.items()
         }
 
         map_choice_by_track_id: dict[int, int] = {}
-        for track_id, tree in sorted(self.track_trees_by_track_id.items()):
+        for track_id, tree in sorted(tree_store.track_trees_by_track_id.items()):
             root_before = root_before_by_track_id[track_id]
             if int(root_before.scan_index) >= boundary_scan_index:
                 continue
@@ -1703,12 +1708,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> int:
         """Apply one precomputed N-scan pruning plan to trees and bookkeeping."""
         committed_count = 0
+        tree_store = self._tree_store
         for track_id, chosen_child_id in plan.map_choice_by_track_id.items():
-            current_tree = self.track_trees_by_track_id.get(track_id)
+            current_tree = tree_store.track_trees_by_track_id.get(track_id)
             if current_tree is None:
                 continue
             root_before = plan.root_before_by_track_id[track_id]
-            chosen_child = self._nodes_by_id[chosen_child_id]
+            chosen_child = tree_store.nodes_by_id[chosen_child_id]
 
             # Preserve committed output prefix strictly before the new unresolved root.
             current_tree.committed_states.append(root_before.state)
@@ -1720,7 +1726,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 leaf_id
                 for leaf_id in current_tree.active_leaf_node_ids
                 if self._is_descendant_of(
-                    node=self._nodes_by_id[leaf_id],
+                    node=tree_store.nodes_by_id[leaf_id],
                     ancestor=chosen_child,
                 )
             }
@@ -1760,7 +1766,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._last_nscan_tracks_in_scope = 0
         self._last_nscan_committed_ancestor_by_track_id = {}
 
-        if boundary_scan_index < 0 or not self.track_trees_by_track_id:
+        if boundary_scan_index < 0 or not self._tree_store.track_trees_by_track_id:
             return boundary_scan_index, 0, 0, 0, cluster_snapshots
 
         plan = self._plan_map_n_scan_pruning(
@@ -1811,7 +1817,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         cluster_snapshots: list[ClusterRebuildSnapshot],
     ) -> list[TrackHypothesisNode]:
         """Return leaves to evaluate for whole-track miss termination."""
-        root = self._nodes_by_id[tree.root_node_id]
+        nodes_by_id = self._tree_store.nodes_by_id
+        root = nodes_by_id[tree.root_node_id]
 
         if mode == "map_leaf":
             map_leaf = map_global.leaf_nodes_by_track_id.get(track_id)
@@ -1833,7 +1840,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
             candidate_leaves: list[TrackHypothesisNode] = []
             for node_id in sorted(candidate_node_ids):
-                leaf = self._nodes_by_id.get(node_id)
+                leaf = nodes_by_id.get(node_id)
                 if leaf is None:
                     continue
                 if self._is_descendant_of(node=leaf, ancestor=root):
@@ -1842,19 +1849,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 return candidate_leaves
 
         # Default and safe fallback for empty map/global-k sets.
-        return [
-            self._nodes_by_id[node_id] for node_id in sorted(tree.active_leaf_node_ids)
-        ]
+        return [nodes_by_id[node_id] for node_id in sorted(tree.active_leaf_node_ids)]
 
     def _filter_map_global_to_live_trees(
         self,
         map_global: GlobalHypothesis,
     ) -> GlobalHypothesis:
         """Drop map entries for tracks that no longer have active trees."""
+        track_trees_by_track_id = self._tree_store.track_trees_by_track_id
         filtered_nodes = {
             track_id: leaf
             for track_id, leaf in map_global.leaf_nodes_by_track_id.items()
-            if track_id in self.track_trees_by_track_id
+            if track_id in track_trees_by_track_id
         }
         return GlobalHypothesis(
             leaf_nodes_by_track_id=filtered_nodes,
@@ -1876,7 +1882,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         threshold = self._effective_track_miss_threshold()
 
         terminated_track_ids: list[int] = []
-        for track_id, tree in sorted(self.track_trees_by_track_id.items()):
+        track_trees_by_track_id = self._tree_store.track_trees_by_track_id
+        for track_id, tree in sorted(track_trees_by_track_id.items()):
             leaves = self._track_miss_termination_leaves(
                 track_id=track_id,
                 tree=tree,
@@ -1891,7 +1898,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         if terminated_track_ids:
             for track_id in terminated_track_ids:
-                self.track_trees_by_track_id.pop(track_id, None)
+                track_trees_by_track_id.pop(track_id, None)
             print(
                 "TRACK_LIFECYCLE "
                 f"mode={mode} miss_threshold={threshold} "
@@ -1921,7 +1928,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
         terminated_track_ids: list[int] = []
-        for track_id, tree in sorted(self.track_trees_by_track_id.items()):
+        track_trees_by_track_id = self._tree_store.track_trees_by_track_id
+        for track_id, tree in sorted(track_trees_by_track_id.items()):
             leaves = self._track_miss_termination_leaves(
                 track_id=track_id,
                 tree=tree,
@@ -1949,7 +1957,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         if terminated_track_ids:
             for track_id in terminated_track_ids:
-                self.track_trees_by_track_id.pop(track_id, None)
+                track_trees_by_track_id.pop(track_id, None)
             print(
                 "TRACK_LIFECYCLE "
                 f"lane=deleter deleter={type(deleter).__name__} "
