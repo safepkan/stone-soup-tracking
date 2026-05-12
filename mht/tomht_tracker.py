@@ -100,6 +100,7 @@ from .tomht_utils import (
     sorted_detections,
 )
 from .tomht_tree_store import TrackTreeStore
+from .tomht_tree_utils import child_of_root_on_path, is_descendant_of
 from .utils import get_process_maxrss_mb
 
 # ============================================================================
@@ -890,36 +891,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # MAP-Only N-Scan Pruning on Explicit Trees
     # =========================================================================
 
-    def _child_of_root_on_path(
-        self,
-        *,
-        root: TrackHypothesisNode,
-        leaf: TrackHypothesisNode,
-    ) -> TrackHypothesisNode | None:
-        """Return the root child that lies on the root->leaf path."""
-        if root.node_id == leaf.node_id:
-            return None
-
-        node = leaf
-        while node.parent is not None and node.parent.node_id != root.node_id:
-            node = node.parent
-        if node.parent is None:
-            return None
-        return node
-
-    def _is_descendant_of(
-        self,
-        *,
-        node: TrackHypothesisNode,
-        ancestor: TrackHypothesisNode,
-    ) -> bool:
-        cur: TrackHypothesisNode | None = node
-        while cur is not None:
-            if cur.node_id == ancestor.node_id:
-                return True
-            cur = cur.parent
-        return False
-
     def _compute_cluster_pruning_disagreement(
         self,
         *,
@@ -945,7 +916,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 if leaf is None:
                     continue
                 root_before = root_before_by_track_id[track_id]
-                alt_child = self._child_of_root_on_path(root=root_before, leaf=leaf)
+                alt_child = child_of_root_on_path(root=root_before, leaf=leaf)
                 alt_child_id = None if alt_child is None else alt_child.node_id
                 if alt_child_id != map_child_id:
                     disagrees = True
@@ -1005,7 +976,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             map_leaf = map_global.leaf_nodes_by_track_id.get(track_id)
             if map_leaf is None:
                 continue
-            child = self._child_of_root_on_path(root=root_before, leaf=map_leaf)
+            child = child_of_root_on_path(root=root_before, leaf=map_leaf)
             if child is None:
                 continue
             map_choice_by_track_id[track_id] = child.node_id
@@ -1049,7 +1020,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             retained_leaf_ids = {
                 leaf_id
                 for leaf_id in current_tree.active_leaf_node_ids
-                if self._is_descendant_of(
+                if is_descendant_of(
                     node=tree_store.nodes_by_id[leaf_id],
                     ancestor=chosen_child,
                 )
@@ -1146,7 +1117,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         if mode == "map_leaf":
             map_leaf = map_global.leaf_nodes_by_track_id.get(track_id)
-            if map_leaf is not None and self._is_descendant_of(
+            if map_leaf is not None and is_descendant_of(
                 node=map_leaf,
                 ancestor=root,
             ):
@@ -1167,7 +1138,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 leaf = nodes_by_id.get(node_id)
                 if leaf is None:
                     continue
-                if self._is_descendant_of(node=leaf, ancestor=root):
+                if is_descendant_of(node=leaf, ancestor=root):
                     candidate_leaves.append(leaf)
             if candidate_leaves:
                 return candidate_leaves
