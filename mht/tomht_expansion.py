@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import datetime
 import time as wall_clock
-from typing import Mapping, Protocol
+from typing import Mapping
 
 import numpy as np
 
@@ -13,41 +12,14 @@ from stonesoup.hypothesiser.base import Hypothesiser
 from stonesoup.types.detection import Detection, MissedDetection
 from stonesoup.types.hypothesis import SingleDistanceHypothesis, SingleHypothesis
 from stonesoup.types.multihypothesis import MultipleHypothesis
-from stonesoup.types.state import State
 from stonesoup.updater.base import Updater
 
 from .tomht_model import DetectionKey, TrackHypothesisNode, TrackTree
 from .tomht_output import reconstruct_track_from_leaf_node
 from .tomht_params import TOMHTParams
 from .tomht_scoring import ScoringModel
+from .tomht_tree_store import TrackTreeStore
 from .tomht_types import ScanContext
-
-
-class CreateChildNode(Protocol):
-    """Callback boundary for tracker-owned persistent node creation."""
-
-    def __call__(
-        self,
-        *,
-        track_id: int,
-        parent: TrackHypothesisNode | None,
-        scan_index: int,
-        timestamp: datetime.datetime,
-        state: State,
-        state_kind: str,
-        used_det_key: DetectionKey | None,
-        assoc_label: int,
-        log_delta: float,
-        age: int,
-        hits: int,
-        missed_count: int,
-        last_det_key: DetectionKey | None,
-        last_det_hit: bool,
-        root_source: str,
-        birth_scan_index: int,
-    ) -> TrackHypothesisNode:
-        """Create and register one persistent hypothesis node."""
-        ...
 
 
 @dataclass(frozen=True)
@@ -94,7 +66,7 @@ def candidate_from_distance_hypothesis(
     log_delta: float,
     ctx: ScanContext,
     updater: Updater,
-    create_child_node: CreateChildNode,
+    tree_store: TrackTreeStore,
     assoc_miss_label: int,
     expansion_call_stats: ExpansionCallStats,
 ) -> LocalChildCandidate:
@@ -127,7 +99,7 @@ def candidate_from_distance_hypothesis(
         missed_count = 0
         last_det_key = used_det_key
 
-    child_node = create_child_node(
+    child_node = tree_store.create_track_hypothesis_node(
         track_id=leaf_node.track_id,
         parent=leaf_node,
         scan_index=ctx.scan_index,
@@ -161,7 +133,7 @@ def candidates_for_track_leaf(
     updater: Updater,
     scoring_model: ScoringModel,
     params: TOMHTParams,
-    create_child_node: CreateChildNode,
+    tree_store: TrackTreeStore,
     assoc_miss_label: int,
     expansion_call_stats: ExpansionCallStats,
 ) -> list[LocalChildCandidate]:
@@ -231,7 +203,7 @@ def candidates_for_track_leaf(
             log_delta=float(log_delta),
             ctx=ctx,
             updater=updater,
-            create_child_node=create_child_node,
+            tree_store=tree_store,
             assoc_miss_label=assoc_miss_label,
             expansion_call_stats=expansion_call_stats,
         )
@@ -272,7 +244,7 @@ def expand_one_track_tree(
     updater: Updater,
     scoring_model: ScoringModel,
     params: TOMHTParams,
-    create_child_node: CreateChildNode,
+    tree_store: TrackTreeStore,
     assoc_miss_label: int,
     expansion_call_stats: ExpansionCallStats,
 ) -> None:
@@ -288,7 +260,7 @@ def expand_one_track_tree(
             updater=updater,
             scoring_model=scoring_model,
             params=params,
-            create_child_node=create_child_node,
+            tree_store=tree_store,
             assoc_miss_label=assoc_miss_label,
             expansion_call_stats=expansion_call_stats,
         )
@@ -304,28 +276,26 @@ def expand_one_track_tree(
 
 def expand_all_track_trees(
     *,
-    track_trees_by_track_id: Mapping[int, TrackTree],
-    nodes_by_id: Mapping[int, TrackHypothesisNode],
+    tree_store: TrackTreeStore,
     ctx: ScanContext,
     hypothesiser: Hypothesiser,
     updater: Updater,
     scoring_model: ScoringModel,
     params: TOMHTParams,
-    create_child_node: CreateChildNode,
     assoc_miss_label: int,
     expansion_call_stats: ExpansionCallStats,
 ) -> None:
     """Run local expansion for all current persistent track trees."""
-    for tree in track_trees_by_track_id.values():
+    for tree in tree_store.track_trees_by_track_id.values():
         expand_one_track_tree(
             tree=tree,
-            nodes_by_id=nodes_by_id,
+            nodes_by_id=tree_store.nodes_by_id,
             ctx=ctx,
             hypothesiser=hypothesiser,
             updater=updater,
             scoring_model=scoring_model,
             params=params,
-            create_child_node=create_child_node,
+            tree_store=tree_store,
             assoc_miss_label=assoc_miss_label,
             expansion_call_stats=expansion_call_stats,
         )

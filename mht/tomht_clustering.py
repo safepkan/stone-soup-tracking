@@ -7,6 +7,7 @@ from typing import Iterable, Mapping
 
 from .tomht_model import DetectionKey, TrackHypothesisNode, TrackTree
 from .tomht_params import TOMHTParams
+from .tomht_tree_store import TrackTreeStore
 
 
 @dataclass(frozen=True)
@@ -73,11 +74,12 @@ def history_conflict_keys_for_tree(
 
 def build_track_clusters(
     *,
-    track_trees_by_track_id: Mapping[int, TrackTree],
-    nodes_by_id: Mapping[int, TrackHypothesisNode],
+    tree_store: TrackTreeStore,
     scan_index: int,
 ) -> list[ClusterWorkItem]:
     """Build independent clusters from shared active-leaf history detections."""
+    track_trees_by_track_id = tree_store.track_trees_by_track_id
+    nodes_by_id = tree_store.nodes_by_id
     track_ids = sorted(track_trees_by_track_id.keys())
     if not track_ids:
         return []

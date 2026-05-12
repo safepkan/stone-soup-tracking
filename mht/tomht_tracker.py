@@ -36,8 +36,6 @@ from itertools import product
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
-from ordered_set import OrderedSet
-
 import numpy as np
 
 from stonesoup.base import Property
@@ -46,16 +44,12 @@ from stonesoup.hypothesiser.base import Hypothesiser
 from stonesoup.initiator.base import Initiator
 from stonesoup.predictor.base import Predictor
 from stonesoup.types.detection import Detection
-from stonesoup.types.state import State
 from stonesoup.types.track import Track
 from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.updater.base import Updater
 
 from .tomht_births import (
-    birth_guardrail_block_reason,
-    birth_used_key,
-    residual_detection_indices_after_expansion,
-    select_internal_birth_candidates,
+    run_internal_births_after_expansion,
 )
 from .tomht_clustering import (
     ClusterWorkItem as _ClusterWorkItem,
@@ -111,6 +105,7 @@ from .tomht_utils import (
     format_detection_key_sample,
     sorted_detections,
 )
+from .tomht_tree_store import TrackTreeStore
 from .utils import get_process_maxrss_mb
 
 # ============================================================================
@@ -368,12 +363,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         self._maybe_print_config()
 
-        self._next_track_id = 0
-        self._next_node_id = 0
-
         # Persistent tracker state.
-        self._nodes_by_id: dict[int, TrackHypothesisNode] = {}
-        self.track_trees_by_track_id: dict[int, TrackTree] = {}
+        self._tree_store = TrackTreeStore()
 
         # Last-scan rebuilt artifacts retained for inspection only.
         self._last_cluster_snapshots: list[ClusterRebuildSnapshot] = []
@@ -396,6 +387,24 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self.last_scan_stats: ScanStats | None = None
         self._stats: list[ScanStats] = []
         self.reset_stats()
+
+    @property
+    def _nodes_by_id(self) -> dict[int, TrackHypothesisNode]:
+        """Compatibility view of the persistent node table owned by the store."""
+        return self._tree_store.nodes_by_id
+
+    @_nodes_by_id.setter
+    def _nodes_by_id(self, value: dict[int, TrackHypothesisNode]) -> None:
+        self._tree_store.nodes_by_id = value
+
+    @property
+    def track_trees_by_track_id(self) -> dict[int, TrackTree]:
+        """Compatibility view of the persistent track-tree table owned by the store."""
+        return self._tree_store.track_trees_by_track_id
+
+    @track_trees_by_track_id.setter
+    def track_trees_by_track_id(self, value: dict[int, TrackTree]) -> None:
+        self._tree_store.track_trees_by_track_id = value
 
     @staticmethod
     def _make_cluster_solver(cluster_solver_backend: str) -> ClusterSolver:
@@ -547,7 +556,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         phase_start_ns = wall_clock.perf_counter_ns()
 
         # 2) Simple lifecycle handling.
-        self._remove_empty_trees()
+        self._tree_store.remove_empty_trees()
         self._maybe_validate_pruning_feasibility(
             stage="post_local_pruning",
             ctx=ctx,
@@ -621,17 +630,20 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         phase_start_ns = wall_clock.perf_counter_ns()
 
         # 7) Reclaim node storage not reachable from surviving roots/leaves/commitments.
-        self._cleanup_unreachable_nodes()
+        cleanup_seed_nodes = list(
+            self._last_nscan_committed_ancestor_by_track_id.values()
+        )
+        cleanup_seed_nodes.extend(self._committed_ancestor_by_track_id.values())
+        self._tree_store.cleanup_unreachable_nodes(
+            extra_seed_nodes=cleanup_seed_nodes,
+        )
         cleanup_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
 
         # 8) Post-scan instrumentation.
         scan_wall_ms = (wall_clock.perf_counter_ns() - scan_wall_start_ns) / 1e6
         maxrss_mb = get_process_maxrss_mb()
         node_count_total = len(self._nodes_by_id)
-        active_leaves = sum(
-            len(tree.active_leaf_node_ids)
-            for tree in self.track_trees_by_track_id.values()
-        )
+        active_leaves = self._tree_store.active_leaf_count()
 
         timing_breakdown = ScanTimingBreakdown(
             prep_ctx_ms=float(prep_ctx_ms),
@@ -655,7 +667,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             scan_wall_ms=scan_wall_ms,
             maxrss_mb=maxrss_mb,
             node_count_total=node_count_total,
-            active_trees=len(self.track_trees_by_track_id),
+            active_trees=self._tree_store.active_tree_count(),
             active_leaves=active_leaves,
             rebuild_stats=rebuild_stats,
             nscan_boundary_scan_index=nscan_boundary_scan_index,
@@ -682,14 +694,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             return
 
         for start in start_list:
-            root = self._make_external_start_root(start, time)
-            tree = TrackTree(
-                track_id=root.track_id,
-                root_node_id=root.node_id,
-                active_leaf_node_ids={root.node_id},
-                root_source="external_start",
-            )
-            self.track_trees_by_track_id[root.track_id] = tree
+            self._make_external_start_root(start, time)
 
         # External starts are assumed to be from currently unused detections,
         # so add them directly to the last MAP view.
@@ -784,124 +789,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     # =========================================================================
-    # Node/Tree Construction Helpers
-    # =========================================================================
-
-    def _allocate_node_id(self) -> int:
-        """Allocate the next stable node ID in this tracker instance."""
-        node_id = self._next_node_id
-        self._next_node_id += 1
-        return node_id
-
-    def _register_node(self, node: TrackHypothesisNode) -> TrackHypothesisNode:
-        """Store one node in the persistent node table and return it."""
-        self._nodes_by_id[node.node_id] = node
-        return node
-
-    def _create_track_hypothesis_node(
-        self,
-        *,
-        track_id: int,
-        parent: TrackHypothesisNode | None,
-        scan_index: int,
-        timestamp: datetime.datetime,
-        state: State,
-        state_kind: str,
-        used_det_key: DetectionKey | None,
-        assoc_label: int,
-        log_delta: float,
-        age: int,
-        hits: int,
-        missed_count: int,
-        last_det_key: DetectionKey | None,
-        last_det_hit: bool,
-        root_source: str,
-        birth_scan_index: int,
-    ) -> TrackHypothesisNode:
-        """Create and register one persistent hypothesis node."""
-        if parent is not None and parent.track_id != track_id:
-            raise ValueError(
-                "TrackHypothesisNode parent.track_id must match child track_id."
-            )
-
-        if parent is None:
-            history_keys: frozenset[DetectionKey]
-            if used_det_key is None:
-                history_keys = frozenset()
-            else:
-                history_keys = frozenset({used_det_key})
-            accumulated_log_score = float(log_delta)
-        else:
-            if used_det_key is None:
-                history_keys = parent.detection_history_keys
-            else:
-                history_keys = parent.detection_history_keys | {used_det_key}
-            accumulated_log_score = float(parent.accumulated_log_score) + float(
-                log_delta
-            )
-
-        node = TrackHypothesisNode(
-            node_id=self._allocate_node_id(),
-            track_id=int(track_id),
-            parent=parent,
-            scan_index=int(scan_index),
-            timestamp=timestamp,
-            state=state,
-            state_kind=state_kind,
-            used_det_key=used_det_key,
-            assoc_label=int(assoc_label),
-            log_delta=float(log_delta),
-            accumulated_log_score=float(accumulated_log_score),
-            detection_history_keys=history_keys,
-            age=int(age),
-            hits=int(hits),
-            missed_count=int(missed_count),
-            last_det_key=last_det_key,
-            last_det_hit=bool(last_det_hit),
-            root_source=root_source,
-            birth_scan_index=int(birth_scan_index),
-        )
-        self._register_node(node)
-        if parent is not None:
-            parent.child_node_ids.add(node.node_id)
-        return node
-
-    def _create_root_node(
-        self,
-        *,
-        track_id: int,
-        scan_index: int,
-        timestamp: datetime.datetime,
-        state: State,
-        state_kind: str,
-        used_det_key: DetectionKey | None,
-        assoc_label: int,
-        log_delta: float,
-        age: int,
-        hits: int,
-        root_source: str,
-    ) -> TrackHypothesisNode:
-        """Create a root node wrapper for births/external starts."""
-        return self._create_track_hypothesis_node(
-            track_id=track_id,
-            parent=None,
-            scan_index=scan_index,
-            timestamp=timestamp,
-            state=state,
-            state_kind=state_kind,
-            used_det_key=used_det_key,
-            assoc_label=assoc_label,
-            log_delta=log_delta,
-            age=age,
-            hits=hits,
-            missed_count=0,
-            last_det_key=used_det_key,
-            last_det_hit=used_det_key is not None,
-            root_source=root_source,
-            birth_scan_index=scan_index,
-        )
-
-    # =========================================================================
     # Local Expansion and Simple Lifecycle
     # =========================================================================
 
@@ -913,161 +800,32 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> None:
         """Run local expansion for all current persistent track trees."""
         expand_all_track_trees(
-            track_trees_by_track_id=self.track_trees_by_track_id,
-            nodes_by_id=self._nodes_by_id,
+            tree_store=self._tree_store,
             ctx=ctx,
             hypothesiser=self._hypothesiser,
             updater=self._updater,
             scoring_model=self.scoring_model,
             params=self.params,
-            create_child_node=self._create_track_hypothesis_node,
             assoc_miss_label=TOMHTTracker.ASSOC_MISS,
             expansion_call_stats=expansion_call_stats,
         )
 
-    def _remove_empty_trees(self) -> None:
-        """Drop any tree that has no surviving active leaves."""
-        dead_track_ids = [
-            track_id
-            for track_id, tree in self.track_trees_by_track_id.items()
-            if not tree.active_leaf_node_ids
-        ]
-        for track_id in dead_track_ids:
-            self.track_trees_by_track_id.pop(track_id, None)
-
     # =========================================================================
-    # Internal Birth Handling (Simple Phase-D Policy)
+    # Internal Birth Handling
     # =========================================================================
-
-    def _active_leaf_nodes(self) -> list[TrackHypothesisNode]:
-        """Return all active leaves across all persistent track trees."""
-        out: list[TrackHypothesisNode] = []
-        for tree in self.track_trees_by_track_id.values():
-            out.extend(
-                self._nodes_by_id[node_id] for node_id in tree.active_leaf_node_ids
-            )
-        return out
-
-    def _residual_detection_indices_after_step2(self, ctx: ScanContext) -> list[int]:
-        """Return current-scan detection indices unused after local expansion."""
-        return residual_detection_indices_after_expansion(
-            active_leaf_nodes=self._active_leaf_nodes(),
-            ctx=ctx,
-        )
-
-    def _birth_guardrail_block_reason(self) -> str | None:
-        """Return a reason when simple load guards should block internal births."""
-        active_trees = len(self.track_trees_by_track_id)
-        active_leaves = sum(
-            len(tree.active_leaf_node_ids)
-            for tree in self.track_trees_by_track_id.values()
-        )
-        return birth_guardrail_block_reason(
-            active_trees=active_trees,
-            active_leaves=active_leaves,
-            params=self.params,
-        )
 
     def _run_internal_births(self, ctx: ScanContext) -> BirthStats:
         """Create simple internal birth trees from Step-2 residual detections."""
-        residual_det_indices = self._residual_detection_indices_after_step2(ctx)
-        residual_detections = [ctx.detections[i] for i in residual_det_indices]
-
-        if self.initiator is None:
-            self._last_unused_detections = residual_detections
-            return BirthStats(
-                residual_detections_considered=len(residual_detections),
-                birth_tracks_created=0,
-                birth_tracks_kept=0,
-            )
-
-        if not residual_detections:
-            self._last_unused_detections = []
-            return BirthStats(
-                residual_detections_considered=0,
-                birth_tracks_created=0,
-                birth_tracks_kept=0,
-            )
-
-        birth_block_reason = self._birth_guardrail_block_reason()
-        if birth_block_reason is not None:
-            self._last_unused_detections = residual_detections
-            if self.params.debug_display_births:
-                print(
-                    "\nINTERNAL_BIRTH_GUARDRAIL "
-                    f"t={ctx.timestamp} reason={birth_block_reason} "
-                    f"residual={len(residual_detections)}"
-                )
-            return BirthStats(
-                residual_detections_considered=len(residual_detections),
-                birth_tracks_created=0,
-                birth_tracks_kept=0,
-            )
-
-        self._last_unused_detections = []
-
-        initiated_tracks = list(
-            self.initiator.initiate(OrderedSet(residual_detections), ctx.timestamp)
-        )
-        birth_tracks_created = len(initiated_tracks)
-
-        kept_birth_tracks = select_internal_birth_candidates(
-            initiated_tracks=initiated_tracks,
+        result = run_internal_births_after_expansion(
             ctx=ctx,
+            initiator=self.initiator,
+            scoring_model=self.scoring_model,
+            tree_store=self._tree_store,
             params=self.params,
+            assoc_pad_label=TOMHTTracker.ASSOC_PAD,
         )
-        birth_tracks_kept = len(kept_birth_tracks)
-
-        if self.params.debug_display_births and kept_birth_tracks:
-            print(f"\nInternal births at {ctx.timestamp}: kept={birth_tracks_kept}")
-            for track in kept_birth_tracks[: self.params.debug_births_max]:
-                # Debug-only display retained for quick replay inspection.
-                state = track.states[-1].state_vector
-                print(f"  birth_state={self._fmt_state_xyvxvy(state)}")
-
-        for birth_track in kept_birth_tracks:
-            track_id = self._next_track_id
-            self._next_track_id += 1
-            state = birth_track.states[-1]
-            used_key = birth_used_key(
-                birth_track,
-                scan_index=ctx.scan_index,
-                det_index_by_obj=ctx.det_index_by_obj,
-            )
-            age = max(len(birth_track), 1)
-            hits = 1 if used_key is not None else 0
-            root_log_delta = self.scoring_model.score_birth(
-                birth_track=birth_track,
-                used_det_key=(None if used_key is None else int(used_key[1])),
-                ctx=ctx,
-            )
-            root = self._create_root_node(
-                track_id=track_id,
-                scan_index=ctx.scan_index,
-                timestamp=getattr(state, "timestamp", ctx.timestamp),
-                state=state,
-                state_kind="internal_birth",
-                used_det_key=used_key,
-                assoc_label=(
-                    TOMHTTracker.ASSOC_PAD if used_key is None else int(used_key[1])
-                ),
-                log_delta=float(root_log_delta),
-                age=age,
-                hits=hits,
-                root_source="internal_birth",
-            )
-            self.track_trees_by_track_id[track_id] = TrackTree(
-                track_id=track_id,
-                root_node_id=root.node_id,
-                active_leaf_node_ids={root.node_id},
-                root_source="internal_birth",
-            )
-
-        return BirthStats(
-            residual_detections_considered=len(residual_detections),
-            birth_tracks_created=birth_tracks_created,
-            birth_tracks_kept=birth_tracks_kept,
-        )
+        self._last_unused_detections = result.unused_detections
+        return result.stats
 
     # =========================================================================
     # Per-Scan Clustering + Global Rebuild
@@ -1076,8 +834,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _build_track_clusters(self, ctx: ScanContext) -> list[_ClusterWorkItem]:
         """Build independent clusters from shared active-leaf history detections."""
         return build_track_clusters(
-            track_trees_by_track_id=self.track_trees_by_track_id,
-            nodes_by_id=self._nodes_by_id,
+            tree_store=self._tree_store,
             scan_index=ctx.scan_index,
         )
 
@@ -1777,7 +1534,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         """Prune each cluster tree to leaves supported by retained rebuilt globals."""
         apply_post_solve_supported_leaf_pruning(
             cluster_snapshots=cluster_snapshots,
-            track_trees_by_track_id=self.track_trees_by_track_id,
+            tree_store=self._tree_store,
         )
 
     @staticmethod
@@ -1987,7 +1744,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 if child_id == chosen_child_id
             }
 
-        self._remove_empty_trees()
+        self._tree_store.remove_empty_trees()
         return committed_count
 
     def _apply_map_n_scan_pruning(
@@ -2141,7 +1898,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 f"terminated={terminated_track_ids}"
             )
 
-        self._remove_empty_trees()
+        self._tree_store.remove_empty_trees()
         return self._filter_map_global_to_live_trees(map_global)
 
     def _apply_post_n_scan_track_deleter_lifecycle(
@@ -2199,7 +1956,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 f"mode={mode} terminated={terminated_track_ids}"
             )
 
-        self._remove_empty_trees()
+        self._tree_store.remove_empty_trees()
         return self._filter_map_global_to_live_trees(map_global)
 
     def _apply_post_n_scan_track_lifecycle(
@@ -2225,61 +1982,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     # =========================================================================
-    # Node Retention / Cleanup
-    # =========================================================================
-
-    def _reachable_node_ids_from_seeds(
-        self,
-        seeds: Iterable[TrackHypothesisNode],
-    ) -> set[int]:
-        """Return node IDs reachable via parent links from supplied seeds."""
-        reachable: set[int] = set()
-        stack = list(seeds)
-        while stack:
-            node = stack.pop()
-            node_id = int(node.node_id)
-            if node_id in reachable:
-                continue
-            reachable.add(node_id)
-            if node.parent is not None:
-                stack.append(node.parent)
-        return reachable
-
-    def _cleanup_unreachable_nodes(self) -> None:
-        """Reclaim nodes no longer reachable from roots/leaves/commitment refs."""
-        if not self._nodes_by_id:
-            return
-
-        seeds: list[TrackHypothesisNode] = []
-        for tree in self.track_trees_by_track_id.values():
-            seeds.append(self._nodes_by_id[tree.root_node_id])
-            seeds.extend(
-                self._nodes_by_id[node_id] for node_id in tree.active_leaf_node_ids
-            )
-        seeds.extend(self._last_nscan_committed_ancestor_by_track_id.values())
-        seeds.extend(self._committed_ancestor_by_track_id.values())
-
-        if not seeds:
-            self._nodes_by_id.clear()
-            return
-
-        retained_node_ids = self._reachable_node_ids_from_seeds(seeds)
-        if len(retained_node_ids) == len(self._nodes_by_id):
-            return
-
-        self._nodes_by_id = {
-            node_id: node
-            for node_id, node in self._nodes_by_id.items()
-            if node_id in retained_node_ids
-        }
-        for node in self._nodes_by_id.values():
-            node.child_node_ids = {
-                child_id
-                for child_id in node.child_node_ids
-                if child_id in retained_node_ids
-            }
-
-    # =========================================================================
     # External-Start Helpers
     # =========================================================================
 
@@ -2288,7 +1990,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         start: Track,
         time: datetime.datetime,
     ) -> TrackHypothesisNode:
-        """Convert one confirmed external start Track into a root node."""
+        """Convert one confirmed external start Track into an inserted root node."""
         if len(start) == 0:
             raise ValueError(
                 "External starts must contain at least one state at the current timestamp."
@@ -2301,9 +2003,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 f"timestamp. Expected {time!r}, got {start_timestamp!r}."
             )
 
-        track_id = self._next_track_id
-        self._next_track_id += 1
-
         age = max(int(start.metadata.get("age", len(start))), 1)
         hits = int(start.metadata.get("hits", age))
         hits = min(max(hits, 1), age)
@@ -2313,8 +2012,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 "External starts require at least one completed update_tracker() call."
             )
 
-        return self._create_root_node(
-            track_id=track_id,
+        return self._tree_store.create_root_tree_for_new_track(
             scan_index=int(self._last_scan_index),
             timestamp=getattr(state, "timestamp", time),
             state=state,
@@ -2517,16 +2215,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             nscan_snapshot=nscan_snapshot,
             debug_display_map_miss_hist=self.params.debug_display_map_miss_hist,
         )
-
-    @staticmethod
-    def _fmt_state_xyvxvy(state_vector) -> str:
-        """Format `[x,vx,y,vy]` state vectors for compact debug output."""
-        sv = np.asarray(state_vector, dtype=float)
-        x = float(sv[0, 0])
-        vx = float(sv[1, 0])
-        y = float(sv[2, 0])
-        vy = float(sv[3, 0])
-        return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
 
 
 # ============================================================================

@@ -13,6 +13,7 @@ Update (2026-04-20): TOMHT output `Track.id` is now stable by default (internal 
 Update (2026-04-20): post-N-scan whole-track lifecycle now has two lanes: default node-native miss-threshold policy (`max_missed`) and optional injected Stone Soup `Deleter` policy (`deleter=` in tracker constructor). `track_miss_termination_mode` remains the leaf-selection mode for either lane.
 Update (2026-04-20): expansion timing instrumentation now splits `expand_ms` into explicit hypothesiser and updater components (`expand_hypothesise_ms`, `expand_update_ms`) plus call counts, so replay timing can attribute expansion cost between `hypothesise()` and `update()` directly.
 Update (2026-05-11): `TOMHTParams` now lives in `mht/tomht_params.py` so extracted helper modules can depend on tracker configuration without importing `TOMHTTracker`; `tomht_tracker.py` still re-exports it for compatibility. Local expansion orchestration now lives in `mht/tomht_expansion.py`, internal-birth candidate helpers now live in `mht/tomht_births.py`, cluster work construction and overload cluster decomposition now live in `mht/tomht_clustering.py`, post-solve supported-leaf pruning now lives in `mht/tomht_pruning.py`, and TOMHT-specific scan/debug helpers now live in `mht/tomht_utils.py`. `TOMHTTracker` still orchestrates the same pipeline, but local expansion/candidate handling, internal-birth residual/candidate utilities, full-history cluster construction, overload-split transformation, retained-global leaf-support pruning, detection sorting, detection-key filtering, and detection-key debug formatting are now isolated behind narrow helper functions.
+Update (2026-05-12): persistent tree/node bookkeeping now lives in `mht/tomht_tree_store.py`. Stable ID allocation, node/root creation, single-root tree insertion, active-leaf bookkeeping, active count helpers, empty-tree removal, and unreachable-node cleanup are now owned by `TrackTreeStore`, while `TOMHTTracker` keeps compatibility properties for direct tree/node table inspection.
 
 ---
 
@@ -151,8 +152,8 @@ Per scan, the tracker rebuilds:
 
 These rebuilt artifacts are retained only as **last-scan inspection/debug snapshots**, not as the persistent search frontier. The compatibility slot `self.global_hypotheses` now contains only the latest merged MAP global for older inspection paths, not a scan-to-scan beam frontier.
 
-Cluster work construction is a helper-layer responsibility: it takes current
-track trees, active leaf nodes, the node table, and the scan index, then returns
+Cluster work construction is a helper-layer responsibility: it takes the
+`TrackTreeStore` and the scan index, then returns
 deterministically ordered cluster work items with full-history conflict links and
 current-scan detection-key metadata. Overload decomposition is also handled in
 that helper layer as an explicit transformation from one cluster work item plus
@@ -163,21 +164,32 @@ while keeping the tracker class focused on orchestration.
 Local expansion is also a helper-layer responsibility: `mht/tomht_expansion.py`
 owns distance-hypothesis validation, local candidate scoring/ranking, mandatory
 miss preservation, updater calls, pre-solve leaf capping, and expansion timing
-counters. Persistent node ID allocation and node registration remain owned by
-`TOMHTTracker` through an explicit child-node creation callback.
+counters. Persistent node ID allocation and node registration are owned by
+`mht/tomht_tree_store.py`; expansion receives the `TrackTreeStore` directly and
+uses it for persistent child-node creation.
 
 TOMHT-specific utility helpers are separated from generic runtime utilities:
 `mht/tomht_utils.py` owns deterministic detection sorting, current-scan
 detection-key filtering, and compact detection-key sample formatting, while
 `mht/utils.py` remains for generic environment/runtime helpers.
 
-Internal-birth candidate utilities are split out narrowly: `mht/tomht_births.py`
-owns birth used-key extraction, sanity checks, support/age/miss summaries,
-covariance-trace ranking, deterministic candidate sorting/capping, residual
-detection-index calculation after expansion, and simple birth guardrail
-reasoning. `TOMHTTracker` still owns initiator invocation, `_last_unused_detections`,
-debug printing, birth scoring, ID allocation, root-node creation, and tree
-insertion.
+Internal-birth handling is split out narrowly: `mht/tomht_births.py` owns birth
+used-key extraction, sanity checks, support/age/miss summaries, covariance-trace
+ranking, deterministic candidate sorting/capping, residual detection-index
+calculation after expansion, guardrail reasoning, initiator invocation, birth
+debug printing, birth scoring calls, and root-field construction. `TOMHTTracker`
+calls the high-level post-expansion birth helper, assigns `_last_unused_detections`
+from the helper result, and keeps scan-level orchestration, while the store owns
+ID allocation, root-node creation, and tree insertion.
+
+Persistent tree/node bookkeeping is centralized in `mht/tomht_tree_store.py`:
+`TrackTreeStore` owns logical track IDs, node IDs, the node table, the track-tree
+table, root/child node construction, single-root tree insertion, active leaf/tree
+counts, empty-tree removal, and unreachable-node cleanup. Expansion, clustering,
+and post-solve pruning now take the store as their persistent-state dependency.
+The store also provides a narrow new-track root insertion helper for internal
+births and external starts. `TOMHTTracker` keeps `track_trees_by_track_id` and
+`_nodes_by_id` as compatibility properties that forward to the store.
 
 ---
 

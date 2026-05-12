@@ -2,17 +2,33 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable
+
+from ordered_set import OrderedSet
 
 import numpy as np
 
+from stonesoup.initiator.base import Initiator
+from stonesoup.types.detection import Detection
 from stonesoup.types.track import Track
 from stonesoup.types.update import Update
 
 from .tomht_model import DetectionKey, TrackHypothesisNode
 from .tomht_params import TOMHTParams
+from .tomht_scoring import ScoringModel
+from .tomht_stats import BirthStats
+from .tomht_tree_store import TrackTreeStore
 from .tomht_types import ScanContext
 from .tomht_utils import current_scan_det_indices_from_keys
+
+
+@dataclass(frozen=True)
+class InternalBirthResult:
+    """Internal-birth side effects plus tracker-owned unused-detection update."""
+
+    stats: BirthStats
+    unused_detections: list[Detection]
 
 
 def birth_used_key(
@@ -193,3 +209,147 @@ def select_internal_birth_candidates(
     if len(kept_birth_tracks) > params.max_births_per_scan:
         kept_birth_tracks = kept_birth_tracks[: params.max_births_per_scan]
     return kept_birth_tracks
+
+
+def format_birth_state_xyvxvy(state_vector) -> str:
+    """Format `[x,vx,y,vy]` state vectors for compact debug output."""
+    sv = np.asarray(state_vector, dtype=float)
+    x = float(sv[0, 0])
+    vx = float(sv[1, 0])
+    y = float(sv[2, 0])
+    vy = float(sv[3, 0])
+    return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
+
+
+def run_internal_births_from_residuals(
+    *,
+    residual_detections: list[Detection],
+    ctx: ScanContext,
+    initiator: Initiator | None,
+    scoring_model: ScoringModel,
+    tree_store: TrackTreeStore,
+    params: TOMHTParams,
+    assoc_pad_label: int,
+) -> InternalBirthResult:
+    """Create internal birth trees from Step-2 residual detections."""
+    if initiator is None:
+        return InternalBirthResult(
+            stats=BirthStats(
+                residual_detections_considered=len(residual_detections),
+                birth_tracks_created=0,
+                birth_tracks_kept=0,
+            ),
+            unused_detections=residual_detections,
+        )
+
+    if not residual_detections:
+        return InternalBirthResult(
+            stats=BirthStats(
+                residual_detections_considered=0,
+                birth_tracks_created=0,
+                birth_tracks_kept=0,
+            ),
+            unused_detections=[],
+        )
+
+    birth_block_reason = birth_guardrail_block_reason(
+        active_trees=tree_store.active_tree_count(),
+        active_leaves=tree_store.active_leaf_count(),
+        params=params,
+    )
+    if birth_block_reason is not None:
+        if params.debug_display_births:
+            print(
+                "\nINTERNAL_BIRTH_GUARDRAIL "
+                f"t={ctx.timestamp} reason={birth_block_reason} "
+                f"residual={len(residual_detections)}"
+            )
+        return InternalBirthResult(
+            stats=BirthStats(
+                residual_detections_considered=len(residual_detections),
+                birth_tracks_created=0,
+                birth_tracks_kept=0,
+            ),
+            unused_detections=residual_detections,
+        )
+
+    initiated_tracks = list(
+        initiator.initiate(OrderedSet(residual_detections), ctx.timestamp)
+    )
+    birth_tracks_created = len(initiated_tracks)
+
+    kept_birth_tracks = select_internal_birth_candidates(
+        initiated_tracks=initiated_tracks,
+        ctx=ctx,
+        params=params,
+    )
+    birth_tracks_kept = len(kept_birth_tracks)
+
+    if params.debug_display_births and kept_birth_tracks:
+        print(f"\nInternal births at {ctx.timestamp}: kept={birth_tracks_kept}")
+        for track in kept_birth_tracks[: params.debug_births_max]:
+            # Debug-only display retained for quick replay inspection.
+            state = track.states[-1].state_vector
+            print(f"  birth_state={format_birth_state_xyvxvy(state)}")
+
+    for birth_track in kept_birth_tracks:
+        state = birth_track.states[-1]
+        used_key = birth_used_key(
+            birth_track,
+            scan_index=ctx.scan_index,
+            det_index_by_obj=ctx.det_index_by_obj,
+        )
+        age = max(len(birth_track), 1)
+        hits = 1 if used_key is not None else 0
+        root_log_delta = scoring_model.score_birth(
+            birth_track=birth_track,
+            used_det_key=(None if used_key is None else int(used_key[1])),
+            ctx=ctx,
+        )
+        tree_store.create_root_tree_for_new_track(
+            scan_index=ctx.scan_index,
+            timestamp=getattr(state, "timestamp", ctx.timestamp),
+            state=state,
+            state_kind="internal_birth",
+            used_det_key=used_key,
+            assoc_label=assoc_pad_label if used_key is None else int(used_key[1]),
+            log_delta=float(root_log_delta),
+            age=age,
+            hits=hits,
+            root_source="internal_birth",
+        )
+
+    return InternalBirthResult(
+        stats=BirthStats(
+            residual_detections_considered=len(residual_detections),
+            birth_tracks_created=birth_tracks_created,
+            birth_tracks_kept=birth_tracks_kept,
+        ),
+        unused_detections=[],
+    )
+
+
+def run_internal_births_after_expansion(
+    *,
+    ctx: ScanContext,
+    initiator: Initiator | None,
+    scoring_model: ScoringModel,
+    tree_store: TrackTreeStore,
+    params: TOMHTParams,
+    assoc_pad_label: int,
+) -> InternalBirthResult:
+    """Create internal births from detections unused after local expansion."""
+    residual_det_indices = residual_detection_indices_after_expansion(
+        active_leaf_nodes=tree_store.active_leaf_nodes(),
+        ctx=ctx,
+    )
+    residual_detections = [ctx.detections[i] for i in residual_det_indices]
+    return run_internal_births_from_residuals(
+        residual_detections=residual_detections,
+        ctx=ctx,
+        initiator=initiator,
+        scoring_model=scoring_model,
+        tree_store=tree_store,
+        params=params,
+        assoc_pad_label=assoc_pad_label,
+    )

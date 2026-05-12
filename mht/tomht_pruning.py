@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from .tomht_model import ClusterRebuildSnapshot, TrackTree
+from .tomht_model import ClusterRebuildSnapshot
+from .tomht_tree_store import TrackTreeStore
 
 
 def supported_leaf_ids_by_track_from_rebuilt_globals(
@@ -22,9 +23,10 @@ def supported_leaf_ids_by_track_from_rebuilt_globals(
 def apply_post_solve_supported_leaf_pruning(
     *,
     cluster_snapshots: list[ClusterRebuildSnapshot],
-    track_trees_by_track_id: dict[int, TrackTree],
+    tree_store: TrackTreeStore,
 ) -> None:
     """Prune each cluster tree to leaves supported by retained rebuilt globals."""
+    track_trees_by_track_id = tree_store.track_trees_by_track_id
     for snapshot in cluster_snapshots:
         # Overload-decomposed clusters are approximate; keep their current
         # frontiers to avoid over-pruning branches that may be needed once
