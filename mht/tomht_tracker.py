@@ -198,11 +198,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             ),
         )
 
-    _last_nscan_boundary_scan_index: int | None
-    _last_nscan_tracks_in_scope: int
-    _last_nscan_committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
-    _committed_boundary_by_track_id: dict[int, int]
-    _committed_ancestor_by_track_id: dict[int, TrackHypothesisNode]
     _updater: Updater
     _hypothesiser: Hypothesiser
     _deleter: Deleter | None
@@ -313,11 +308,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._last_map_global: GlobalHypothesis = self.global_hypotheses[0]
 
         # N-scan bookkeeping snapshots.
-        self._last_nscan_boundary_scan_index = None
-        self._last_nscan_tracks_in_scope = 0
-        self._last_nscan_committed_ancestor_by_track_id = {}
-        self._committed_boundary_by_track_id = {}
-        self._committed_ancestor_by_track_id = {}
+        self._nscan_commitment_snapshot = NScanCommitmentSnapshot(
+            boundary_scan_index=None,
+            tracks_in_scope=0,
+            latest_committed_ancestor_by_track_id={},
+            committed_boundary_by_track_id={},
+            committed_ancestor_by_track_id={},
+        )
 
         self._last_update_timestamp: datetime.datetime | None = None
         self._last_scan_index: int | None = None
@@ -569,10 +566,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         phase_start_ns = wall_clock.perf_counter_ns()
 
         # 7) Reclaim node storage not reachable from surviving roots/leaves/commitments.
+        nscan_snapshot = self._nscan_commitment_snapshot
         cleanup_seed_nodes = list(
-            self._last_nscan_committed_ancestor_by_track_id.values()
+            nscan_snapshot.latest_committed_ancestor_by_track_id.values()
         )
-        cleanup_seed_nodes.extend(self._committed_ancestor_by_track_id.values())
+        cleanup_seed_nodes.extend(
+            nscan_snapshot.committed_ancestor_by_track_id.values()
+        )
         self._tree_store.cleanup_unreachable_nodes(
             extra_seed_nodes=cleanup_seed_nodes,
         )
@@ -695,14 +695,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     def get_n_scan_commitment_snapshot(self) -> NScanCommitmentSnapshot:
         """Return read-only MAP-based N-scan pruning bookkeeping."""
+        snapshot = self._nscan_commitment_snapshot
         return NScanCommitmentSnapshot(
-            boundary_scan_index=self._last_nscan_boundary_scan_index,
-            tracks_in_scope=int(self._last_nscan_tracks_in_scope),
+            boundary_scan_index=snapshot.boundary_scan_index,
+            tracks_in_scope=int(snapshot.tracks_in_scope),
             latest_committed_ancestor_by_track_id=dict(
-                self._last_nscan_committed_ancestor_by_track_id
+                snapshot.latest_committed_ancestor_by_track_id
             ),
-            committed_boundary_by_track_id=dict(self._committed_boundary_by_track_id),
-            committed_ancestor_by_track_id=dict(self._committed_ancestor_by_track_id),
+            committed_boundary_by_track_id=dict(
+                snapshot.committed_boundary_by_track_id
+            ),
+            committed_ancestor_by_track_id=dict(
+                snapshot.committed_ancestor_by_track_id
+            ),
         )
 
     def get_last_cluster_snapshots(self) -> tuple[ClusterRebuildSnapshot, ...]:
@@ -722,11 +727,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     def print_summary_stats(self) -> None:
         """Print aggregate instrumentation summaries from collected ScanStats."""
+        nscan_snapshot = self._nscan_commitment_snapshot
         print_summary_stats_report(
             stats=self._stats,
             max_global_hypotheses=self.params.max_global_hypotheses,
-            last_nscan_boundary_scan_index=self._last_nscan_boundary_scan_index,
-            committed_boundary_by_track_id=self._committed_boundary_by_track_id,
+            last_nscan_boundary_scan_index=nscan_snapshot.boundary_scan_index,
+            committed_boundary_by_track_id=nscan_snapshot.committed_boundary_by_track_id,
         )
 
     # =========================================================================
@@ -1004,6 +1010,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         """Apply one precomputed N-scan pruning plan to trees and bookkeeping."""
         committed_count = 0
         tree_store = self._tree_store
+        snapshot = self._nscan_commitment_snapshot
+        latest_committed_ancestor_by_track_id = dict(
+            snapshot.latest_committed_ancestor_by_track_id
+        )
+        committed_boundary_by_track_id = dict(snapshot.committed_boundary_by_track_id)
+        committed_ancestor_by_track_id = dict(snapshot.committed_ancestor_by_track_id)
         for track_id, chosen_child_id in plan.map_choice_by_track_id.items():
             current_tree = tree_store.track_trees_by_track_id.get(track_id)
             if current_tree is None:
@@ -1029,13 +1041,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 retained_leaf_ids = {chosen_child.node_id}
             current_tree.active_leaf_node_ids = retained_leaf_ids
 
-            self._last_nscan_committed_ancestor_by_track_id[track_id] = chosen_child
-            prev_boundary = self._committed_boundary_by_track_id.get(track_id)
+            latest_committed_ancestor_by_track_id[track_id] = chosen_child
+            prev_boundary = committed_boundary_by_track_id.get(track_id)
             if prev_boundary is None or plan.boundary_scan_index > prev_boundary:
-                self._committed_boundary_by_track_id[track_id] = (
-                    plan.boundary_scan_index
-                )
-                self._committed_ancestor_by_track_id[track_id] = chosen_child
+                committed_boundary_by_track_id[track_id] = plan.boundary_scan_index
+                committed_ancestor_by_track_id[track_id] = chosen_child
             committed_count += 1
 
             # Root promotion detaches the old root lineage from this tree.
@@ -1045,6 +1055,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 if child_id == chosen_child_id
             }
 
+        self._nscan_commitment_snapshot = replace(
+            snapshot,
+            latest_committed_ancestor_by_track_id=latest_committed_ancestor_by_track_id,
+            committed_boundary_by_track_id=committed_boundary_by_track_id,
+            committed_ancestor_by_track_id=committed_ancestor_by_track_id,
+        )
         self._tree_store.remove_empty_trees()
         return committed_count
 
@@ -1057,9 +1073,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> tuple[int, int, int, int, list[ClusterRebuildSnapshot]]:
         """Apply MAP-only N-scan root-child promotion and disagreement bookkeeping."""
         boundary_scan_index = int(scan_index) - int(self.params.ns_scan_window)
-        self._last_nscan_boundary_scan_index = boundary_scan_index
-        self._last_nscan_tracks_in_scope = 0
-        self._last_nscan_committed_ancestor_by_track_id = {}
+        self._nscan_commitment_snapshot = replace(
+            self._nscan_commitment_snapshot,
+            boundary_scan_index=boundary_scan_index,
+            tracks_in_scope=0,
+            latest_committed_ancestor_by_track_id={},
+        )
 
         if boundary_scan_index < 0 or not self._tree_store.track_trees_by_track_id:
             return boundary_scan_index, 0, 0, 0, cluster_snapshots
@@ -1069,7 +1088,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
         )
-        self._last_nscan_tracks_in_scope = len(plan.map_choice_by_track_id)
+        self._nscan_commitment_snapshot = replace(
+            self._nscan_commitment_snapshot,
+            tracks_in_scope=len(plan.map_choice_by_track_id),
+        )
         committed_count = self._apply_planned_map_n_scan_pruning(plan=plan)
         return (
             boundary_scan_index,

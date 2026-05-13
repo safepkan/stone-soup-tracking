@@ -9,6 +9,7 @@ Update (2026-05-11): a conservative pre-phase refactor extracted `TOMHTParams`, 
 Update (2026-05-12): persistent tree/node bookkeeping moved into `mht/tomht_tree_store.py`; expansion, clustering, and post-solve pruning now accept `TrackTreeStore` as their persistent-state dependency; new-track root creation/insertion now uses a store helper; and tracker implementation code now references the store directly instead of compatibility table aliases. This did not change ID behavior, node/tree semantics, scoring, pruning, clustering, lifecycle, or public API.
 Update (2026-05-12): cluster rebuild / solve orchestration moved into `mht/tomht_cluster_rebuild.py` behind `rebuild_cluster_globals(...)`. `TOMHTTracker._rebuild_cluster_globals(...)` is now a thin wrapper; overload splitting, cluster-id reassignment, solver problem construction, historical-conflict relaxation, logging/error text, snapshots, and `RebuildStats` semantics are unchanged.
 Update (2026-05-12): pure `TrackHypothesisNode` lineage helpers moved into `mht/tomht_tree_utils.py`; N-scan and lifecycle call sites now use `child_of_root_on_path(...)` and `is_descendant_of(...)` without changing pruning or lifecycle behavior.
+Update (2026-05-13): tracker-internal N-scan commitment bookkeeping now uses one `_nscan_commitment_snapshot` field backed by `NScanCommitmentSnapshot`; this is a readability-only grouping change.
 
 The recent local-association phase is now complete enough that the tracker has:
 
