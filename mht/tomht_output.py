@@ -1,6 +1,7 @@
 """Stone Soup output-adapter helpers for TOMHT node-based internals."""
 
 from collections.abc import Callable
+from math import exp
 
 from stonesoup.types.track import Track
 from stonesoup.types.state import State
@@ -17,6 +18,16 @@ def lineage_from_leaf_node(leaf_node: TrackHypothesisNode) -> list[TrackHypothes
         node = node.parent
     lineage.reverse()
     return lineage
+
+
+def _sigmoid_from_log_odds(log_odds: float) -> float:
+    """Convert log-odds to probability without overflow for large scores."""
+    x = float(log_odds)
+    if x >= 0.0:
+        exp_neg = exp(-x)
+        return 1.0 / (1.0 + exp_neg)
+    exp_pos = exp(x)
+    return exp_pos / (1.0 + exp_pos)
 
 
 def output_track_metadata_from_leaf_node(
@@ -37,6 +48,9 @@ def output_track_metadata_from_leaf_node(
       intentionally not propagated.
     - ``track_id`` is the stable logical-track identifier exposed on output
       tracks.
+    - ``existence_probability`` is currently score-implied from accumulated
+      log-odds, not a fully calibrated probability; birth scoring and
+      unused-detection scoring are still under review.
     - The remaining keys are diagnostic/inspection fields describing the current
       leaf node and its cached maintenance/provenance state.
 
@@ -54,6 +68,10 @@ def output_track_metadata_from_leaf_node(
         "last_det_hit": bool(leaf_node.last_det_hit),
         "root_source": leaf_node.root_source,
         "birth_scan_index": int(leaf_node.birth_scan_index),
+        "existence_log_odds": float(leaf_node.accumulated_log_score),
+        "existence_probability": _sigmoid_from_log_odds(
+            leaf_node.accumulated_log_score
+        ),
     }
 
 

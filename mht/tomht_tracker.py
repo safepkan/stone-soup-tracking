@@ -85,6 +85,7 @@ from .tomht_types import ScanContext
 from .tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from .tomht_scoring import (
     ScoringModel,
+    _existence_probability_to_log_odds,
     make_default_scoring_model,
     maybe_log_scoring_diagnostics,
 )
@@ -202,6 +203,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     _hypothesiser: Hypothesiser
     _deleter: Deleter | None
     _output_track_id_mapper: Callable[[int], object]
+    _external_start_initial_log_delta: float
 
     # =========================================================================
     # Public API
@@ -262,6 +264,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             Defaults to pass-through integer IDs.
         """
         params = self._apply_params_overrides(params, params_overrides)
+        external_start_initial_log_delta = _existence_probability_to_log_odds(
+            params.external_start_initial_existence_probability,
+            parameter_name="external_start_initial_existence_probability",
+        )
         super().__init__(
             predictor=predictor,
             updater=updater,
@@ -278,6 +284,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
         self.detector = detector
         self.params = params
+        self._external_start_initial_log_delta = external_start_initial_log_delta
         self.initiator = initiator
         self._deleter = deleter
         if scoring_model is None:
@@ -632,8 +639,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         if not start_list:
             return
 
-        for start in start_list:
-            self._make_external_start_root(start, time)
+        new_roots = [
+            self._make_external_start_root(start, time) for start in start_list
+        ]
 
         # External starts are assumed to be from currently unused detections,
         # so add them directly to the last MAP view.
@@ -649,7 +657,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         self._last_map_global = GlobalHypothesis(
             leaf_nodes_by_track_id=merged,
-            log_weight=self._last_map_global.log_weight,
+            log_weight=float(self._last_map_global.log_weight)
+            + sum(float(root.log_delta) for root in new_roots),
         )
         self.global_hypotheses = [self._last_map_global]
 
@@ -1336,6 +1345,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             raise RuntimeError(
                 "External starts require at least one completed update_tracker() call."
             )
+        log_delta = self._external_start_initial_log_delta
+        # Input metadata["existence_probability"] is an optional upstream initial
+        # prior. Output metadata["existence_probability"] is tracker score-implied.
+        metadata_existence_probability = start.metadata.get("existence_probability")
+        if metadata_existence_probability is not None:
+            try:
+                log_delta = _existence_probability_to_log_odds(
+                    metadata_existence_probability,
+                    parameter_name="external start metadata['existence_probability']",
+                )
+            except ValueError:
+                log_delta = self._external_start_initial_log_delta
 
         return self._tree_store.create_root_tree_for_new_track(
             scan_index=int(self._last_scan_index),
@@ -1344,7 +1365,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             state_kind="external_start",
             used_det_key=None,
             assoc_label=TOMHTTracker.ASSOC_PAD,
-            log_delta=0.0,
+            log_delta=log_delta,
             age=age,
             hits=hits,
             root_source="external_start",

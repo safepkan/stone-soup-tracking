@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .tomht_scoring import _existence_probability_to_log_odds
+
 
 @dataclass(frozen=True)
 class TOMHTParams:
@@ -69,6 +71,9 @@ class TOMHTParams:
     # detections per unit measurement-volume per scan. Must match the same
     # measurement coordinates used by the hypothesiser NLL computation.
     clutter_density: float = 0.0
+    # Public external-start prior. Internally converted to log-odds for the root
+    # log_delta; default 0.95 reflects externally confirmed starts.
+    external_start_initial_existence_probability: float = 0.95
 
     # MAP-only N-scan pruning: boundary is b = k - N.
     ns_scan_window: int = 6
@@ -95,3 +100,10 @@ class TOMHTParams:
     debug_births_max: int = 5
     debug_globals_max: int = 5
     collect_stats: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate parameter values with constrained domains."""
+        _existence_probability_to_log_odds(
+            self.external_start_initial_existence_probability,
+            parameter_name="external_start_initial_existence_probability",
+        )

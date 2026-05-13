@@ -15,6 +15,7 @@ Update (2026-04-20): expansion timing instrumentation now splits `expand_ms` int
 Update (2026-05-11): `TOMHTParams` now lives in `mht/tomht_params.py` so extracted helper modules can depend on tracker configuration without importing `TOMHTTracker`; `tomht_tracker.py` still re-exports it for compatibility. Local expansion orchestration now lives in `mht/tomht_expansion.py`, internal-birth candidate helpers now live in `mht/tomht_births.py`, cluster work construction and overload cluster decomposition now live in `mht/tomht_clustering.py`, post-solve supported-leaf pruning now lives in `mht/tomht_pruning.py`, and TOMHT-specific scan/debug helpers now live in `mht/tomht_utils.py`. `TOMHTTracker` still orchestrates the same pipeline, but local expansion/candidate handling, internal-birth residual/candidate utilities, full-history cluster construction, overload-split transformation, retained-global leaf-support pruning, detection sorting, detection-key filtering, and detection-key debug formatting are now isolated behind narrow helper functions.
 Update (2026-05-12): persistent tree/node bookkeeping now lives in `mht/tomht_tree_store.py`. Stable ID allocation, node/root creation, single-root tree insertion, active-leaf bookkeeping, active count helpers, empty-tree removal, and unreachable-node cleanup are now owned by `TrackTreeStore`, while `TOMHTTracker` keeps compatibility properties for direct tree/node table inspection.
 Update (2026-05-13): N-scan commitment bookkeeping inside `TOMHTTracker` is now grouped in a single `_nscan_commitment_snapshot` field using the existing `NScanCommitmentSnapshot` model type. Snapshot contents, stats reporting, pruning semantics, and cleanup reachability seeds are unchanged.
+Update (2026-05-13): external-start root scoring is now configurable through `TOMHTParams.external_start_initial_existence_probability` (default `0.95`, log-odds about `+2.944`). The public value is validated as a probability and converted internally to log-odds for the external-start root `log_delta`. An input external-start track may optionally set `metadata["existence_probability"]` to override that initial prior; invalid optional values fall back to the tracker default. TOMHT output metadata now also exposes score-implied `existence_log_odds` and `existence_probability` fields from each output leaf’s accumulated score; these are observability fields, not yet fully calibrated existence probabilities.
 
 ---
 
@@ -466,6 +467,8 @@ Returned `Track` metadata remains an explicit projection from the current leaf n
 - `last_det_hit`
 - `root_source`
 - `birth_scan_index`
+- `existence_log_odds`
+- `existence_probability` (currently score-implied from accumulated log-odds, not yet a fully calibrated existence probability)
 
 ### Instrumentation
 

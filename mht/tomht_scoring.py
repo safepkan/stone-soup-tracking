@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import log
+from math import isfinite, log, log1p
 from typing import Protocol, Sequence
 
 from stonesoup.types.detection import MissedDetection
@@ -13,6 +13,28 @@ from stonesoup.types.track import Track
 from .tomht_types import ScanContext
 
 LocalDetectionIndex = int
+
+
+def _existence_probability_to_log_odds(
+    probability: float,
+    *,
+    parameter_name: str = "existence_probability",
+) -> float:
+    """Map a public existence probability to an internal log-odds score.
+
+    External configuration uses an intuitive probability. TOMHT root scores are
+    additive log-deltas, so ``0.5`` maps to the old neutral ``0.0`` score.
+    """
+    invalid_message = (
+        f"{parameter_name} must satisfy 0.0 < p < 1.0; got {probability!r}."
+    )
+    try:
+        p = float(probability)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(invalid_message) from exc
+    if not isfinite(p) or not 0.0 < p < 1.0:
+        raise ValueError(invalid_message)
+    return log(p) - log1p(-p)
 
 
 class ScoringModel(Protocol):

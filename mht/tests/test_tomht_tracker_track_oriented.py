@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from math import exp
 import unittest
 from typing import Iterable, cast
 
@@ -227,6 +228,10 @@ def _track_start(x: float, timestamp: datetime.datetime) -> Track:
     return Track([_state(x, timestamp)])
 
 
+def _sigmoid(log_odds: float) -> float:
+    return 1.0 / (1.0 + exp(-log_odds))
+
+
 def _build_tracker(
     *,
     hypothesiser: _ScriptedHypothesiser,
@@ -304,6 +309,21 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
             if leaf.used_det_key is not None
         }
         self.assertEqual({0, 1}, used_det_indices)
+
+        output_tracks = tracker.get_map_output_tracks()
+        self.assertEqual(2, len(output_tracks))
+        for output_track in output_tracks:
+            track_id = int(output_track.metadata["track_id"])
+            leaf = map_snapshot.leaf_nodes_by_track_id[track_id]
+            existence_log_odds = float(leaf.accumulated_log_score)
+            self.assertAlmostEqual(
+                existence_log_odds,
+                output_track.metadata["existence_log_odds"],
+            )
+            self.assertAlmostEqual(
+                _sigmoid(existence_log_odds),
+                output_track.metadata["existence_probability"],
+            )
 
         tree_snapshot = tracker.get_track_tree_snapshot()
         self.assertEqual({0, 1}, set(tree_snapshot.keys()))
