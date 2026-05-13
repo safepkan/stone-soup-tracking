@@ -62,7 +62,6 @@ class TOMHTParams:
     historical_conflict_relaxation_enabled: bool = True
 
     # Scoring / numerical behavior.
-    scoring_mode: str = "nll"
     log_epsilon: float = 1e-12
     prob_detect: float = 0.9
     # Main-path gate control: Mahalanobis threshold (non-squared).

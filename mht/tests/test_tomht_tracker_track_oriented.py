@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import datetime
 from math import exp, log, log1p
 import unittest
@@ -158,12 +159,6 @@ class _ScriptedUpdaterWithUpdateStates(_ScriptedUpdater):
         )
 
 
-class _ManualScoringModel:
-    def score_track_hypotheses(self, *, hypotheses, ctx) -> list[float]:
-        del ctx
-        return [-float(hypothesis.distance) for hypothesis in hypotheses]
-
-
 class _CaptureInitiator:
     def __init__(self, born: list[Track]) -> None:
         self._born = born
@@ -238,13 +233,17 @@ def _build_tracker(
             debug_display_births=False,
             collect_stats=False,
         )
+    params = replace(
+        params,
+        prob_detect=0.0,
+        clutter_density=params.log_epsilon,
+    )
     return TOMHTTracker(
         hypothesiser=hypothesiser,
         updater=updater,
         initiator=initiator,
         deleter=deleter,
         params=params,
-        scoring_model=_ManualScoringModel(),
     )
 
 

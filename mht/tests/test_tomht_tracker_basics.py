@@ -14,6 +14,7 @@ from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 
 from mht.tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
+from mht.tomht_scoring import NLLScoringModel
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
 
 
@@ -81,12 +82,6 @@ class _LegacyPositionalNoopHypothesiser:
         )
 
 
-class _ZeroScoringModel:
-    def score_track_hypotheses(self, *, hypotheses, ctx) -> list[float]:
-        del ctx
-        return [0.0 for _ in hypotheses]
-
-
 @dataclass(frozen=True, order=True, unsafe_hash=True, slots=True)
 class _SystemTrackId:
     id: int
@@ -115,7 +110,6 @@ def _build_tracker(
             debug_display_births=False,
             collect_stats=False,
         ),
-        scoring_model=_ZeroScoringModel(),
         output_track_id_mapper=output_track_id_mapper,
     )
 
@@ -131,7 +125,6 @@ def _build_tracker_with_overrides(params_overrides: dict[str, object]) -> TOMHTT
             collect_stats=False,
         ),
         params_overrides=params_overrides,
-        scoring_model=_ZeroScoringModel(),
     )
 
 
@@ -145,11 +138,34 @@ def _external_start(timestamp: datetime.datetime) -> Track:
 
 
 class TOMHTTrackerBasicsTest(unittest.TestCase):
-    def test_legacy_birth_parameters_are_absent(self) -> None:
+    def test_removed_parameters_are_absent(self) -> None:
         param_fields = TOMHTParams.__dataclass_fields__
+        self.assertNotIn("scoring_mode", param_fields)
         self.assertNotIn("internal_birth_mode", param_fields)
         self.assertNotIn("birth_log_penalty", param_fields)
         self.assertNotIn("birth_density", param_fields)
+
+    def test_constructor_builds_nll_scoring_model_from_params(self) -> None:
+        params = TOMHTParams(
+            prob_detect=0.7,
+            clutter_density=0.25,
+            log_epsilon=1e-9,
+            debug_display_scan_stats=False,
+            debug_display_hypotheses=False,
+            debug_display_births=False,
+            collect_stats=False,
+        )
+
+        tracker = TOMHTTracker(
+            hypothesiser=_NoopHypothesiser(),
+            updater=_NoopUpdater(),
+            params=params,
+        )
+
+        self.assertIsInstance(tracker.scoring_model, NLLScoringModel)
+        self.assertEqual(0.7, tracker.scoring_model.prob_detect)
+        self.assertEqual(0.25, tracker.scoring_model.clutter_density)
+        self.assertEqual(1e-9, tracker.scoring_model.log_epsilon)
 
     def test_initiator_start_initial_existence_probability_rejects_boundaries(
         self,
@@ -214,7 +230,6 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
                 debug_display_births=False,
                 collect_stats=False,
             ),
-            scoring_model=_ZeroScoringModel(),
         )
         self.assertIsInstance(
             tracker._hypothesiser, TrackerOwnedNLLDistanceHypothesiser
@@ -233,7 +248,6 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
                 debug_display_births=False,
                 collect_stats=False,
             ),
-            scoring_model=_ZeroScoringModel(),
         )
 
         self.assertIs(custom_hypothesiser, tracker._hypothesiser)

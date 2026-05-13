@@ -54,12 +54,6 @@ class _NoopUpdater:
         raise RuntimeError("No update expected in this test helper")
 
 
-class _ZeroScoringModel:
-    def score_track_hypotheses(self, *, hypotheses, ctx) -> list[float]:
-        del ctx
-        return [0.0 for _ in hypotheses]
-
-
 def _quiet_params(**overrides: Any) -> TOMHTParams:
     return TOMHTParams(
         debug_display_scan_stats=False,
@@ -77,7 +71,6 @@ def _build_tracker(params: TOMHTParams | None = None) -> TOMHTTracker:
         hypothesiser=_NoopHypothesiser(),
         updater=_NoopUpdater(),
         params=params,
-        scoring_model=_ZeroScoringModel(),
     )
 
 

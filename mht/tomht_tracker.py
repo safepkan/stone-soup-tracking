@@ -84,9 +84,8 @@ from .tomht_pruning import apply_post_solve_supported_leaf_pruning
 from .tomht_types import ScanContext
 from .tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from .tomht_scoring import (
-    ScoringModel,
+    NLLScoringModel,
     _existence_probability_to_log_odds,
-    make_default_scoring_model,
     maybe_log_scoring_diagnostics,
 )
 from .tomht_stats import (
@@ -220,7 +219,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         deleter: Deleter | None = None,
         params: TOMHTParams = TOMHTParams(),
         params_overrides: Mapping[str, Any] | None = None,
-        scoring_model: ScoringModel | None = None,
         output_track_id_mapper: Callable[[int], object] | None = None,
     ) -> None:
         """Construct the tracker with Stone Soup components and TO-MHT params.
@@ -252,11 +250,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             Tracker configuration.
         params_overrides : Mapping[str, Any] | None
             Optional field-level overrides applied onto ``params``.
-        scoring_model : ScoringModel | None
-            Optional scoring model for local track hypotheses. Local hypothesis
-            scoring includes hit/miss terms such as detection probability and
-            clutter density, where clutter density must be specified in the
-            same measurement-space units as the hypothesiser's NLL.
         output_track_id_mapper : Callable[[int], object] | None
             Optional mapping from the tracker-internal integer logical track ID
             to the public Stone Soup ``Track.id`` object for MAP outputs.
@@ -286,14 +279,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._external_start_initial_log_delta = external_start_initial_log_delta
         self.initiator = initiator
         self._deleter = deleter
-        if scoring_model is None:
-            scoring_model = make_default_scoring_model(
-                scoring_mode=params.scoring_mode,
-                prob_detect=params.prob_detect,
-                log_epsilon=params.log_epsilon,
-                clutter_density=params.clutter_density,
-            )
-        self.scoring_model = scoring_model
+        self.scoring_model = NLLScoringModel(
+            prob_detect=float(params.prob_detect),
+            clutter_density=float(params.clutter_density),
+            log_epsilon=params.log_epsilon,
+        )
         maybe_log_scoring_diagnostics(self.scoring_model)
         # Exact cluster-solver backend behind a narrow solver-facing contract.
         self._cluster_solver: ClusterSolver = self._make_cluster_solver(

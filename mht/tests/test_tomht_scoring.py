@@ -13,7 +13,6 @@ from stonesoup.types.state import GaussianState
 
 from mht.tomht_scoring import (
     NLLScoringModel,
-    make_default_scoring_model,
     maybe_log_scoring_diagnostics,
 )
 from mht.tomht_types import ScanContext
@@ -76,16 +75,6 @@ class NLLScoringModelTest(unittest.TestCase):
         self.assertEqual(2, len(scores))
         self.assertAlmostEqual(log(0.8) - log(0.25) - hit_nll, scores[0])
         self.assertAlmostEqual(log(1.0 - 0.8), scores[1])
-
-    def test_default_scoring_construction_still_works(self) -> None:
-        scoring_model = make_default_scoring_model(
-            scoring_mode="nll",
-            prob_detect=0.9,
-            log_epsilon=1e-12,
-            clutter_density=0.0,
-        )
-
-        self.assertIsInstance(scoring_model, NLLScoringModel)
 
     def test_diagnostics_report_active_nll_terms_only(self) -> None:
         model = NLLScoringModel(

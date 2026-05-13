@@ -28,6 +28,7 @@ The tracker is now in a better shape for this work because several pieces have a
 - initiator-created starts now use an explicit initiator-start existence prior, with optional per-track metadata override,
 - the legacy fixed `birth_log_penalty` and `ScoringModel.score_birth(...)` hook have been removed,
 - `TOMHTParams.internal_birth_mode` has been removed,
+- the public `TOMHTTracker(scoring_model=...)` injection point and `make_default_scoring_model(...)` factory have been removed; the tracker directly constructs `NLLScoringModel`,
 - there is no tracker-core `birth_density` parameter; birth-density reasoning is guidance for choosing an initiator-start existence prior.
 
 These changes make the next scoring/birth steps easier to reason about.
@@ -46,7 +47,7 @@ NLL = -log p(z | x)
 
 without detection-probability or clutter-density factors.
 
-The scoring model then applies:
+The tracker-owned `NLLScoringModel` then applies:
 
 ```text
 hit  = log(P_D) - log(lambda) - NLL

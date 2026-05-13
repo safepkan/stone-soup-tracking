@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, determinism fixes, output-history restoration, solver-seam extraction, exact-backend experiments, local-association ownership refactor, explicit NLL scoring cleanup, and local-association optimization work completed through **2026-04-16**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, determinism fixes, output-history restoration, solver-seam extraction, exact-backend experiments, local-association ownership refactor, explicit NLL scoring cleanup, local-association optimization work, internal-start cleanup, and scoring-constructor simplification completed through **2026-05-13**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -18,6 +18,7 @@ Update (2026-05-13): N-scan commitment bookkeeping inside `TOMHTTracker` is now 
 Update (2026-05-13): external-start root scoring is now configurable through `TOMHTParams.external_start_initial_existence_probability` (default `0.95`, log-odds about `+2.944`). The public value is validated as a probability and converted internally to log-odds for the external-start root `log_delta`. An input external-start track may optionally set `metadata["existence_probability"]` to override that initial prior; invalid optional values fall back to the tracker default. TOMHT output metadata now also exposes score-implied `existence_log_odds` and `existence_probability` fields from each output leaf’s accumulated score; these are observability fields, not yet fully calibrated existence probabilities.
 Update (2026-05-13): legacy unused-detection scoring was removed from the default scoring contract and cluster rebuild path. The local hit score already carries the clutter-density contrast via `-log(lambda)`, so cluster solving now ranks combinations directly by accumulated leaf scores without a current-scan unused-detection offset.
 Update (2026-05-13): internal starts are controlled by constructor initiator presence: `initiator=None` creates no internal starts and leaves residual detections available, while a configured initiator receives residual detections and returns candidate start tracks. This covers both one-shot measurement initializers and more complex/stateful/domain-aware initiators. Initiator-created starts use `TOMHTParams.initiator_start_initial_existence_probability` (default `0.8`, log-odds about `+1.386`) for root `log_delta`, with optional per-track `metadata["existence_probability"]` override and invalid metadata fallback. The legacy `birth_log_penalty` parameter, `TOMHTParams.internal_birth_mode`, and `ScoringModel.score_birth(...)` hook were removed; no tracker-core `birth_density` parameter was added.
+Update (2026-05-13): `TOMHTTracker.__init__` no longer accepts a public `scoring_model` argument. The tracker now always constructs `NLLScoringModel` from `TOMHTParams.prob_detect`, `TOMHTParams.clutter_density`, and `TOMHTParams.log_epsilon`; `make_default_scoring_model(...)` was removed, while the narrow `ScoringModel` protocol remains only as an internal expansion-helper type boundary.
 
 ---
 
@@ -94,9 +95,9 @@ Mahalanobis-threshold gating semantics via `mahalanobis_gate_threshold`.
 This split is now explicit:
 
 - **hypothesiser owns local distances and gating**
-- **scoring model owns local NLL-to-LLR conversion**
+- **the tracker-owned NLL scorer owns local NLL-to-LLR conversion**
 
-`ScoringModel` currently owns:
+The internal scoring helper currently owns:
 
 - `score_track_hypotheses(...)`
 
@@ -306,7 +307,7 @@ Local expansion is now explicitly **distance-hypothesis driven**:
 - for each active leaf, reconstruct a compatibility `Track`,
 - call the configured distance hypothesiser,
 - require one missed-detection hypothesis plus zero or more gated detection hypotheses,
-- derive local score via `ScoringModel.score_track_hypotheses(...)`,
+- derive local score via the tracker-owned NLL scorer,
 - create child nodes for kept hypotheses,
 - always retain a miss hypothesis,
 - then apply an optional per-tree local leaf cap.
@@ -413,15 +414,16 @@ These mechanisms are pragmatic, not final. They should be understood as explicit
 
 ## Scoring state
 
-Scoring now uses an explicit NLL-to-LLR additive model in `tomht_scoring.py` unless an explicit alternative scoring model is supplied.
+Local scoring uses an explicit tracker-owned NLL-to-LLR additive model in `tomht_scoring.py`. It is configured through `TOMHTParams.prob_detect`, `TOMHTParams.clutter_density`, and `TOMHTParams.log_epsilon`; the public tracker constructor no longer accepts a custom scoring-model object, and `TOMHTParams.scoring_mode` has been removed.
 
-Current default behavior:
+Current behavior:
 
 - local hit score: `log(P_D) - log(lambda) - NLL`
 - local miss score: `log(1 - P_D)`
 - no separate unused-detection score term; the clutter-density contrast is already in the local hit score,
 - external-start roots use `logit(external_start_initial_existence_probability)`,
 - initiator-created roots use `logit(initiator_start_initial_existence_probability)`,
+- start-root existence-prior scoring is handled outside `NLLScoringModel`,
 - scoring diagnostics are logged at tracker construction time.
 
 ### Unit / scale contract

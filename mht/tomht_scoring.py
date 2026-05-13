@@ -1,4 +1,4 @@
-"""Tracker scoring contract for TO-MHT local/global additive terms."""
+"""Internal scoring helpers for TO-MHT local additive terms."""
 
 from __future__ import annotations
 
@@ -35,6 +35,8 @@ def _existence_probability_to_log_odds(
 
 
 class ScoringModel(Protocol):
+    """Narrow internal protocol consumed by expansion helpers."""
+
     def score_track_hypotheses(
         self,
         *,
@@ -66,8 +68,8 @@ class NLLScoringModel:
     - Unused-detection scoring has been removed from the default scoring
       contract. The clutter-density contrast is already carried by the local
       hit term through ``-log(lambda)``.
-    - Whether this API remains the right abstraction is deferred to a later
-      scoring redesign pass.
+    - Initiator/external-start root scores are existence-prior log-odds and are
+      handled outside this local NLL scorer.
     """
 
     prob_detect: float
@@ -109,33 +111,12 @@ class NLLScoringModel:
         return out
 
 
-def make_default_scoring_model(
-    *,
-    scoring_mode: str,
-    prob_detect: float,
-    log_epsilon: float,
-    clutter_density: float,
-) -> ScoringModel:
-    """Build the tracker's default scoring model from tracker-owned params."""
-    mode = str(scoring_mode).strip().lower()
-    if mode == "nll":
-        return NLLScoringModel(
-            prob_detect=float(prob_detect),
-            clutter_density=float(clutter_density),
-            log_epsilon=log_epsilon,
-        )
-    raise ValueError(
-        f"Unsupported scoring_mode='{scoring_mode}'. " "Supported values: 'nll'."
+def maybe_log_scoring_diagnostics(scoring_model: NLLScoringModel) -> None:
+    """Emit optional diagnostics for the tracker-owned NLL scorer."""
+    clutter = scoring_model.clutter_density
+    print(
+        f"[Scoring] nll: prob_detect={scoring_model.prob_detect}, "
+        f"clutter_density={clutter}, "
+        f"log_hit_base={scoring_model._log_hit_base():+.3f}, "
+        f"log_miss={scoring_model._log_miss():+.3f}"
     )
-
-
-def maybe_log_scoring_diagnostics(scoring_model: ScoringModel) -> None:
-    """Emit optional scoring diagnostics for known scoring-model implementations."""
-    if isinstance(scoring_model, NLLScoringModel):
-        clutter = scoring_model.clutter_density
-        print(
-            f"[Scoring] nll: prob_detect={scoring_model.prob_detect}, "
-            f"clutter_density={clutter}, "
-            f"log_hit_base={scoring_model._log_hit_base():+.3f}, "
-            f"log_miss={scoring_model._log_miss():+.3f}"
-        )
