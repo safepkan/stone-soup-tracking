@@ -2,207 +2,283 @@
 
 ## Next architectural subphase
 
-**Local expansion volume reduction / pre-expansion control**
+**Scoring, birth semantics, and confirmation gates**
 
-Update (2026-04-20): timing output now includes explicit expansion-call attribution (`expand_hypothesise_ms` / `expand_update_ms` and call counts), which closes part of the "characterize expansion volume/cost" prerequisite and makes it easier to separate hypothesis-generation vs state-update time on replay.
-Update (2026-05-11): a conservative pre-phase refactor extracted `TOMHTParams`, local expansion orchestration, internal-birth handling, cluster work construction, overload cluster decomposition, post-solve supported-leaf pruning, and TOMHT-specific scan/debug utilities from `TOMHTTracker` without changing scoring, pruning semantics, clustering semantics, overload-splitting behavior, local expansion behavior, birth behavior, or public API. `_last_unused_detections` assignment remains in the tracker as scan orchestration.
-Update (2026-05-12): persistent tree/node bookkeeping moved into `mht/tomht_tree_store.py`; expansion, clustering, and post-solve pruning now accept `TrackTreeStore` as their persistent-state dependency; new-track root creation/insertion now uses a store helper; and tracker implementation code now references the store directly instead of compatibility table aliases. This did not change ID behavior, node/tree semantics, scoring, pruning, clustering, lifecycle, or public API.
-Update (2026-05-12): cluster rebuild / solve orchestration moved into `mht/tomht_cluster_rebuild.py` behind `rebuild_cluster_globals(...)`. `TOMHTTracker._rebuild_cluster_globals(...)` is now a thin wrapper; overload splitting, cluster-id reassignment, solver problem construction, historical-conflict relaxation, logging/error text, snapshots, and `RebuildStats` semantics are unchanged.
-Update (2026-05-12): pure `TrackHypothesisNode` lineage helpers moved into `mht/tomht_tree_utils.py`; N-scan and lifecycle call sites now use `child_of_root_on_path(...)` and `is_descendant_of(...)` without changing pruning or lifecycle behavior.
-Update (2026-05-13): tracker-internal N-scan commitment bookkeeping now uses one `_nscan_commitment_snapshot` field backed by `NScanCommitmentSnapshot`; this is a readability-only grouping change.
-Update (2026-05-13): legacy unused-detection scoring was removed after the neutralization experiment. `ScoringModel.score_unused_detections(...)`, `TOMHTParams.unused_det_log_penalty`, and the cluster-rebuild affine unused-detection score decomposition are gone; cluster solving now uses accumulated leaf scores directly.
+The previously planned phase was local expansion volume reduction / pre-expansion control. That remains an important downstream goal, but after returning to the project and reviewing score/probability-based pruning ideas, the immediate prerequisite has become clearer:
 
-The recent local-association phase is now complete enough that the tracker has:
+> before we use scores to prune, terminate, confirm, or selectively expand tracks, the score semantics themselves need to be coherent.
 
-- a tracker-owned default distance hypothesiser,
-- explicit NLL-based local scoring,
-- Mahalanobis-threshold gating semantics,
-- and a modestly optimized local-association math kernel.
-
-That work clarified the runtime story and delivered worthwhile `expand_ms` reductions, but it also made the next bottleneck clearer:
-
-> the main remaining local-expansion cost is now likely driven less by the per-detection math itself and more by how many leaves still require full expansion.
-
-So the next subphase is about investigating and reducing **expansion volume**.
+The current focus is therefore to complete the scoring and birth/initiation migration so that later expansion-volume and pruning work can be based on interpretable scores/probabilities rather than legacy heuristics.
 
 ---
 
-## Why this subphase now
+## Recent baseline changes
 
-The current baseline now has:
+The tracker is now in a better shape for this work because several pieces have already landed:
 
-- branch-and-bound as the default exact cluster backend,
-- explicit timing-phase instrumentation,
-- a tracker-owned local-association path,
-- and enough regression/timing support to evaluate conservative runtime changes.
+- major `TOMHTTracker` substeps have been extracted into dedicated modules,
+- persistent tree/node bookkeeping now lives in `TrackTreeStore`,
+- local expansion, internal-birth handling, clustering, overload splitting, cluster rebuild, post-solve pruning, and TOMHT utilities are no longer monolithic tracker methods,
+- external starts now use an existence-prior probability mapped internally to log-odds,
+- external starts can optionally override that prior per track via `Track.metadata["existence_probability"]`,
+- output tracks now expose score-implied existence metadata,
+- legacy unused-detection scoring has been removed,
+- cluster solving now uses accumulated leaf scores directly rather than affine unused-detection pre-baking.
 
-Recent local-association optimization passes improved `expand_ms`, including:
-- rectangular pre-gating,
-- limited reuse of predictions / measurement predictions / covariance prep,
-- and Cholesky-based Mahalanobis/NLL evaluation.
-
-Those passes were worthwhile, but the replay timing picture still suggests that the main remaining leverage is not only inside the local math kernel. The bigger question is now:
-
-> which leaves actually need to be expanded, and where can that volume be reduced without damaging tracker behavior too much?
+These changes make the next scoring/birth steps easier to reason about.
 
 ---
 
-## Goal of this subphase
+## Current scoring baseline
 
-At the end of this subphase, the tracker should have:
+Existing-track local scoring is now the cleanest part of the scoring model.
 
-1. a clearer understanding of which expanded leaves are actually useful,
-2. at least one conservative mechanism for reducing how many leaves require full expansion,
-3. a clearer picture of which knobs are semantic choices vs tractability controls,
-4. preserved or acceptable replay/smoke behavior under those changes,
-5. and updated docs/comments that describe the new runtime story honestly.
+The tracker-owned distance hypothesiser emits detection hypotheses whose distance is:
 
-This phase is exploratory: it begins with analysis and characterization, then moves to targeted conservative implementation once the likely leverage points are clear.
+```text
+NLL = -log p(z | x)
+```
+
+without detection-probability or clutter-density factors.
+
+The scoring model then applies:
+
+```text
+hit  = log(P_D) - log(lambda) - NLL
+miss = log(1 - P_D)
+```
+
+where:
+
+- `P_D` is detection probability,
+- `lambda` is clutter density,
+- `lambda` must be expressed in the same measurement-space units as the hypothesiser NLL.
+
+Legacy unused-detection scoring has been removed because the clutter-density contrast is already represented in the hit score. This was expected to change smoke/replay outputs because old scenarios were tuned against older heuristic scoring. That is acceptable: we are prioritizing a coherent scoring interpretation before retuning.
+
+The remaining weak area is birth/initiation semantics.
 
 ---
 
-## Core design intent
+## Direction: three initiation lanes
 
-### 1. Reduce volume before trying to parallelize
+The migration should make three lanes explicit.
 
-Parallelization remains a plausible later axis, but it should not be the first answer here.
+### 1. Tracker-owned single-detection births
 
-Before adding concurrency, we should first understand:
-- how much expansion work is actually useful,
-- how much of it is obviously low-value,
-- and where conservative volume reductions are possible.
+This should become the preferred model-native internal birth path.
 
-### 2. Preserve the clear runtime story
+Conceptually:
 
-The runtime story should remain understandable:
+```text
+one residual detection -> one tentative track root
+```
 
-- explicit trees are the persistent state,
-- expansion produces local child leaves,
-- globals are rebuilt later from surviving frontiers,
-- and local runtime cost should be understandable in terms of both:
-  - cost per expanded leaf
-  - number of leaves expanded
+These tracks are tentative. They should not necessarily all be emitted/published. The MHT machinery, score accumulation, lifecycle, pruning, and output confirmation logic should decide which survive and which are visible externally.
 
-This phase should improve that clarity, not obscure it.
+The intended model-native single-detection birth score is a birth-vs-clutter log-likelihood-ratio-like term, probably of the form:
 
-### 3. Prefer conservative, inspectable controls
+```text
+birth_log_delta = log(P_D) + log(beta_NT) - log(lambda)
+```
 
-The next useful changes are likely to be things like:
+where:
+
+- `beta_NT` is a new-target/birth density in measurement-space units,
+- `lambda` is clutter density in the same measurement-space units,
+- `P_D` is detection probability.
+
+The exact naming and parameterization of `beta_NT` still needs a small design choice. The direct form is mathematically clean but can be harder for users. A later convenience parameterization might express expected new targets per scan over a surveillance/birth volume.
+
+### 2. External starts
+
+External starts are already on the cleaner path.
+
+They represent caller-supplied starts that should be treated as externally confirmed or externally meaningful. They are initialized from an existence probability mapped to log-odds. The global default can be overridden by `Track.metadata["existence_probability"]`.
+
+This lane should remain the preferred integration path for systems that already have their own domain-specific initiation or confirmation process.
+
+### 3. Black-box initiator starts
+
+A black-box Stone Soup initiator does not expose a clean scoring model to the tracker. It may hide multiple scans, confirmation logic, motion gates, or other domain-specific choices.
+
+Therefore, black-box initiator output should be treated conceptually as:
+
+```text
+external-style starts generated inside the tracker for convenience
+```
+
+rather than as model-native single-detection births.
+
+That means initiator-created roots should be scored with an explicit initial existence prior, analogous to external starts, but probably with a separate parameter and typically lower default confidence.
+
+This keeps the scoring story honest:
+
+- if the tracker owns the birth model, it can score it model-natively,
+- if a black box produces a start, the tracker assigns an explicit existence prior.
+
+---
+
+## Immediate implementation plan
+
+### Step 1: Make birth modes explicit
+
+Add an explicit internal birth mode, likely something like:
+
+```text
+internal_birth_mode = "initiator" | "single_detection" | "disabled"
+```
+
+or equivalent names.
+
+The exact default should be chosen conservatively. It is fine to preserve current behavior initially while making the mode visible.
+
+Important behavior expectations:
+
+- `"disabled"` means no internal births; external starts can still be used.
+- `"initiator"` means use the configured black-box initiator, if present.
+- `"single_detection"` means use tracker-owned residual-detection births.
+
+This step is mostly about making the architecture explicit.
+
+### Step 2: Replace fixed initiator birth penalty
+
+The current fixed birth penalty is not a good scoring story for black-box initiator output.
+
+For initiator-created starts, introduce something like:
+
+```text
+initiator_start_initial_existence_probability
+```
+
+and map it to log-odds for the root `log_delta`, just as external starts do.
+
+This should replace the current fixed penalty for the black-box initiator lane.
+
+Suggested semantics:
+
+- valid per-track metadata may eventually override it,
+- missing metadata uses the parameter default,
+- invalid optional metadata should fall back rather than reject the start,
+- this parameter should be separate from `external_start_initial_existence_probability`.
+
+Potential default should probably be lower than external starts, because internally generated initiator starts may be tentative rather than externally confirmed.
+
+### Step 3: Add tracker-owned single-detection birth mode
+
+Implement model-native single-detection births as an opt-in mode first.
+
+Behavior sketch:
+
+- compute residual detections as now,
+- create one candidate birth per residual detection,
+- apply existing deterministic ordering/capping/load guards or close equivalents,
+- create one root tree per retained residual detection,
+- score each root with the model-native birth-vs-clutter term,
+- do not use the black-box initiator for this mode.
+
+The first implementation should be conservative and inspectable.
+
+Likely new parameter:
+
+```text
+birth_density
+```
+
+or a similarly clear name, with the same measurement-space unit contract as `clutter_density`.
+
+Do not introduce a two-point or M/N initiator in this step. If output noise becomes a problem, solve that with output confirmation gates first.
+
+### Step 4: Add output confirmation / emit gate
+
+Once single-detection births exist, the tracker may internally carry more tentative tracks. That is expected.
+
+Visible output should be controlled separately from internal hypothesis maintenance.
+
+Add an output gate based on some combination of:
+
+- score-implied existence probability,
+- minimum hits,
+- minimum age.
+
+The first version should probably preserve current output behavior by default, then allow stricter settings for cleaner consumer-facing output.
+
+This gate should apply to returned/emitted tracks, not to whether the internal MHT state keeps tentative hypotheses.
+
+### Step 5: Revisit pruning and expansion-volume controls
+
+After scoring, births, and output confirmation are coherent, return to:
+
+- score-based track/leaf pruning,
 - selective expansion,
-- stronger pre-expansion filtering,
-- better prioritization of which leaves are worth expanding,
-- or better understanding of existing tractability guardrails.
+- expansion-volume characterization,
+- overload-split pruning behavior,
+- and frontier growth controls.
 
-These should be explicit and inspectable rather than hidden behind broad heuristics.
-
-### 4. Keep quality concerns visible, but separate
-
-The current baseline still has known quality concerns:
-- false starts remain somewhat high,
-- replay may show somewhat more target swapping / track jumping.
-
-Those should remain visible, but the current subphase should stay focused on expansion-volume reduction rather than broad quality retuning.
+This is the earlier expansion-volume phase, but with a stronger foundation.
 
 ---
 
-## What should happen in this subphase
+## Non-goals for this phase
 
-### 1. Characterize expansion volume
+Do not yet:
 
-Before changing semantics, gather better evidence about:
-- how many leaves are expanded per scan,
-- how many children they produce,
-- how many expanded leaves later survive supported-leaf pruning / MAP / N-scan,
-- and whether many expanded leaves appear to be low-value or short-lived.
+- implement broad score-based pruning,
+- make aggressive expansion-volume changes,
+- retune all smoke scenarios,
+- redesign cluster solving,
+- introduce parallel local expansion,
+- remove black-box initiator support entirely,
+- add tracker-owned two-point or M/N initiation,
+- or treat output confirmation gating as internal hypothesis deletion.
 
-This should help identify whether the next best move is:
-- fewer leaves entering expansion,
-- fewer children retained per leaf,
-- or some more selective expansion policy.
-
-### 2. Identify plausible intervention points
-
-Likely candidate areas include:
-- per-tree leaf frontier entering expansion,
-- local child retention count,
-- selective expansion of only some leaves within a tree,
-- pre-expansion score-based filtering / prioritization,
-- or better use of existing tractability guardrails.
-
-The goal is not to commit to all of these, but to identify which ones actually look promising from data.
-
-### 3. Implement one conservative volume-reduction step
-
-Once the likely leverage point is clearer, make one conservative targeted implementation pass.
-
-Examples of the kind of thing that may be appropriate:
-- modest selective expansion based on leaf score / support,
-- stronger but explicit pre-expansion prioritization,
-- or an adjustment that reduces clearly low-value expansion work without broadly changing the architecture.
-
-The exact mechanism should be chosen after the analysis step, not assumed in advance.
-
-### 4. Continue using the regression/timing harness
-
-This subphase should lean on:
-- smoke regression checks,
-- replay compare helpers,
-- timing summaries/logs,
-- and output inspection where needed.
-
-This is especially important because expansion-volume changes can be semantically meaningful even when they look like runtime-only work.
-
-### 5. Keep the next possible later topics visible
-
-This subphase does **not** mean parallelization is off the table.
-
-But parallelization should stay a later, explicit architectural topic, likely with:
-- opt-in behavior,
-- a clean abstraction on top of the hypothesiser/orchestration boundary,
-- and room for both tracker-owned and externally controlled parallel execution modes.
-
-That is not the focus of this pass.
+The goal is to get the scoring and initiation semantics clean enough that later pruning/volume work has a meaningful score basis.
 
 ---
 
-## What should **not** happen in this subphase
+## Important design notes
 
-This phase should **not** yet:
+### Scores and probabilities
 
-- redesign the exact cluster solver again,
-- do a full quality retuning pass,
-- do a broad birth/existence redesign,
-- do a full scoring-theory rewrite,
-- or commit prematurely to a parallelization architecture.
+The tracker is moving toward score/probability-based decisions. Therefore, score offsets matter more than they used to.
 
-The point here is to understand and reduce expansion volume first.
+External starts now use an existence probability mapped to log-odds. Births and initiator starts should likewise get explicit interpretations rather than arbitrary penalties.
+
+### Single-detection births are expected to be noisy internally
+
+A tracker-owned single-detection birth model will create tentative tracks from clutter detections. This is not necessarily wrong.
+
+The right question is not whether every internal tentative track is real. The right question is whether:
+
+- scores evolve sensibly,
+- low-quality tracks die or are pruned,
+- and output consumers only see confirmed-enough tracks.
+
+### Output gating is not the same as internal pruning
+
+A confirmed-output gate should reduce visible clutter tracks without prematurely deleting internal hypotheses.
+
+Internal pruning can come later, once score behavior is better understood.
+
+### Black-box initiators are convenience integration points
+
+A black-box initiator can still be useful, especially for existing runners and domain-specific setups. But unless it provides a likelihood/existence model, the tracker should not pretend to know how to score it from first principles.
+
+Treat it as an internal convenience wrapper around external-style starts.
 
 ---
 
-## Acceptance criteria
+## Acceptance criteria for this subphase
 
-This subphase should be considered successful when:
+This subphase is successful when:
 
-- there is a clearer measured picture of where expansion volume is coming from,
-- at least one conservative expansion-volume reduction has been implemented,
-- replay/smoke behavior remains materially acceptable,
-- timing data shows a worthwhile reduction in expansion-driven cost,
-- and the docs/comments reflect the new baseline honestly.
+- unused-detection scoring remains removed,
+- external starts continue to have configurable/per-track existence priors,
+- black-box initiator starts no longer rely on a fixed arbitrary birth penalty,
+- tracker-owned single-detection births exist as an opt-in model-native lane,
+- the birth score has a clear relationship to `P_D`, birth density, and clutter density,
+- output confirmation/emit gating is implemented or clearly staged,
+- smoke/replay outputs remain operationally usable,
+- and the code/docs make the three initiation lanes clear.
 
-A secondary success criterion is that the code and instrumentation make it easier to answer:
-
-> how many leaves are we expanding, and which of those expansions are actually paying off?
-
----
-
-## Recommended implementation style
-
-This phase should follow the usual conservative style:
-
-1. characterize expansion volume and usefulness,
-2. choose a small, explicit intervention point,
-3. implement one targeted volume-reduction pass,
-4. validate on smoke/replay output and timing,
-5. then decide whether another volume-control pass, a quality pass, or a later parallelization design step should follow.
-
-That is the intended scope of this phase.
+At that point, it should be reasonable to return to score/frontier/expansion-volume pruning work.
