@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Mapping
 
-import numpy as np
-
 from .tomht_clustering import (
     ClusterWorkItem,
     OverloadSplitSummary,
@@ -28,26 +26,10 @@ from .tomht_model import (
     TrackHypothesisNode,
 )
 from .tomht_params import TOMHTParams
-from .tomht_scoring import ScoringModel
 from .tomht_stats import RebuildStats
 from .tomht_tree_store import TrackTreeStore
 from .tomht_types import ScanContext
 from .tomht_utils import format_detection_key_sample
-
-
-@dataclass(frozen=True)
-class _ClusterUnusedScoreContext:
-    """Precomputed cluster-local context for unused-detection scoring."""
-
-    local_ctx: ScanContext
-
-
-@dataclass(frozen=True)
-class _ClusterCurrentScanScoreDecomposition:
-    """Per-hit + constant decomposition for cluster-local current-scan scoring."""
-
-    per_hit_log_bonus: float
-    constant_log_offset: float
 
 
 @dataclass(frozen=True)
@@ -68,7 +50,6 @@ class _ClusterSolveInput:
     ctx: ScanContext
     leaf_options: list[list[TrackHypothesisNode]]
     cluster_universe: set[DetectionKey]
-    unused_score_context: _ClusterUnusedScoreContext | None
 
 
 @dataclass(frozen=True)
@@ -89,104 +70,6 @@ class _ClusterSolveOutcome:
     historical_relaxation_attempted: bool = False
     historical_relaxation_succeeded: bool = False
     historical_relaxed_keys: frozenset[DetectionKey] = frozenset()
-
-
-def _build_cluster_unused_score_context(
-    *,
-    cluster_universe: set[DetectionKey],
-    ctx: ScanContext,
-) -> _ClusterUnusedScoreContext | None:
-    """Build one reusable cluster-local context for unused-detection scoring."""
-    if not cluster_universe:
-        return None
-
-    det_indices = sorted(
-        det_idx
-        for (scan_idx, det_idx) in cluster_universe
-        if scan_idx == ctx.scan_index
-    )
-    if not det_indices:
-        return None
-
-    detections_subset = [ctx.detections[idx] for idx in det_indices]
-    local_det_index_by_obj = {
-        id(det): local_idx for local_idx, det in enumerate(detections_subset)
-    }
-    local_ctx = ScanContext(
-        scan_index=ctx.scan_index,
-        timestamp=ctx.timestamp,
-        detections=detections_subset,
-        det_index_by_obj=local_det_index_by_obj,
-    )
-
-    return _ClusterUnusedScoreContext(local_ctx=local_ctx)
-
-
-def _build_cluster_current_scan_score_decomposition(
-    *,
-    score_context: _ClusterUnusedScoreContext | None,
-    scoring_model: ScoringModel,
-) -> _ClusterCurrentScanScoreDecomposition | None:
-    """Build per-hit + constant decomposition for tracker scoring."""
-    if score_context is None:
-        return None
-
-    used_none: set[int] = set()
-    total_current_scan_det_count = len(score_context.local_ctx.detections)
-    if total_current_scan_det_count <= 0:
-        return None
-
-    baseline = float(
-        scoring_model.score_unused_detections(
-            used_det_keys=used_none,
-            ctx=score_context.local_ctx,
-        )
-    )
-
-    # Derive per-used slope from two points and verify the linear shape for
-    # the current scoring contract that this solver interface supports.
-    first_key = 0
-    first_used_score = float(
-        scoring_model.score_unused_detections(
-            used_det_keys={first_key},
-            ctx=score_context.local_ctx,
-        )
-    )
-    per_used = float(first_used_score - baseline)
-
-    if total_current_scan_det_count >= 2:
-        second_used_score = float(
-            scoring_model.score_unused_detections(
-                used_det_keys={0, 1},
-                ctx=score_context.local_ctx,
-            )
-        )
-        second_increment = float(second_used_score - first_used_score)
-        if not np.isclose(second_increment, per_used, rtol=0.0, atol=1e-12):
-            raise RuntimeError(
-                "Current cluster-solver leaf-score pre-baking assumes a linear "
-                "per-hit current-scan clutter correction. Tracker scoring model "
-                "produced non-linear cluster unused-detection behavior."
-            )
-
-    predicted_all_used = baseline + per_used * float(total_current_scan_det_count)
-    all_used_score = float(
-        scoring_model.score_unused_detections(
-            used_det_keys=set(range(total_current_scan_det_count)),
-            ctx=score_context.local_ctx,
-        )
-    )
-    if not np.isclose(predicted_all_used, all_used_score, rtol=0.0, atol=1e-12):
-        raise RuntimeError(
-            "Current cluster-solver leaf-score pre-baking assumes a linear "
-            "per-hit current-scan clutter correction. Tracker scoring model "
-            "produced inconsistent endpoint scores."
-        )
-
-    return _ClusterCurrentScanScoreDecomposition(
-        per_hit_log_bonus=per_used,
-        constant_log_offset=baseline,
-    )
 
 
 def _projected_combination_count(
@@ -227,23 +110,11 @@ def _build_cluster_solver_problem(
     leaf_options: list[list[TrackHypothesisNode]],
     ctx: ScanContext,
     cluster_universe: set[DetectionKey],
-    unused_score_context: _ClusterUnusedScoreContext | None,
     relaxed_conflict_keys: frozenset[DetectionKey],
     params: TOMHTParams,
-    scoring_model: ScoringModel,
 ) -> _PreparedClusterSolveProblem:
     """Build one solver-facing exact cluster problem from tracker state."""
     relaxed_key_set = set(relaxed_conflict_keys)
-    score_decomposition = _build_cluster_current_scan_score_decomposition(
-        score_context=unused_score_context,
-        scoring_model=scoring_model,
-    )
-    per_hit_log_bonus = (
-        0.0 if score_decomposition is None else score_decomposition.per_hit_log_bonus
-    )
-    constant_log_offset = (
-        0.0 if score_decomposition is None else score_decomposition.constant_log_offset
-    )
     leaf_node_by_leaf_id: dict[int, TrackHypothesisNode] = {}
     track_options: list[ClusterSolverTrackOptions] = []
 
@@ -286,10 +157,7 @@ def _build_cluster_solver_problem(
                 ClusterSolverLeafOption(
                     leaf_id=leaf_id,
                     track_id=int(track_id),
-                    score=float(leaf.accumulated_log_score)
-                    + (
-                        float(per_hit_log_bonus) if uses_current_scan_detection else 0.0
-                    ),
+                    score=float(leaf.accumulated_log_score),
                     full_history_conflict_keys=frozenset(conflict_keys),
                 )
             )
@@ -305,7 +173,6 @@ def _build_cluster_solver_problem(
         problem=ClusterSolverProblem(
             track_options=tuple(track_options),
             max_results=int(params.max_global_hypotheses),
-            constant_score_offset=float(constant_log_offset),
         ),
         leaf_node_by_leaf_id=leaf_node_by_leaf_id,
     )
@@ -487,7 +354,6 @@ def _solve_with_optional_historical_relaxation(
     solve_input: _ClusterSolveInput,
     tree_store: TrackTreeStore,
     params: TOMHTParams,
-    scoring_model: ScoringModel,
     cluster_solver: ClusterSolver,
 ) -> _ClusterSolveOutcome:
     """Solve one cluster, with optional relaxed-key retry around exact solve."""
@@ -496,10 +362,8 @@ def _solve_with_optional_historical_relaxation(
         leaf_options=solve_input.leaf_options,
         ctx=solve_input.ctx,
         cluster_universe=solve_input.cluster_universe,
-        unused_score_context=solve_input.unused_score_context,
         relaxed_conflict_keys=frozenset(),
         params=params,
-        scoring_model=scoring_model,
     )
     kept_globals, solve_diagnostics = _solve_cluster_exact(
         prepared_problem=prepared_problem,
@@ -526,10 +390,8 @@ def _solve_with_optional_historical_relaxation(
                 leaf_options=solve_input.leaf_options,
                 ctx=solve_input.ctx,
                 cluster_universe=solve_input.cluster_universe,
-                unused_score_context=solve_input.unused_score_context,
                 relaxed_conflict_keys=frozenset(relaxed_historical_keys),
                 params=params,
-                scoring_model=scoring_model,
             )
             kept_globals, relaxed_diagnostics = _solve_cluster_exact(
                 prepared_problem=relaxed_problem,
@@ -567,7 +429,6 @@ def _solve_cluster(
     solve_input: _ClusterSolveInput,
     tree_store: TrackTreeStore,
     params: TOMHTParams,
-    scoring_model: ScoringModel,
     cluster_solver: ClusterSolver,
 ) -> _ClusterSolveOutcome:
     """Tracker-side policy wrapper around exact cluster-solver calls."""
@@ -575,7 +436,6 @@ def _solve_cluster(
         solve_input=solve_input,
         tree_store=tree_store,
         params=params,
-        scoring_model=scoring_model,
         cluster_solver=cluster_solver,
     )
 
@@ -586,7 +446,6 @@ def _rebuild_one_cluster(
     ctx: ScanContext,
     tree_store: TrackTreeStore,
     params: TOMHTParams,
-    scoring_model: ScoringModel,
     cluster_solver: ClusterSolver,
 ) -> _ClusterRebuildResult:
     """Solve one exact cluster problem and map solver results to snapshots."""
@@ -607,23 +466,17 @@ def _rebuild_one_cluster(
     cluster_universe: set[DetectionKey] = set()
     for keys in cluster.current_scan_det_keys_by_track_id.values():
         cluster_universe |= keys
-    unused_score_context = _build_cluster_unused_score_context(
-        cluster_universe=cluster_universe,
-        ctx=ctx,
-    )
 
     solve_input = _ClusterSolveInput(
         cluster=cluster,
         ctx=ctx,
         leaf_options=leaf_options,
         cluster_universe=cluster_universe,
-        unused_score_context=unused_score_context,
     )
     solve_outcome = _solve_cluster(
         solve_input=solve_input,
         tree_store=tree_store,
         params=params,
-        scoring_model=scoring_model,
         cluster_solver=cluster_solver,
     )
     map_global = solve_outcome.kept_globals[0] if solve_outcome.kept_globals else None
@@ -687,7 +540,6 @@ def rebuild_cluster_globals(
     ctx: ScanContext,
     tree_store: TrackTreeStore,
     params: TOMHTParams,
-    scoring_model: ScoringModel,
     cluster_solver: ClusterSolver,
 ) -> tuple[list[ClusterRebuildSnapshot], RebuildStats]:
     """Rebuild all clusters with explicit pre-solve overload-split policy."""
@@ -719,7 +571,6 @@ def rebuild_cluster_globals(
             ctx=ctx,
             tree_store=tree_store,
             params=params,
-            scoring_model=scoring_model,
             cluster_solver=cluster_solver,
         )
         for cluster in clusters_for_rebuild

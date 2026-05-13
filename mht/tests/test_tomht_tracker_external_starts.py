@@ -59,10 +59,6 @@ class _ZeroScoringModel:
         del ctx
         return [0.0 for _ in hypotheses]
 
-    def score_unused_detections(self, *, used_det_keys: set[int], ctx) -> float:
-        del used_det_keys, ctx
-        return 0.0
-
     def score_birth(
         self, *, birth_track: Track, used_det_key: int | None, ctx
     ) -> float:

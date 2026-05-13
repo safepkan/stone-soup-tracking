@@ -40,15 +40,12 @@ class ClusterSolverProblem:
     Semantics:
     - choose exactly one leaf option per track,
     - reject combinations with overlapping full-history conflict keys,
-    - score = sum(selected leaf scores) + cluster-constant offset,
+    - score = sum(selected leaf scores),
     - keep up to ``max_results`` best feasible combinations.
     """
 
     track_options: tuple[ClusterSolverTrackOptions, ...]
     max_results: int
-    # Ranking-inert cluster constant retained temporarily to ease comparison with
-    # previous versions. Intended to be dropped once validated.
-    constant_score_offset: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -220,4 +217,4 @@ def score_selected_leaf_ids_if_exact_feasible(
         used_history_keys |= set(leaf.full_history_conflict_keys)
         leaf_score_sum += float(leaf.score)
 
-    return float(leaf_score_sum + float(problem.constant_score_offset))
+    return float(leaf_score_sum)

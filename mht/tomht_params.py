@@ -81,7 +81,6 @@ class TOMHTParams:
     # Internal birth handling (kept intentionally simple in this phase).
     max_births_per_scan: int = 2
     birth_log_penalty: float = 8.0
-    unused_det_log_penalty: float = 0.2
     # Birth load guards: skip births once frontier growth is already high.
     birth_skip_if_active_trees_above: int | None = 40
     birth_skip_if_active_leaves_above: int | None = 200

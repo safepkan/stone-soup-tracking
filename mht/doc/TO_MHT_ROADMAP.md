@@ -95,7 +95,7 @@ This topic includes:
 
 - refining the distance-hypothesiser contract,
 - clarifying which local score contributions should live in the hypothesiser vs scoring layer,
-- possible future simplification of the current unused-detection correction,
+- validating the removed unused-detection scoring behavior against replay quality,
 - and any deeper local-association/scoring redesign beyond the current baseline.
 
 This topic overlaps strongly with local-expansion runtime work and may travel with it, but it is no longer “own the local association path from scratch.” That part is now largely done.
@@ -238,7 +238,7 @@ This should stay high on the list even if not chosen first.
 ### Option 3: Further local-association/scoring refinement branch
 
 Focus:
-- simplify or replace the current unused-detection correction,
+- validate the cleaner no-unused-score baseline against replay quality,
 - refine distance-hypothesiser/scoring boundaries,
 - consider future tracker-owned or custom orchestration hooks,
 - and possibly revisit local score decomposition more deeply.
@@ -268,7 +268,7 @@ To avoid fragmented work, some topics should be grouped deliberately.
 
 - local branching ownership,
 - raw local-score semantics,
-- any future simplification or removal of the current unused-detection correction,
+- validation of the removed unused-detection scoring behavior,
 - and resulting changes to clutter / birth / miss interpretation.
 
 ### Birth/existence work should probably include

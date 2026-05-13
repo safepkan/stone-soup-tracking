@@ -64,8 +64,7 @@ class ORToolsClusterSolver:
     - CP-SAT objective coefficients are integers, so each leaf score is scaled
       as ``round(score * score_scale)``.
     - The solver optimizes the scaled objective exactly.
-    - Returned solution scores are recomputed with the original float scores and
-      include ``problem.constant_score_offset``.
+    - Returned solution scores are recomputed with the original float scores.
 
     Risk-mitigation knob:
     - ``extra_k_best_iterations`` optionally runs additional repeated solves past

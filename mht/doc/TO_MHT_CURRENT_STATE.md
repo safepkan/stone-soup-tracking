@@ -16,6 +16,7 @@ Update (2026-05-11): `TOMHTParams` now lives in `mht/tomht_params.py` so extract
 Update (2026-05-12): persistent tree/node bookkeeping now lives in `mht/tomht_tree_store.py`. Stable ID allocation, node/root creation, single-root tree insertion, active-leaf bookkeeping, active count helpers, empty-tree removal, and unreachable-node cleanup are now owned by `TrackTreeStore`, while `TOMHTTracker` keeps compatibility properties for direct tree/node table inspection.
 Update (2026-05-13): N-scan commitment bookkeeping inside `TOMHTTracker` is now grouped in a single `_nscan_commitment_snapshot` field using the existing `NScanCommitmentSnapshot` model type. Snapshot contents, stats reporting, pruning semantics, and cleanup reachability seeds are unchanged.
 Update (2026-05-13): external-start root scoring is now configurable through `TOMHTParams.external_start_initial_existence_probability` (default `0.95`, log-odds about `+2.944`). The public value is validated as a probability and converted internally to log-odds for the external-start root `log_delta`. An input external-start track may optionally set `metadata["existence_probability"]` to override that initial prior; invalid optional values fall back to the tracker default. TOMHT output metadata now also exposes score-implied `existence_log_odds` and `existence_probability` fields from each output leaf’s accumulated score; these are observability fields, not yet fully calibrated existence probabilities.
+Update (2026-05-13): legacy unused-detection scoring was removed from the default scoring contract and cluster rebuild path. The local hit score already carries the clutter-density contrast via `-log(lambda)`, so cluster solving now ranks combinations directly by accumulated leaf scores without a current-scan unused-detection offset.
 
 ---
 
@@ -92,20 +93,15 @@ Mahalanobis-threshold gating semantics via `mahalanobis_gate_threshold`.
 This split is now explicit:
 
 - **hypothesiser owns local distances and gating**
-- **scoring model owns local NLL-to-LLR conversion plus tracker-level extras**
+- **scoring model owns local NLL-to-LLR conversion plus birth scoring**
 
 `ScoringModel` currently owns:
 
 - `score_track_hypotheses(...)`
-- `score_unused_detections(...)`
 - `score_birth(...)`
 
-`used_det_keys` / `used_det_key` are local detection indices into
-`ScanContext.detections` for the scoring call.
-
-The current solver pre-baking path assumes
-`score_unused_detections(...)` is affine in the number of used detections.
-Broader/non-linear alternatives are deferred to a later scoring redesign.
+`score_birth(...)` receives `used_det_key` as a local detection index into
+`ScanContext.detections` when the birth consumes a detection.
 
 ---
 
@@ -227,10 +223,9 @@ The exact cluster problem contract now explicitly carries:
 
 - one leaf option per track choice,
 - full-history conflict keys for feasibility,
-- pre-scored leaf accumulated scores,
-- and a ranking-inert `constant_score_offset`.
+- and pre-scored leaf accumulated scores.
 
-Tracker-side problem preparation folds the current linear current-scan clutter correction into leaf scores before solve, leaving only a cluster-constant offset outside the optimizer.
+Tracker-side problem preparation passes accumulated leaf scores directly to the exact solver.
 
 Approximation/policy placement is explicit:
 
@@ -427,7 +422,7 @@ Current default behavior:
 
 - local hit score: `log(P_D) - log(lambda) - NLL`
 - local miss score: `log(1 - P_D)`
-- current-scan clutter correction remains a simple linear term, pre-baked into cluster leaf scores before exact solve,
+- no separate unused-detection score term; the clutter-density contrast is already in the local hit score,
 - birth scoring remains a fixed penalty,
 - scoring diagnostics are logged at tracker construction time.
 

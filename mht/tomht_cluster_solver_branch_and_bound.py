@@ -57,7 +57,6 @@ class BranchAndBoundClusterSolver:
 
         ordered_tracks = _prepare_ordered_tracks_for_search(problem)
         suffix_best_score = _suffix_best_score_by_depth(ordered_tracks)
-        constant_offset = float(problem.constant_score_offset)
         track_count = len(ordered_tracks)
         ordered_track_ids = tuple(track.track_id for track in ordered_tracks)
 
@@ -89,7 +88,7 @@ class BranchAndBoundClusterSolver:
                 top_k_push(
                     candidate=ClusterSolverSolution(
                         selected_leaf_id_by_track_id=selected_leaf_id_by_track_id,
-                        score=float(partial_score + constant_offset),
+                        score=float(partial_score),
                     ),
                     insertion_order=complete_feasible_solutions,
                 )
@@ -97,9 +96,7 @@ class BranchAndBoundClusterSolver:
                 return
 
             if retention_floor_score is not None:
-                node_upper_bound = float(
-                    partial_score + suffix_best_score[depth] + constant_offset
-                )
+                node_upper_bound = float(partial_score + suffix_best_score[depth])
                 if node_upper_bound <= retention_floor_score:
                     branches_pruned_bound += 1
                     return
@@ -115,9 +112,7 @@ class BranchAndBoundClusterSolver:
                 candidate_partial_score = partial_score + leaf_score
                 if retention_floor_score is not None:
                     branch_upper_bound = float(
-                        candidate_partial_score
-                        + suffix_best_score[depth + 1]
-                        + constant_offset
+                        candidate_partial_score + suffix_best_score[depth + 1]
                     )
                     if branch_upper_bound <= retention_floor_score:
                         branches_pruned_bound += 1
@@ -161,7 +156,6 @@ class BranchAndBoundClusterSolver:
     ) -> ClusterSolverResult:
         """Solve one-track problems directly via deterministic score sort."""
         track = problem.track_options[0]
-        constant_offset = float(problem.constant_score_offset)
         max_results = int(problem.max_results)
         top_k = TopKSolutionHeap(k=max_results)
         top_k_push = top_k.push
@@ -180,7 +174,7 @@ class BranchAndBoundClusterSolver:
         retention_floor_score: float | None = None
         for leaf in sorted_leaf_options:
             search_nodes_visited += 1
-            candidate_score = float(leaf.score + constant_offset)
+            candidate_score = float(leaf.score)
             if (
                 retention_floor_score is not None
                 and candidate_score <= retention_floor_score

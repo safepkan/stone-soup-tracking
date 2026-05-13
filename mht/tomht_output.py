@@ -49,8 +49,8 @@ def output_track_metadata_from_leaf_node(
     - ``track_id`` is the stable logical-track identifier exposed on output
       tracks.
     - ``existence_probability`` is currently score-implied from accumulated
-      log-odds, not a fully calibrated probability; birth scoring and
-      unused-detection scoring are still under review.
+      log-odds, not a fully calibrated probability; birth scoring is still
+      under review.
     - The remaining keys are diagnostic/inspection fields describing the current
       leaf node and its cached maintenance/provenance state.
 

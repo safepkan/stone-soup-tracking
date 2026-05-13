@@ -10,6 +10,7 @@ Update (2026-05-12): persistent tree/node bookkeeping moved into `mht/tomht_tree
 Update (2026-05-12): cluster rebuild / solve orchestration moved into `mht/tomht_cluster_rebuild.py` behind `rebuild_cluster_globals(...)`. `TOMHTTracker._rebuild_cluster_globals(...)` is now a thin wrapper; overload splitting, cluster-id reassignment, solver problem construction, historical-conflict relaxation, logging/error text, snapshots, and `RebuildStats` semantics are unchanged.
 Update (2026-05-12): pure `TrackHypothesisNode` lineage helpers moved into `mht/tomht_tree_utils.py`; N-scan and lifecycle call sites now use `child_of_root_on_path(...)` and `is_descendant_of(...)` without changing pruning or lifecycle behavior.
 Update (2026-05-13): tracker-internal N-scan commitment bookkeeping now uses one `_nscan_commitment_snapshot` field backed by `NScanCommitmentSnapshot`; this is a readability-only grouping change.
+Update (2026-05-13): legacy unused-detection scoring was removed after the neutralization experiment. `ScoringModel.score_unused_detections(...)`, `TOMHTParams.unused_det_log_penalty`, and the cluster-rebuild affine unused-detection score decomposition are gone; cluster solving now uses accumulated leaf scores directly.
 
 The recent local-association phase is now complete enough that the tracker has:
 

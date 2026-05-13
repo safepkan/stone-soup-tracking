@@ -46,22 +46,6 @@ class ScoringModel(Protocol):
     ) -> list[float]:
         """Return one local log-delta per hypothesis (same order as input)."""
 
-    def score_unused_detections(
-        self,
-        *,
-        used_det_keys: set[LocalDetectionIndex],
-        ctx: ScanContext,
-    ) -> float:
-        """Return a cluster-level log-delta for clutter / unused detections.
-
-        ``used_det_keys`` are local indices into ``ctx.detections`` for the
-        current scan context (which may be a cluster-local subset).
-
-        Current tracker solver-preparation logic assumes this score is affine in
-        ``len(used_det_keys)``. Non-linear implementations are not supported in
-        the current baseline and may raise at runtime.
-        """
-
     def score_birth(
         self,
         *,
@@ -71,8 +55,8 @@ class ScoringModel(Protocol):
     ) -> float:
         """Return a log-delta to add for a birth (usually negative).
 
-        ``used_det_key`` uses the same local-index convention as
-        ``score_unused_detections``.
+        ``used_det_key`` is a local index into ``ctx.detections`` when the birth
+        consumes a detection.
         """
 
 
@@ -95,8 +79,9 @@ class NLLScoringModel:
     Miss-hypothesis ``distance`` from the hypothesiser is intentionally ignored.
 
     Note:
-    - ``score_unused_detections`` remains intentionally simple/linear in this
-      baseline to match current solver pre-baking.
+    - Unused-detection scoring has been removed from the default scoring
+      contract. The clutter-density contrast is already carried by the local
+      hit term through ``-log(lambda)``.
     - Whether this API remains the right abstraction is deferred to a later
       scoring redesign pass.
     """
@@ -104,7 +89,6 @@ class NLLScoringModel:
     prob_detect: float
     clutter_density: float
     log_epsilon: float
-    fallback_unused_det_log_penalty: float
     birth_log_penalty: float
 
     def _clamped_prob_detect(self) -> float:
@@ -122,13 +106,6 @@ class NLLScoringModel:
     def _log_miss(self) -> float:
         prob_detect = self._clamped_prob_detect()
         return log(max(1.0 - prob_detect, self.log_epsilon))
-
-    def _per_unused_log_delta(self) -> float:
-        """Return the per-unused log increment used by clutter scoring."""
-        lam = max(float(self.clutter_density), 0.0)
-        if lam <= 0.0:
-            return -self.fallback_unused_det_log_penalty
-        return log(max(lam, self.log_epsilon))
 
     def score_track_hypotheses(
         self,
@@ -148,14 +125,6 @@ class NLLScoringModel:
                 out.append(log_hit_base - float(hypothesis.distance))
         return out
 
-    def score_unused_detections(
-        self, *, used_det_keys: set[LocalDetectionIndex], ctx: ScanContext
-    ) -> float:
-        unused = len(ctx.detections) - len(used_det_keys)
-        if unused <= 0:
-            return 0.0
-        return float(unused) * self._per_unused_log_delta()
-
     def score_birth(
         self,
         *,
@@ -173,7 +142,6 @@ def make_default_scoring_model(
     prob_detect: float,
     log_epsilon: float,
     clutter_density: float,
-    unused_det_log_penalty: float,
     birth_log_penalty: float,
 ) -> ScoringModel:
     """Build the tracker's default scoring model from tracker-owned params."""
@@ -183,7 +151,6 @@ def make_default_scoring_model(
             prob_detect=float(prob_detect),
             clutter_density=float(clutter_density),
             log_epsilon=log_epsilon,
-            fallback_unused_det_log_penalty=unused_det_log_penalty,
             birth_log_penalty=birth_log_penalty,
         )
     raise ValueError(
@@ -195,16 +162,9 @@ def maybe_log_scoring_diagnostics(scoring_model: ScoringModel) -> None:
     """Emit optional scoring diagnostics for known scoring-model implementations."""
     if isinstance(scoring_model, NLLScoringModel):
         clutter = scoring_model.clutter_density
-        per_unused = scoring_model._per_unused_log_delta()
-        if per_unused > 0.0:
-            print(
-                "[WARN] per_unused_delta is positive; unused detections are rewarded. "
-                "Check clutter_density units/config."
-            )
         print(
             f"[Scoring] nll: prob_detect={scoring_model.prob_detect}, "
             f"clutter_density={clutter}, "
             f"log_hit_base={scoring_model._log_hit_base():+.3f}, "
-            f"log_miss={scoring_model._log_miss():+.3f}, "
-            f"per_unused_delta={per_unused:+.3f}"
+            f"log_miss={scoring_model._log_miss():+.3f}"
         )

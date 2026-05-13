@@ -29,7 +29,6 @@ class ExhaustiveClusterSolver:
         top_k = TopKSolutionHeap(k=int(problem.max_results))
         combinations_evaluated = 0
         feasible_combinations = 0
-        constant_offset = float(problem.constant_score_offset)
 
         for picked in product(*track_option_lists):
             combinations_evaluated += 1
@@ -52,7 +51,7 @@ class ExhaustiveClusterSolver:
             feasible_combinations += 1
             candidate = ClusterSolverSolution(
                 selected_leaf_id_by_track_id=selected_leaf_id_by_track_id,
-                score=float(leaf_score_sum + constant_offset),
+                score=float(leaf_score_sum),
             )
             top_k.push(
                 candidate=candidate,

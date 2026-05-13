@@ -159,16 +159,9 @@ class _ScriptedUpdaterWithUpdateStates(_ScriptedUpdater):
 
 
 class _ManualScoringModel:
-    def __init__(self, *, per_unused_penalty: float = 0.5) -> None:
-        self.per_unused_penalty = float(per_unused_penalty)
-
     def score_track_hypotheses(self, *, hypotheses, ctx) -> list[float]:
         del ctx
         return [-float(hypothesis.distance) for hypothesis in hypotheses]
-
-    def score_unused_detections(self, *, used_det_keys: set[int], ctx) -> float:
-        unused = len(ctx.detections) - len(used_det_keys)
-        return -float(unused) * self.per_unused_penalty
 
     def score_birth(
         self, *, birth_track: Track, used_det_key: int | None, ctx
@@ -253,7 +246,7 @@ def _build_tracker(
         initiator=initiator,
         deleter=deleter,
         params=params,
-        scoring_model=_ManualScoringModel(per_unused_penalty=0.5),
+        scoring_model=_ManualScoringModel(),
     )
 
 

@@ -104,7 +104,6 @@ class TOMHTClusterSolverORToolsTest(unittest.TestCase):
                 ),
             ),
             max_results=5,
-            constant_score_offset=-0.25,
         )
 
         exhaustive_solver = ExhaustiveClusterSolver()

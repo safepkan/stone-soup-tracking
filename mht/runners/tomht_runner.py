@@ -391,7 +391,6 @@ def run_tomht(
             max_missed=5,
             max_births_per_scan=2,
             birth_log_penalty=2.0,
-            unused_det_log_penalty=4.0,
             mahalanobis_gate_threshold=3.035,
         )
     tracker = TOMHTTracker(
