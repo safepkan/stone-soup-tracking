@@ -253,11 +253,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         params_overrides : Mapping[str, Any] | None
             Optional field-level overrides applied onto ``params``.
         scoring_model : ScoringModel | None
-            Optional scoring model for local track hypotheses plus birth
-            scoring. Local hypothesis scoring includes hit/miss terms such as
-            detection probability and clutter density, where clutter density
-            must be specified in the same measurement-space units as the
-            hypothesiser's NLL.
+            Optional scoring model for local track hypotheses. Local hypothesis
+            scoring includes hit/miss terms such as detection probability and
+            clutter density, where clutter density must be specified in the
+            same measurement-space units as the hypothesiser's NLL.
         output_track_id_mapper : Callable[[int], object] | None
             Optional mapping from the tracker-internal integer logical track ID
             to the public Stone Soup ``Track.id`` object for MAP outputs.
@@ -293,7 +292,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 prob_detect=params.prob_detect,
                 log_epsilon=params.log_epsilon,
                 clutter_density=params.clutter_density,
-                birth_log_penalty=params.birth_log_penalty,
             )
         self.scoring_model = scoring_model
         maybe_log_scoring_diagnostics(self.scoring_model)
@@ -774,7 +772,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         result = run_internal_births_after_expansion(
             ctx=ctx,
             initiator=self.initiator,
-            scoring_model=self.scoring_model,
             tree_store=self._tree_store,
             params=self.params,
             assoc_pad_label=TOMHTTracker.ASSOC_PAD,

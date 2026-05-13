@@ -17,6 +17,7 @@ Update (2026-05-12): persistent tree/node bookkeeping now lives in `mht/tomht_tr
 Update (2026-05-13): N-scan commitment bookkeeping inside `TOMHTTracker` is now grouped in a single `_nscan_commitment_snapshot` field using the existing `NScanCommitmentSnapshot` model type. Snapshot contents, stats reporting, pruning semantics, and cleanup reachability seeds are unchanged.
 Update (2026-05-13): external-start root scoring is now configurable through `TOMHTParams.external_start_initial_existence_probability` (default `0.95`, log-odds about `+2.944`). The public value is validated as a probability and converted internally to log-odds for the external-start root `log_delta`. An input external-start track may optionally set `metadata["existence_probability"]` to override that initial prior; invalid optional values fall back to the tracker default. TOMHT output metadata now also exposes score-implied `existence_log_odds` and `existence_probability` fields from each output leaf’s accumulated score; these are observability fields, not yet fully calibrated existence probabilities.
 Update (2026-05-13): legacy unused-detection scoring was removed from the default scoring contract and cluster rebuild path. The local hit score already carries the clutter-density contrast via `-log(lambda)`, so cluster solving now ranks combinations directly by accumulated leaf scores without a current-scan unused-detection offset.
+Update (2026-05-13): internal starts are controlled by constructor initiator presence: `initiator=None` creates no internal starts and leaves residual detections available, while a configured initiator receives residual detections and returns candidate start tracks. This covers both one-shot measurement initializers and more complex/stateful/domain-aware initiators. Initiator-created starts use `TOMHTParams.initiator_start_initial_existence_probability` (default `0.8`, log-odds about `+1.386`) for root `log_delta`, with optional per-track `metadata["existence_probability"]` override and invalid metadata fallback. The legacy `birth_log_penalty` parameter, `TOMHTParams.internal_birth_mode`, and `ScoringModel.score_birth(...)` hook were removed; no tracker-core `birth_density` parameter was added.
 
 ---
 
@@ -93,15 +94,11 @@ Mahalanobis-threshold gating semantics via `mahalanobis_gate_threshold`.
 This split is now explicit:
 
 - **hypothesiser owns local distances and gating**
-- **scoring model owns local NLL-to-LLR conversion plus birth scoring**
+- **scoring model owns local NLL-to-LLR conversion**
 
 `ScoringModel` currently owns:
 
 - `score_track_hypotheses(...)`
-- `score_birth(...)`
-
-`score_birth(...)` receives `used_det_key` as a local detection index into
-`ScanContext.detections` when the birth consumes a detection.
 
 ---
 
@@ -423,7 +420,8 @@ Current default behavior:
 - local hit score: `log(P_D) - log(lambda) - NLL`
 - local miss score: `log(1 - P_D)`
 - no separate unused-detection score term; the clutter-density contrast is already in the local hit score,
-- birth scoring remains a fixed penalty,
+- external-start roots use `logit(external_start_initial_existence_probability)`,
+- initiator-created roots use `logit(initiator_start_initial_existence_probability)`,
 - scoring diagnostics are logged at tracker construction time.
 
 ### Unit / scale contract
@@ -571,6 +569,33 @@ Internal births should currently be understood as:
 - heuristic,
 - secondary relative to the external-start integration path,
 - and not yet the final word on birth/existence semantics.
+
+Constructor initiator presence selects the internal-start lane:
+
+- `initiator=None` creates no internal starts and leaves residual detections available through `get_unused_detections()`,
+- `initiator=<Initiator>` passes residual detections to that initiator.
+
+The tracker does not distinguish a one-shot `SimpleMeasurementInitiator`-style initializer from a more complex M/N or domain-aware initiator. Both are the same internal-start abstraction:
+
+```text
+residual detections -> configured initiator -> candidate start tracks
+```
+
+Returned tracks are scored from `TOMHTParams.initiator_start_initial_existence_probability` via log-odds. A valid `Track.metadata["existence_probability"]` on the initiated track overrides that default; missing or invalid optional metadata falls back to the parameter value.
+
+For a one-detection measurement initiator, one principled way to choose the default prior is:
+
+```text
+logit(P_init) = log(P_D * beta_NT / lambda)
+```
+
+equivalently:
+
+```text
+P_init = sigmoid(log(P_D) + log(beta_NT) - log(lambda))
+```
+
+where `beta_NT` is new-target/birth density in the same measurement-space units as clutter density `lambda`, and `P_D` is detection probability. This remains guidance for choosing `initiator_start_initial_existence_probability`, not a tracker-core `birth_density` parameter.
 
 ### What is solid in the current birth path
 

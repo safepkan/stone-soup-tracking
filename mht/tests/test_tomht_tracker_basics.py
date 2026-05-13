@@ -86,12 +86,6 @@ class _ZeroScoringModel:
         del ctx
         return [0.0 for _ in hypotheses]
 
-    def score_birth(
-        self, *, birth_track: Track, used_det_key: int | None, ctx
-    ) -> float:
-        del birth_track, used_det_key, ctx
-        return 0.0
-
 
 @dataclass(frozen=True, order=True, unsafe_hash=True, slots=True)
 class _SystemTrackId:
@@ -151,6 +145,25 @@ def _external_start(timestamp: datetime.datetime) -> Track:
 
 
 class TOMHTTrackerBasicsTest(unittest.TestCase):
+    def test_legacy_birth_parameters_are_absent(self) -> None:
+        param_fields = TOMHTParams.__dataclass_fields__
+        self.assertNotIn("internal_birth_mode", param_fields)
+        self.assertNotIn("birth_log_penalty", param_fields)
+        self.assertNotIn("birth_density", param_fields)
+
+    def test_initiator_start_initial_existence_probability_rejects_boundaries(
+        self,
+    ) -> None:
+        for probability in (0.0, 1.0):
+            with self.subTest(probability=probability):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "initiator_start_initial_existence_probability",
+                ):
+                    TOMHTParams(
+                        initiator_start_initial_existence_probability=probability,
+                    )
+
     def test_constructor_applies_params_overrides(self) -> None:
         tracker = _build_tracker_with_overrides(
             {

@@ -78,9 +78,18 @@ class TOMHTParams:
     # MAP-only N-scan pruning: boundary is b = k - N.
     ns_scan_window: int = 6
 
-    # Internal birth handling (kept intentionally simple in this phase).
+    # Internal start handling (kept intentionally simple in this phase).
+    # Constructor initiator=None disables internal starts and leaves residual
+    # detections available via get_unused_detections().
+    # Public initiator-start prior. Internally converted to log-odds for
+    # initiator-created roots. For a one-detection measurement initiator, a
+    # principled user-side choice is:
+    # logit(P_init) = log(P_D * beta_NT / lambda)
+    # where beta_NT is new-target density and lambda is clutter density in the
+    # same measurement-space units. The tracker keeps that as parameter-choice
+    # guidance rather than adding beta_NT as a core parameter.
+    initiator_start_initial_existence_probability: float = 0.8
     max_births_per_scan: int = 2
-    birth_log_penalty: float = 8.0
     # Birth load guards: skip births once frontier growth is already high.
     birth_skip_if_active_trees_above: int | None = 40
     birth_skip_if_active_leaves_above: int | None = 200
@@ -105,4 +114,8 @@ class TOMHTParams:
         _existence_probability_to_log_odds(
             self.external_start_initial_existence_probability,
             parameter_name="external_start_initial_existence_probability",
+        )
+        _existence_probability_to_log_odds(
+            self.initiator_start_initial_existence_probability,
+            parameter_name="initiator_start_initial_existence_probability",
         )

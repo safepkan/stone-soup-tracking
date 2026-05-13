@@ -16,7 +16,7 @@ from stonesoup.types.update import Update
 
 from .tomht_model import DetectionKey, TrackHypothesisNode
 from .tomht_params import TOMHTParams
-from .tomht_scoring import ScoringModel
+from .tomht_scoring import _existence_probability_to_log_odds
 from .tomht_stats import BirthStats
 from .tomht_tree_store import TrackTreeStore
 from .tomht_types import ScanContext
@@ -221,12 +221,33 @@ def format_birth_state_xyvxvy(state_vector) -> str:
     return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
 
 
+def initiator_start_initial_log_delta(
+    birth_track: Track,
+    *,
+    params: TOMHTParams,
+) -> float:
+    """Return the initial log-odds score for one black-box initiator start."""
+    default_log_delta = _existence_probability_to_log_odds(
+        params.initiator_start_initial_existence_probability,
+        parameter_name="initiator_start_initial_existence_probability",
+    )
+    metadata_existence_probability = birth_track.metadata.get("existence_probability")
+    if metadata_existence_probability is None:
+        return default_log_delta
+    try:
+        return _existence_probability_to_log_odds(
+            metadata_existence_probability,
+            parameter_name="initiator start metadata['existence_probability']",
+        )
+    except ValueError:
+        return default_log_delta
+
+
 def run_internal_births_from_residuals(
     *,
     residual_detections: list[Detection],
     ctx: ScanContext,
     initiator: Initiator | None,
-    scoring_model: ScoringModel,
     tree_store: TrackTreeStore,
     params: TOMHTParams,
     assoc_pad_label: int,
@@ -301,10 +322,9 @@ def run_internal_births_from_residuals(
         )
         age = max(len(birth_track), 1)
         hits = 1 if used_key is not None else 0
-        root_log_delta = scoring_model.score_birth(
-            birth_track=birth_track,
-            used_det_key=(None if used_key is None else int(used_key[1])),
-            ctx=ctx,
+        root_log_delta = initiator_start_initial_log_delta(
+            birth_track,
+            params=params,
         )
         tree_store.create_root_tree_for_new_track(
             scan_index=ctx.scan_index,
@@ -333,7 +353,6 @@ def run_internal_births_after_expansion(
     *,
     ctx: ScanContext,
     initiator: Initiator | None,
-    scoring_model: ScoringModel,
     tree_store: TrackTreeStore,
     params: TOMHTParams,
     assoc_pad_label: int,
@@ -348,7 +367,6 @@ def run_internal_births_after_expansion(
         residual_detections=residual_detections,
         ctx=ctx,
         initiator=initiator,
-        scoring_model=scoring_model,
         tree_store=tree_store,
         params=params,
         assoc_pad_label=assoc_pad_label,

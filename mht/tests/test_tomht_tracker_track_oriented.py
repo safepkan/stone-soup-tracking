@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime
-from math import exp
+from math import exp, log, log1p
 import unittest
 from typing import Iterable, cast
 
@@ -163,12 +163,6 @@ class _ManualScoringModel:
         del ctx
         return [-float(hypothesis.distance) for hypothesis in hypotheses]
 
-    def score_birth(
-        self, *, birth_track: Track, used_det_key: int | None, ctx
-    ) -> float:
-        del birth_track, used_det_key, ctx
-        return -1.0
-
 
 class _CaptureInitiator:
     def __init__(self, born: list[Track]) -> None:
@@ -223,6 +217,10 @@ def _track_start(x: float, timestamp: datetime.datetime) -> Track:
 
 def _sigmoid(log_odds: float) -> float:
     return 1.0 / (1.0 + exp(-log_odds))
+
+
+def _logit(probability: float) -> float:
+    return log(probability) - log1p(-probability)
 
 
 def _build_tracker(
@@ -679,6 +677,103 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertEqual([det1], capture_initiator.last_received)
         self.assertIn(1, tracker.track_trees_by_track_id)
         self.assertEqual([], tracker.get_unused_detections())
+
+    def test_no_initiator_leaves_residuals_available(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        detection = _detection(1.0, 1.0, timestamp)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+        )
+
+        tracker.update_tracker(timestamp, [detection])
+
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertEqual([detection], tracker.get_unused_detections())
+
+    def test_initiator_birth_score_uses_initiator_start_prior(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        capture_initiator = _CaptureInitiator([_track_start(99.0, timestamp)])
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            initiator=cast(SimpleMeasurementInitiator, capture_initiator),
+            params=TOMHTParams(
+                initiator_start_initial_existence_probability=0.7,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [_detection(1.0, 1.0, timestamp)])
+
+        tree = next(iter(tracker.track_trees_by_track_id.values()))
+        root = tracker._nodes_by_id[tree.root_node_id]
+        expected_log_delta = _logit(0.7)
+        self.assertEqual("internal_birth", root.root_source)
+        self.assertAlmostEqual(expected_log_delta, root.log_delta)
+        self.assertAlmostEqual(expected_log_delta, root.accumulated_log_score)
+
+    def test_initiator_birth_metadata_existence_probability_overrides_default(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        birth = _track_start(99.0, timestamp)
+        birth.metadata["existence_probability"] = 0.6
+        capture_initiator = _CaptureInitiator([birth])
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            initiator=cast(SimpleMeasurementInitiator, capture_initiator),
+            params=TOMHTParams(
+                initiator_start_initial_existence_probability=0.8,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [_detection(1.0, 1.0, timestamp)])
+
+        tree = next(iter(tracker.track_trees_by_track_id.values()))
+        root = tracker._nodes_by_id[tree.root_node_id]
+        expected_log_delta = _logit(0.6)
+        self.assertAlmostEqual(expected_log_delta, root.log_delta)
+        self.assertAlmostEqual(expected_log_delta, root.accumulated_log_score)
+
+    def test_initiator_birth_invalid_metadata_existence_probability_falls_back(
+        self,
+    ) -> None:
+        invalid_values = ["not-a-number", float("nan"), float("inf"), -0.1, 1.1]
+        for value in invalid_values:
+            with self.subTest(value=value):
+                timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+                birth = _track_start(99.0, timestamp)
+                birth.metadata["existence_probability"] = value
+                capture_initiator = _CaptureInitiator([birth])
+                tracker = _build_tracker(
+                    hypothesiser=_ScriptedHypothesiser(),
+                    updater=_ScriptedUpdater(),
+                    initiator=cast(SimpleMeasurementInitiator, capture_initiator),
+                    params=TOMHTParams(
+                        initiator_start_initial_existence_probability=0.8,
+                        debug_display_scan_stats=False,
+                        debug_display_hypotheses=False,
+                        debug_display_births=False,
+                        collect_stats=False,
+                    ),
+                )
+
+                tracker.update_tracker(timestamp, [_detection(1.0, 1.0, timestamp)])
+
+                tree = next(iter(tracker.track_trees_by_track_id.values()))
+                root = tracker._nodes_by_id[tree.root_node_id]
+                expected_log_delta = _logit(0.8)
+                self.assertAlmostEqual(expected_log_delta, root.log_delta)
+                self.assertAlmostEqual(expected_log_delta, root.accumulated_log_score)
 
 
 if __name__ == "__main__":

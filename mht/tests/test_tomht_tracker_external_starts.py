@@ -59,12 +59,6 @@ class _ZeroScoringModel:
         del ctx
         return [0.0 for _ in hypotheses]
 
-    def score_birth(
-        self, *, birth_track: Track, used_det_key: int | None, ctx
-    ) -> float:
-        del birth_track, used_det_key, ctx
-        return 0.0
-
 
 def _quiet_params(**overrides: Any) -> TOMHTParams:
     return TOMHTParams(

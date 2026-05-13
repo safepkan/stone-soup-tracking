@@ -55,7 +55,6 @@ class NLLScoringModelTest(unittest.TestCase):
             prob_detect=0.8,
             clutter_density=0.25,
             log_epsilon=1e-12,
-            birth_log_penalty=8.0,
         )
 
         scores = model.score_track_hypotheses(
@@ -84,7 +83,6 @@ class NLLScoringModelTest(unittest.TestCase):
             prob_detect=0.9,
             log_epsilon=1e-12,
             clutter_density=0.0,
-            birth_log_penalty=8.0,
         )
 
         self.assertIsInstance(scoring_model, NLLScoringModel)
@@ -94,7 +92,6 @@ class NLLScoringModelTest(unittest.TestCase):
             prob_detect=0.9,
             clutter_density=2.0,
             log_epsilon=1e-12,
-            birth_log_penalty=8.0,
         )
         out = StringIO()
 

@@ -371,7 +371,6 @@ def run_tomht(
             max_children_per_track=5,
             max_missed=5,
             mahalanobis_gate_threshold=4.292,
-            birth_log_penalty=15.0,
         )
     else:
         initiator = (
@@ -390,7 +389,6 @@ def run_tomht(
             max_children_per_track=3,
             max_missed=5,
             max_births_per_scan=2,
-            birth_log_penalty=2.0,
             mahalanobis_gate_threshold=3.035,
         )
     tracker = TOMHTTracker(

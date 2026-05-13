@@ -8,11 +8,8 @@ from typing import Protocol, Sequence
 
 from stonesoup.types.detection import MissedDetection
 from stonesoup.types.hypothesis import SingleDistanceHypothesis
-from stonesoup.types.track import Track
 
 from .tomht_types import ScanContext
-
-LocalDetectionIndex = int
 
 
 def _existence_probability_to_log_odds(
@@ -46,19 +43,6 @@ class ScoringModel(Protocol):
     ) -> list[float]:
         """Return one local log-delta per hypothesis (same order as input)."""
 
-    def score_birth(
-        self,
-        *,
-        birth_track: Track,
-        used_det_key: LocalDetectionIndex | None,
-        ctx: ScanContext,
-    ) -> float:
-        """Return a log-delta to add for a birth (usually negative).
-
-        ``used_det_key`` is a local index into ``ctx.detections`` when the birth
-        consumes a detection.
-        """
-
 
 @dataclass(frozen=True)
 class NLLScoringModel:
@@ -89,7 +73,6 @@ class NLLScoringModel:
     prob_detect: float
     clutter_density: float
     log_epsilon: float
-    birth_log_penalty: float
 
     def _clamped_prob_detect(self) -> float:
         return min(1.0, max(0.0, float(self.prob_detect)))
@@ -125,16 +108,6 @@ class NLLScoringModel:
                 out.append(log_hit_base - float(hypothesis.distance))
         return out
 
-    def score_birth(
-        self,
-        *,
-        birth_track: Track,
-        used_det_key: LocalDetectionIndex | None,
-        ctx: ScanContext,
-    ) -> float:
-        del birth_track, used_det_key, ctx
-        return -self.birth_log_penalty
-
 
 def make_default_scoring_model(
     *,
@@ -142,7 +115,6 @@ def make_default_scoring_model(
     prob_detect: float,
     log_epsilon: float,
     clutter_density: float,
-    birth_log_penalty: float,
 ) -> ScoringModel:
     """Build the tracker's default scoring model from tracker-owned params."""
     mode = str(scoring_mode).strip().lower()
@@ -151,7 +123,6 @@ def make_default_scoring_model(
             prob_detect=float(prob_detect),
             clutter_density=float(clutter_density),
             log_epsilon=log_epsilon,
-            birth_log_penalty=birth_log_penalty,
         )
     raise ValueError(
         f"Unsupported scoring_mode='{scoring_mode}'. " "Supported values: 'nll'."
