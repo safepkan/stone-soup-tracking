@@ -71,8 +71,9 @@ def output_track_metadata_from_leaf_node(
     - This is an explicit projection from the internal node state.
     - Arbitrary metadata from input birth tracks or external-start tracks is
       intentionally not propagated.
-    - ``track_id`` and ``internal_track_id`` are the stable internal TOMHT
-      logical-track identifier.
+    - ``internal_track_id`` is the stable internal TOMHT logical-track
+      identifier.
+    - ``track_id`` is a deprecated compatibility alias for ``internal_track_id``.
     - ``public_track_id`` mirrors ``Track.id`` for published tracks and is
       ``None`` for unpublished inspection tracks.
     - ``existence_probability`` is currently score-implied from accumulated

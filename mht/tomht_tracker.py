@@ -1525,19 +1525,3 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             nscan_snapshot=nscan_snapshot,
             debug_display_map_miss_hist=self.params.debug_display_map_miss_hist,
         )
-
-
-# ============================================================================
-# Public TOMHT Utility
-# ============================================================================
-
-
-def get_tomht_track_id(track: Track) -> int:
-    """Return the internal TOMHT logical track ID from a TOMHT output track."""
-    try:
-        return int(track.metadata["track_id"])
-    except KeyError as exc:
-        raise KeyError(
-            "Track metadata does not contain TOMHT 'track_id'. "
-            "Use this helper only with TOMHTTracker-produced tracks."
-        ) from exc

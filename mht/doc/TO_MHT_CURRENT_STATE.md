@@ -23,6 +23,7 @@ Update (2026-05-14): `TrackTree` now carries sticky `lifecycle_state` (`tentativ
 Update (2026-05-14): output publication is now separate from internal confirmation. `TrackTree.publication_state` starts as `unpublished` and promotes stickily to `published` for MAP-selected live trees that pass `TOMHTParams.publish_lifecycle_states`, `publish_min_hits`, `publish_min_age`, and `publish_min_existence_probability`. The default publishes confirmed MAP tracks only, so tentative trees remain internal by default. Standard `update_tracker(...)`, `tracks`, and `get_map_output_tracks()` return published MAP tracks; `get_map_output_tracks(include_unpublished=True)` reconstructs all live MAP tracks for inspection. Output metadata now includes `publication_state` when tree context is available, and scan logs report MAP-published vs MAP-unpublished counts.
 Update (2026-05-14): sticky output-publication helpers now live in `mht/tomht_output.py` alongside output reconstruction and metadata projection. `TOMHTTracker` delegates publication policy evaluation, public-ID assignment/repair, and MAP output-track reconstruction through explicit `TrackTreeStore`/mapper dependencies. This was a behavior-preserving extraction.
 Update (2026-05-14): public output IDs are now assigned at the sticky publication transition. `TrackTree.track_id` remains the internal logical ID allocated at tree creation, while `TrackTree.public_track_id` starts as `None` and is assigned once when the tree first becomes published. The default `output_track_id_mapper` now assigns dense integer public IDs in first-publication order; custom mappers are still honored at publication time. Published output `Track.id` uses `public_track_id`; metadata keeps `track_id`/`internal_track_id` for internal debugging and `public_track_id` for the output identity. Unpublished inspection tracks do not consume public IDs.
+Update (2026-05-14): `get_tomht_track_id(track)` was removed from `mht/tomht_tracker.py`. New code should use `Track.id`/`metadata["public_track_id"]` for public output identity and `metadata["internal_track_id"]` for TOMHT's internal logical ID; the legacy `metadata["track_id"]` field is now a deprecated compatibility alias.
 Update (2026-05-14): whole-track score deletion now runs after sticky confirmation and MAP-only N-scan pruning. `TOMHTParams.track_deletion_existence_probability` defaults to `0.01` (log-odds about `-4.595`) and deletes a whole `TrackTree` when `max(active_leaf.accumulated_log_score)` is at or below the threshold. This is the primary principled mechanism for killing low-score spurious starts. Node-native miss deletion and optional Stone Soup deleters remain additional backstops/domain hooks, and `TRACK_LIFECYCLE` diagnostics report deletion reasons (`score`, `miss`, `deleter`).
 Update (2026-05-14): `NLLScoringModel` now uses a narrow `DetectionProbabilityModel` for dynamic per-hypothesis `P_D` and clutter density. The default tracker path wraps `TOMHTParams.prob_detect` and `TOMHTParams.clutter_density` in `ConstantDetectionProbabilityModel`, preserving scalar scoring behavior. `update_tracker(..., caller_scan_context=...)` threads opaque caller scan data to the DPM without exposing TOMHT's internal `ScanContext`; one update call is still expected to contain detections from one sensor / one measurement space. The DPM receives published public track IDs only, and unpublished trees pass `track_id=None`.
 Update (2026-05-14): whole-track lifecycle implementation now lives in `mht/tomht_lifecycle.py`. `TOMHTTracker` keeps thin gateway methods, while sticky confirmation, score deletion, miss/deleter evaluation, deterministic `TRACK_LIFECYCLE` diagnostics, and current-MAP live-tree filtering are delegated through explicit `TrackTreeStore`/parameter dependencies. This was a behavior-preserving extraction.
@@ -480,9 +481,9 @@ Public output tracks are now reconstructed from:
 
 Published output `Track.id` is the tree’s sticky `public_track_id`, assigned
 once at first publication. Internal tree IDs remain available as
-`metadata["track_id"]` and `metadata["internal_track_id"]`; these are TOMHT
-logical IDs and may have gaps in the public output sequence when tentative
-trees never publish.
+`metadata["internal_track_id"]`; these are TOMHT logical IDs and may have gaps
+in the public output sequence when tentative trees never publish. The legacy
+`metadata["track_id"]` field remains only as a deprecated compatibility alias.
 
 This restores full logical output history across N-scan pruning while preserving the intended meaning of the explicit unresolved tree structure.
 
@@ -490,7 +491,7 @@ This restores full logical output history across N-scan pruning while preserving
 
 Returned `Track` metadata remains an explicit projection from the current leaf node, including:
 
-- stable internal logical `track_id`
+- deprecated compatibility alias `track_id`
 - `internal_track_id` (same value as `track_id`, explicit for consumers)
 - `public_track_id` (`Track.id` for published tracks, `None` for unpublished inspection tracks)
 - `node_id`
