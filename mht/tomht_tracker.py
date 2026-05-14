@@ -32,7 +32,6 @@ import datetime
 import os
 import sys
 import time as wall_clock
-from itertools import product
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
@@ -55,19 +54,19 @@ from .tomht_clustering import (
 )
 from .tomht_cluster_rebuild import (
     cluster_leaf_options,
+    has_any_feasible_cluster_combination,
     infeasible_cluster_debug_summary,
+    merge_cluster_map_globals,
     rebuild_cluster_globals,
 )
 from .tomht_cluster_solver import ClusterSolver
-from .tomht_cluster_solver_branch_and_bound import BranchAndBoundClusterSolver
-from .tomht_cluster_solver_exhaustive import ExhaustiveClusterSolver
+from .tomht_cluster_solver_factory import make_cluster_solver
 from .tomht_expansion import (
     ExpansionCallStats as _ExpansionCallStats,
     expand_all_track_trees,
 )
 from .tomht_model import (
     ClusterRebuildSnapshot,
-    DetectionKey,
     GlobalHypothesis,
     MAPHypothesisSnapshot,
     NScanCommitmentSnapshot,
@@ -330,7 +329,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         maybe_log_scoring_diagnostics(self.scoring_model)
         # Exact cluster-solver backend behind a narrow solver-facing contract.
-        self._cluster_solver: ClusterSolver = self._make_cluster_solver(
+        self._cluster_solver: ClusterSolver = make_cluster_solver(
             self.params.cluster_solver_backend
         )
         self._maybe_print_config()
@@ -379,23 +378,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     @track_trees_by_track_id.setter
     def track_trees_by_track_id(self, value: dict[int, TrackTree]) -> None:
         self._tree_store.track_trees_by_track_id = value
-
-    @staticmethod
-    def _make_cluster_solver(cluster_solver_backend: str) -> ClusterSolver:
-        """Construct one exact cluster-solver backend by configured name."""
-        backend = str(cluster_solver_backend).strip().lower()
-        if backend == "exhaustive":
-            return ExhaustiveClusterSolver()
-        if backend in {"branch_and_bound", "branch-and-bound", "bnb"}:
-            return BranchAndBoundClusterSolver()
-        if backend in {"ortools", "ortools_cp_sat", "cp_sat"}:
-            from .tomht_cluster_solver_ortools import ORToolsClusterSolver
-
-            return ORToolsClusterSolver()
-        raise ValueError(
-            "Unknown cluster solver backend. "
-            f"cluster_solver_backend={cluster_solver_backend!r}"
-        )
 
     def _maybe_print_config(self) -> None:
         """Print a one-time resolved tracker config snapshot when enabled."""
@@ -574,7 +556,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         post_solve_prune_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
         phase_start_ns = wall_clock.perf_counter_ns()
 
-        map_global = self._merge_cluster_map_globals(cluster_snapshots)
+        map_global = merge_cluster_map_globals(cluster_snapshots)
         map_merge_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
         phase_start_ns = wall_clock.perf_counter_ns()
 
@@ -858,67 +840,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             cluster_solver=self._cluster_solver,
         )
 
-    # --- Solver guardrails / debug-only feasibility checks ---
-
-    @staticmethod
-    def _pruning_feasibility_validation_enabled() -> bool:
-        """Return whether debug-only pruning feasibility validation is enabled."""
-        raw = os.getenv("TOMHT_DEBUG_VALIDATE_PRUNING_FEASIBILITY")
-        if raw is None:
-            return False
-        return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-    @staticmethod
-    def _has_any_feasible_cluster_combination(
-        leaf_options: list[list[TrackHypothesisNode]],
-    ) -> bool:
-        """Return whether at least one cluster leaf-product combination is feasible."""
-        prepared = [
-            [(leaf, set(leaf.detection_history_keys)) for leaf in leaves]
-            for leaves in leaf_options
-        ]
-        for picked in product(*prepared):
-            used_keys: set[DetectionKey] = set()
-            feasible = True
-            for _, leaf_keys in picked:
-                if used_keys & leaf_keys:
-                    feasible = False
-                    break
-                used_keys |= leaf_keys
-            if feasible:
-                return True
-        return False
-
-    def _maybe_validate_pruning_feasibility(
-        self,
-        *,
-        stage: str,
-        ctx: ScanContext,
-    ) -> None:
-        """Debug-only guard: fail fast if any cluster is infeasible after pruning."""
-        if not self._pruning_feasibility_validation_enabled():
-            return
-        if not self._tree_store.track_trees_by_track_id:
-            return
-
-        clusters = self._build_track_clusters(ctx)
-        for cluster in clusters:
-            leaf_options = cluster_leaf_options(
-                track_ids=cluster.track_ids,
-                tree_store=self._tree_store,
-            )
-            if self._has_any_feasible_cluster_combination(leaf_options):
-                continue
-            dbg = infeasible_cluster_debug_summary(
-                cluster=cluster,
-                leaf_options=leaf_options,
-                ctx=ctx,
-            )
-            raise RuntimeError(
-                "Pruning feasibility check failed. " f"stage={stage}; {dbg}"
-            )
-
-    # --- Post-solve pruning + full-scan MAP merge ---
+    # =========================================================================
+    # Post-Solve Supported-Leaf Pruning
+    # =========================================================================
 
     def _apply_post_solve_supported_leaf_pruning(
         self,
@@ -928,27 +852,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         apply_post_solve_supported_leaf_pruning(
             cluster_snapshots=cluster_snapshots,
             tree_store=self._tree_store,
-        )
-
-    @staticmethod
-    def _merge_cluster_map_globals(
-        cluster_snapshots: list[ClusterRebuildSnapshot],
-    ) -> GlobalHypothesis:
-        """Merge cluster MAP globals into one full-scan MAP selection."""
-        if not cluster_snapshots:
-            return GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=0.0)
-
-        merged_nodes: dict[int, TrackHypothesisNode] = {}
-        merged_log = 0.0
-        for snapshot in cluster_snapshots:
-            if snapshot.map_global is None:
-                continue
-            merged_nodes.update(snapshot.map_global.leaf_nodes_by_track_id)
-            merged_log += float(snapshot.map_global.log_weight)
-
-        return GlobalHypothesis(
-            leaf_nodes_by_track_id=merged_nodes,
-            log_weight=float(merged_log),
         )
 
     # =========================================================================
@@ -1040,6 +943,47 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             output_track_id_for_deleter=internal_track_id_for_deleter_candidate,
             timestamp=timestamp,
         )
+
+    # =========================================================================
+    # Debug Validation Helpers
+    # =========================================================================
+
+    @staticmethod
+    def _pruning_feasibility_validation_enabled() -> bool:
+        """Return whether debug-only pruning feasibility validation is enabled."""
+        raw = os.getenv("TOMHT_DEBUG_VALIDATE_PRUNING_FEASIBILITY")
+        if raw is None:
+            return False
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+    def _maybe_validate_pruning_feasibility(
+        self,
+        *,
+        stage: str,
+        ctx: ScanContext,
+    ) -> None:
+        """Debug-only guard: fail fast if any cluster is infeasible after pruning."""
+        if not self._pruning_feasibility_validation_enabled():
+            return
+        if not self._tree_store.track_trees_by_track_id:
+            return
+
+        clusters = self._build_track_clusters(ctx)
+        for cluster in clusters:
+            leaf_options = cluster_leaf_options(
+                track_ids=cluster.track_ids,
+                tree_store=self._tree_store,
+            )
+            if has_any_feasible_cluster_combination(leaf_options):
+                continue
+            dbg = infeasible_cluster_debug_summary(
+                cluster=cluster,
+                leaf_options=leaf_options,
+                ctx=ctx,
+            )
+            raise RuntimeError(
+                "Pruning feasibility check failed. " f"stage={stage}; {dbg}"
+            )
 
     # =========================================================================
     # External-Start Helpers

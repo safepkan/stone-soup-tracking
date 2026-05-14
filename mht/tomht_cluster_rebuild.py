@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from itertools import product
 from typing import Mapping
 
 from .tomht_clustering import (
@@ -102,6 +103,48 @@ def cluster_leaf_options(
             )
         out.append(leaves)
     return out
+
+
+def has_any_feasible_cluster_combination(
+    leaf_options: list[list[TrackHypothesisNode]],
+) -> bool:
+    """Return whether at least one cluster leaf-product combination is feasible."""
+    prepared = [
+        [(leaf, set(leaf.detection_history_keys)) for leaf in leaves]
+        for leaves in leaf_options
+    ]
+    for picked in product(*prepared):
+        used_keys: set[DetectionKey] = set()
+        feasible = True
+        for _, leaf_keys in picked:
+            if used_keys & leaf_keys:
+                feasible = False
+                break
+            used_keys |= leaf_keys
+        if feasible:
+            return True
+    return False
+
+
+def merge_cluster_map_globals(
+    cluster_snapshots: list[ClusterRebuildSnapshot],
+) -> GlobalHypothesis:
+    """Merge cluster MAP globals into one full-scan MAP selection."""
+    if not cluster_snapshots:
+        return GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=0.0)
+
+    merged_nodes: dict[int, TrackHypothesisNode] = {}
+    merged_log = 0.0
+    for snapshot in cluster_snapshots:
+        if snapshot.map_global is None:
+            continue
+        merged_nodes.update(snapshot.map_global.leaf_nodes_by_track_id)
+        merged_log += float(snapshot.map_global.log_weight)
+
+    return GlobalHypothesis(
+        leaf_nodes_by_track_id=merged_nodes,
+        log_weight=float(merged_log),
+    )
 
 
 def _build_cluster_solver_problem(
