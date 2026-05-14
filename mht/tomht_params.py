@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, fields, replace
 from math import isfinite
+from typing import Any
 
 from .tomht_scoring import _existence_probability_to_log_odds
 
@@ -182,3 +184,32 @@ class TOMHTParams:
             raise ValueError(
                 "publish_min_existence_probability must satisfy 0.0 <= p < 1.0."
             )
+
+
+def apply_params_overrides(
+    params: TOMHTParams,
+    params_overrides: Mapping[str, Any] | None,
+) -> TOMHTParams:
+    """Apply JSON-style parameter overrides onto a frozen ``TOMHTParams``."""
+    if params_overrides is None:
+        return params
+    if not isinstance(params_overrides, Mapping):
+        raise TypeError(
+            "params_overrides must be a mapping of TOMHTParams field names to values."
+        )
+    overrides = dict(params_overrides)
+    if not overrides:
+        return params
+    non_string_keys = [key for key in overrides if not isinstance(key, str)]
+    if non_string_keys:
+        non_string_keys_str = ", ".join(repr(key) for key in non_string_keys)
+        raise TypeError(
+            "params_overrides keys must be strings matching TOMHTParams fields; "
+            f"got: {non_string_keys_str}."
+        )
+    valid_keys = {field.name for field in fields(TOMHTParams)}
+    invalid_keys = sorted(set(overrides).difference(valid_keys))
+    if invalid_keys:
+        invalid_keys_str = ", ".join(invalid_keys)
+        raise ValueError(f"Unknown TOMHTParams override key(s): {invalid_keys_str}.")
+    return replace(params, **overrides)

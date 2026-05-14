@@ -83,12 +83,12 @@ from .tomht_lifecycle import (
     internal_track_id_for_deleter_candidate,
 )
 from .tomht_output import (
-    DensePublishedTrackIdMapper,
     apply_output_publication,
     ensure_public_track_id,
     reconstruct_map_output_tracks,
+    resolve_output_track_id_mapper,
 )
-from .tomht_params import TOMHTParams
+from .tomht_params import TOMHTParams, apply_params_overrides
 from .tomht_pruning import (
     apply_map_n_scan_pruning,
     apply_post_solve_supported_leaf_pruning,
@@ -166,6 +166,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ASSOC_PAD = -1
     ASSOC_MISS = -2
 
+    # =========================================================================
+    # Stone Soup Constructor Properties
+    # =========================================================================
+
     # Stone Soup 1.8 under Python 3.14 can miss PEP-563 style class annotations
     # when resolving Property types, so keep explicit cls there.
     if sys.version_info >= (3, 14):
@@ -202,15 +206,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             ),
         )
 
-    _updater: Updater
     _hypothesiser: Hypothesiser
-    _deleter: Deleter | None
-    _output_track_id_mapper: Callable[[int], object]
-    _external_start_initial_log_delta: float
-    _track_confirmation_log_odds_threshold: float
-    _track_deletion_log_odds_threshold: float
-    _publish_lifecycle_states: frozenset[str]
-    _publish_min_existence_log_odds_threshold: float | None
 
     # =========================================================================
     # Public API
@@ -271,56 +267,60 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             ``TOMHTParams.clutter_density`` are wrapped in
             ``ConstantDetectionProbabilityModel`` to preserve default scoring.
         """
-        params = self._apply_params_overrides(params, params_overrides)
-        external_start_initial_log_delta = _existence_probability_to_log_odds(
-            params.external_start_initial_existence_probability,
-            parameter_name="external_start_initial_existence_probability",
-        )
-        track_confirmation_log_odds_threshold = _existence_probability_to_log_odds(
-            params.track_confirmation_existence_probability,
-            parameter_name="track_confirmation_existence_probability",
-        )
-        track_deletion_log_odds_threshold = _existence_probability_to_log_odds(
-            params.track_deletion_existence_probability,
-            parameter_name="track_deletion_existence_probability",
-        )
-        publish_min_existence_log_odds_threshold: float | None
-        if float(params.publish_min_existence_probability) <= 0.0:
-            publish_min_existence_log_odds_threshold = None
-        else:
-            publish_min_existence_log_odds_threshold = (
-                _existence_probability_to_log_odds(
-                    params.publish_min_existence_probability,
-                    parameter_name="publish_min_existence_probability",
-                )
-            )
         super().__init__(
             predictor=predictor,
             updater=updater,
             hypothesiser=hypothesiser,
         )
-        self._updater = self.updater
-        self._hypothesiser = self._resolve_hypothesiser(params=params)
-        self._output_track_id_mapper = self._resolve_output_track_id_mapper(
-            output_track_id_mapper
-        )
         if deleter is not None and not hasattr(deleter, "check_for_deletion"):
             raise TypeError(
                 "deleter must provide check_for_deletion(track, **kwargs) when provided."
             )
+
         self.detector = detector
-        self.params = params
-        self._external_start_initial_log_delta = external_start_initial_log_delta
-        self._track_confirmation_log_odds_threshold = (
-            track_confirmation_log_odds_threshold
-        )
-        self._track_deletion_log_odds_threshold = track_deletion_log_odds_threshold
-        self._publish_lifecycle_states = frozenset(params.publish_lifecycle_states)
-        self._publish_min_existence_log_odds_threshold = (
-            publish_min_existence_log_odds_threshold
-        )
         self.initiator = initiator
-        self._deleter = deleter
+        self.deleter = deleter
+
+        self._output_track_id_mapper = resolve_output_track_id_mapper(
+            output_track_id_mapper
+        )
+
+        params = apply_params_overrides(params, params_overrides)
+        self.params = params
+        self._hypothesiser = self._resolve_hypothesiser(params=params)
+
+        self._external_start_initial_log_delta: float = (
+            _existence_probability_to_log_odds(
+                params.external_start_initial_existence_probability,
+                parameter_name="external_start_initial_existence_probability",
+            )
+        )
+        self._track_confirmation_log_odds_threshold: float = (
+            _existence_probability_to_log_odds(
+                params.track_confirmation_existence_probability,
+                parameter_name="track_confirmation_existence_probability",
+            )
+        )
+        self._track_deletion_log_odds_threshold: float = (
+            _existence_probability_to_log_odds(
+                params.track_deletion_existence_probability,
+                parameter_name="track_deletion_existence_probability",
+            )
+        )
+        self._publish_lifecycle_states: frozenset[str] = frozenset(
+            params.publish_lifecycle_states
+        )
+        self._publish_min_existence_log_odds_threshold: float | None
+        if float(params.publish_min_existence_probability) <= 0.0:
+            self._publish_min_existence_log_odds_threshold = None
+        else:
+            self._publish_min_existence_log_odds_threshold = (
+                _existence_probability_to_log_odds(
+                    params.publish_min_existence_probability,
+                    parameter_name="publish_min_existence_probability",
+                )
+            )
+
         resolved_dpm = detection_probability_model
         if resolved_dpm is None:
             resolved_dpm = ConstantDetectionProbabilityModel(
@@ -332,7 +332,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             log_epsilon=params.log_epsilon,
         )
         maybe_log_scoring_diagnostics(self.scoring_model)
-        # Exact cluster-solver backend behind a narrow solver-facing contract.
         self._cluster_solver: ClusterSolver = make_cluster_solver(
             self.params.cluster_solver_backend
         )
@@ -364,115 +363,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self.last_scan_stats: ScanStats | None = None
         self._stats: list[ScanStats] = []
         self.reset_stats()
-
-    @property
-    def _nodes_by_id(self) -> dict[int, TrackHypothesisNode]:
-        """Compatibility view of the persistent node table owned by the store."""
-        return self._tree_store.nodes_by_id
-
-    @_nodes_by_id.setter
-    def _nodes_by_id(self, value: dict[int, TrackHypothesisNode]) -> None:
-        self._tree_store.nodes_by_id = value
-
-    @property
-    def track_trees_by_track_id(self) -> dict[int, TrackTree]:
-        """Compatibility view of the persistent track-tree table owned by the store."""
-        return self._tree_store.track_trees_by_track_id
-
-    @track_trees_by_track_id.setter
-    def track_trees_by_track_id(self, value: dict[int, TrackTree]) -> None:
-        self._tree_store.track_trees_by_track_id = value
-
-    def _maybe_print_config(self) -> None:
-        """Print a one-time resolved tracker config snapshot when enabled."""
-        if not self.params.debug_display_config:
-            return
-        print("TOMHT_CONFIG resolved parameters:")
-        for param_field in fields(TOMHTParams):
-            value = getattr(self.params, param_field.name)
-            print(f"  {param_field.name}={value!r}")
-        print(
-            "  "
-            f"scoring_model={type(self.scoring_model).__name__} "
-            f"cluster_solver={type(self._cluster_solver).__name__}"
-        )
-
-    def _resolve_hypothesiser(
-        self,
-        *,
-        params: TOMHTParams,
-    ) -> Hypothesiser:
-        """Resolve constructor mode into the active runtime hypothesiser."""
-        predictor = self.predictor
-        hypothesiser = self.hypothesiser
-
-        has_predictor = predictor is not None
-        has_hypothesiser = hypothesiser is not None
-        if has_predictor == has_hypothesiser:
-            raise TypeError("Provide exactly one of predictor or hypothesiser.")
-
-        if has_predictor:
-            assert predictor is not None
-            return TrackerOwnedNLLDistanceHypothesiser(
-                predictor=predictor,
-                updater=self.updater,
-                mahalanobis_gate_threshold=params.mahalanobis_gate_threshold,
-            )
-
-        assert hypothesiser is not None
-        resolved_predictor = getattr(hypothesiser, "predictor", None)
-        if resolved_predictor is None:
-            raise TypeError(
-                "A provided hypothesiser must expose predictor for tracker wiring."
-            )
-        return hypothesiser
-
-    @staticmethod
-    def _apply_params_overrides(
-        params: TOMHTParams,
-        params_overrides: Mapping[str, Any] | None,
-    ) -> TOMHTParams:
-        """Apply JSON-style parameter overrides onto a frozen ``TOMHTParams``."""
-        if params_overrides is None:
-            return params
-        if not isinstance(params_overrides, Mapping):
-            raise TypeError(
-                "params_overrides must be a mapping of TOMHTParams field names to values."
-            )
-        overrides = dict(params_overrides)
-        if not overrides:
-            return params
-        non_string_keys = [key for key in overrides if not isinstance(key, str)]
-        if non_string_keys:
-            non_string_keys_str = ", ".join(repr(key) for key in non_string_keys)
-            raise TypeError(
-                "params_overrides keys must be strings matching TOMHTParams fields; "
-                f"got: {non_string_keys_str}."
-            )
-        valid_keys = {field.name for field in fields(TOMHTParams)}
-        invalid_keys = sorted(set(overrides).difference(valid_keys))
-        if invalid_keys:
-            invalid_keys_str = ", ".join(invalid_keys)
-            raise ValueError(
-                f"Unknown TOMHTParams override key(s): {invalid_keys_str}."
-            )
-        return replace(params, **overrides)
-
-    @staticmethod
-    def _resolve_output_track_id_mapper(
-        output_track_id_mapper: Callable[[int], object] | None,
-    ) -> Callable[[int], object]:
-        """Resolve and validate output Track.id mapping strategy."""
-        if output_track_id_mapper is None:
-            return DensePublishedTrackIdMapper()
-        if not callable(output_track_id_mapper):
-            raise TypeError("output_track_id_mapper must be callable when provided.")
-        return output_track_id_mapper
-
-    def reset_stats(self) -> None:
-        """Clear collected ScanStats and the last per-scan snapshot."""
-        self._stats = []
-        self.last_scan_stats = None
 
     @property
     def tracks(self) -> set[Track]:
@@ -698,7 +588,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
         return list(self._last_unused_detections)
 
-    # --- Read-only inspection / reporting helpers ---
+    # =========================================================================
+    # Inspection and Stats API
+    # =========================================================================
+
+    def reset_stats(self) -> None:
+        """Clear collected ScanStats and the last per-scan snapshot."""
+        self._stats = []
+        self.last_scan_stats = None
 
     def get_map_output_tracks(
         self,
@@ -775,6 +672,76 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     # =========================================================================
+    # Compatibility Inspection Views
+    # =========================================================================
+
+    @property
+    def _nodes_by_id(self) -> dict[int, TrackHypothesisNode]:
+        """Compatibility view of the persistent node table owned by the store."""
+        return self._tree_store.nodes_by_id
+
+    @_nodes_by_id.setter
+    def _nodes_by_id(self, value: dict[int, TrackHypothesisNode]) -> None:
+        self._tree_store.nodes_by_id = value
+
+    @property
+    def track_trees_by_track_id(self) -> dict[int, TrackTree]:
+        """Compatibility view of the persistent track-tree table owned by the store."""
+        return self._tree_store.track_trees_by_track_id
+
+    @track_trees_by_track_id.setter
+    def track_trees_by_track_id(self, value: dict[int, TrackTree]) -> None:
+        self._tree_store.track_trees_by_track_id = value
+
+    # =========================================================================
+    # Constructor Helpers
+    # =========================================================================
+
+    def _maybe_print_config(self) -> None:
+        """Print a one-time resolved tracker config snapshot when enabled."""
+        if not self.params.debug_display_config:
+            return
+        print("TOMHT_CONFIG resolved parameters:")
+        for param_field in fields(TOMHTParams):
+            value = getattr(self.params, param_field.name)
+            print(f"  {param_field.name}={value!r}")
+        print(
+            "  "
+            f"scoring_model={type(self.scoring_model).__name__} "
+            f"cluster_solver={type(self._cluster_solver).__name__}"
+        )
+
+    def _resolve_hypothesiser(
+        self,
+        *,
+        params: TOMHTParams,
+    ) -> Hypothesiser:
+        """Resolve constructor mode into the active runtime hypothesiser."""
+        predictor = self.predictor
+        hypothesiser = self.hypothesiser
+
+        has_predictor = predictor is not None
+        has_hypothesiser = hypothesiser is not None
+        if has_predictor == has_hypothesiser:
+            raise TypeError("Provide exactly one of predictor or hypothesiser.")
+
+        if has_predictor:
+            assert predictor is not None
+            return TrackerOwnedNLLDistanceHypothesiser(
+                predictor=predictor,
+                updater=self.updater,
+                mahalanobis_gate_threshold=params.mahalanobis_gate_threshold,
+            )
+
+        assert hypothesiser is not None
+        resolved_predictor = getattr(hypothesiser, "predictor", None)
+        if resolved_predictor is None:
+            raise TypeError(
+                "A provided hypothesiser must expose predictor for tracker wiring."
+            )
+        return hypothesiser
+
+    # =========================================================================
     # Local Expansion and Simple Lifecycle
     # =========================================================================
 
@@ -789,7 +756,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             tree_store=self._tree_store,
             ctx=ctx,
             hypothesiser=self._hypothesiser,
-            updater=self._updater,
+            updater=self.updater,
             scoring_model=self.scoring_model,
             params=self.params,
             assoc_miss_label=TOMHTTracker.ASSOC_MISS,
@@ -936,7 +903,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             cluster_snapshots=cluster_snapshots,
             params=self.params,
             deletion_log_odds_threshold=self._track_deletion_log_odds_threshold,
-            deleter=self._deleter,
+            deleter=self.deleter,
             output_track_id_for_deleter=internal_track_id_for_deleter_candidate,
             timestamp=timestamp,
         )

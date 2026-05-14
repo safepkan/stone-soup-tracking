@@ -30,6 +30,17 @@ class DensePublishedTrackIdMapper:
         return public_track_id
 
 
+def resolve_output_track_id_mapper(
+    output_track_id_mapper: Callable[[int], object] | None,
+) -> Callable[[int], object]:
+    """Resolve and validate output Track.id mapping strategy."""
+    if output_track_id_mapper is None:
+        return DensePublishedTrackIdMapper()
+    if not callable(output_track_id_mapper):
+        raise TypeError("output_track_id_mapper must be callable when provided.")
+    return output_track_id_mapper
+
+
 def lineage_from_leaf_node(leaf_node: TrackHypothesisNode) -> list[TrackHypothesisNode]:
     """Return same-track ancestry from root to ``leaf_node`` (inclusive)."""
     lineage: list[TrackHypothesisNode] = []
