@@ -626,7 +626,7 @@ The tracker does not distinguish a one-shot `SimpleMeasurementInitiator`-style i
 residual detections -> configured initiator -> candidate start tracks
 ```
 
-Returned tracks are scored from `TOMHTParams.initiator_start_initial_existence_probability` via log-odds. A valid `Track.metadata["existence_probability"]` on the initiated track overrides that default; missing or invalid optional metadata falls back to the parameter value.
+Returned tracks are scored from `TOMHTParams.initiator_start_initial_existence_probability` via log-odds. A valid `Track.metadata["existence_probability"]` on the initiated track overrides that default; missing or invalid optional metadata falls back to the parameter value. The same valid metadata is the preferred initiator-provided candidate-confidence signal and may also be used as a quality hint when internal-start capping/ordering is needed; exact internal-start ordering remains an implementation detail.
 
 For a one-detection measurement initiator, one principled way to choose the default prior is:
 

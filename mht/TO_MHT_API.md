@@ -555,6 +555,12 @@ that value overrides the configured default for that start.
 
 Invalid metadata falls back to the configured default.
 
+`metadata["existence_probability"]` is the preferred way for an initiator to
+communicate candidate confidence. TOMHT uses valid values for initial root
+scoring and may also use them as a candidate-quality hint when internal-start
+capping/ordering is needed. Exact internal-start ordering remains an
+implementation detail.
+
 ### Residual detections and `get_unused_detections()`
 
 `get_unused_detections()` is primarily intended for integrations that do not

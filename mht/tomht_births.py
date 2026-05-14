@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Iterable
 
 from ordered_set import OrderedSet
@@ -88,6 +89,20 @@ def birth_covar_trace(birth: Track) -> float:
     return trace_val
 
 
+def birth_existence_probability_sort_value(track: Track) -> float:
+    """Return a deterministic ordering hint from initiator confidence metadata."""
+    metadata_value = track.metadata.get("existence_probability")
+    if metadata_value is None:
+        return float("inf")
+    try:
+        probability = float(metadata_value)
+    except (TypeError, ValueError):
+        return float("inf")
+    if not isfinite(probability) or not 0.0 < probability < 1.0:
+        return float("inf")
+    return -probability
+
+
 def _sanitized_flat_state_components(state_vector) -> tuple[float, ...]:
     values = np.asarray(state_vector, dtype=float).reshape(-1)
     components: list[float] = []
@@ -124,6 +139,7 @@ def birth_track_sort_key(
         float(-support),
         float(misses),
         float(age),
+        birth_existence_probability_sort_value(tr),
         cov_trace,
         used_idx,
         *state_components,

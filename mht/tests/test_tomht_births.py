@@ -10,6 +10,7 @@ from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 
 from mht.tomht_births import (
+    birth_existence_probability_sort_value,
     birth_track_sort_key,
     format_birth_state_vector,
     select_internal_birth_candidates,
@@ -61,6 +62,107 @@ class TOMHTBirthHelpersTest(unittest.TestCase):
             {id(layout_extreme), id(short_state)},
             {id(track) for track in selected},
         )
+
+    def test_sort_key_prefers_higher_existence_probability_before_covariance(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 5, 14, 12, 0, 0)
+        high_confidence = _track_with_state(
+            [0.0],
+            timestamp=timestamp,
+            covar_scale=100.0,
+        )
+        low_confidence = _track_with_state(
+            [0.0],
+            timestamp=timestamp,
+            covar_scale=1.0,
+        )
+        high_confidence.metadata["existence_probability"] = 0.9
+        low_confidence.metadata["existence_probability"] = 0.2
+
+        ordered = sorted(
+            [low_confidence, high_confidence],
+            key=lambda track: birth_track_sort_key(
+                track,
+                scan_index=3,
+                det_index_by_obj={},
+            ),
+        )
+
+        self.assertIs(high_confidence, ordered[0])
+
+    def test_valid_existence_probability_sorts_before_missing_or_invalid(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 5, 14, 12, 0, 0)
+        valid_confidence = _track_with_state(
+            [0.0],
+            timestamp=timestamp,
+            covar_scale=100.0,
+        )
+        missing_confidence = _track_with_state(
+            [0.0],
+            timestamp=timestamp,
+            covar_scale=1.0,
+        )
+        invalid_confidence = _track_with_state(
+            [0.0],
+            timestamp=timestamp,
+            covar_scale=1.0,
+        )
+        valid_confidence.metadata["existence_probability"] = 0.6
+        invalid_confidence.metadata["existence_probability"] = "not-a-number"
+
+        ordered = sorted(
+            [missing_confidence, invalid_confidence, valid_confidence],
+            key=lambda track: birth_track_sort_key(
+                track,
+                scan_index=3,
+                det_index_by_obj={},
+            ),
+        )
+
+        self.assertIs(valid_confidence, ordered[0])
+
+    def test_invalid_existence_probability_sort_values_fall_back_to_inf(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 5, 14, 12, 0, 0)
+        for value in ("not-a-number", float("nan"), 0.0, 1.0):
+            with self.subTest(value=value):
+                track = _track_with_state([0.0], timestamp=timestamp)
+                track.metadata["existence_probability"] = value
+
+                self.assertEqual(
+                    float("inf"),
+                    birth_existence_probability_sort_value(track),
+                )
+
+    def test_sort_key_uses_covariance_when_existence_probabilities_are_missing(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 5, 14, 12, 0, 0)
+        low_covariance = _track_with_state(
+            [10.0],
+            timestamp=timestamp,
+            covar_scale=1.0,
+        )
+        high_covariance = _track_with_state(
+            [0.0],
+            timestamp=timestamp,
+            covar_scale=100.0,
+        )
+
+        ordered = sorted(
+            [high_covariance, low_covariance],
+            key=lambda track: birth_track_sort_key(
+                track,
+                scan_index=3,
+                det_index_by_obj={},
+            ),
+        )
+
+        self.assertIs(low_covariance, ordered[0])
 
     def test_sort_key_is_deterministic_for_arbitrary_state_dimensions(self) -> None:
         timestamp = datetime.datetime(2026, 5, 14, 12, 0, 0)
