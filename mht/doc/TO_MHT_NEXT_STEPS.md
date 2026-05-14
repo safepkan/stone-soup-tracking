@@ -36,6 +36,7 @@ The tracker is now in a better shape for this work because several pieces have a
 - whole-track score deletion now removes trees whose max active-leaf score falls below `TOMHTParams.track_deletion_existence_probability`,
 - whole-track lifecycle implementation now lives in `mht/tomht_lifecycle.py`, with `TOMHTTracker` retaining thin gateway methods only.
 - `NLLScoringModel` now consumes a narrow `DetectionProbabilityModel`; the default `ConstantDetectionProbabilityModel` wraps the scalar `TOMHTParams.prob_detect` and `TOMHTParams.clutter_density`, while custom DPMs can vary `P_D` and clutter density by prediction, detection, and opaque caller scan context.
+- internal-birth candidate selection no longer applies tracker-owned state-layout sanity checks; sorting and debug output flatten arbitrary state vectors generically.
 
 These changes make the next scoring/birth steps easier to reason about.
 

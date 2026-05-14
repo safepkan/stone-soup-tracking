@@ -52,30 +52,6 @@ def birth_used_key(
         return None
 
 
-def birth_is_sane(tr: Track, *, params: TOMHTParams) -> bool:
-    """Apply simple numeric sanity checks before accepting an internal birth."""
-    st = tr.states[-1]
-    sv = np.asarray(st.state_vector, dtype=float)
-
-    x = float(sv[0, 0])
-    y = float(sv[2, 0])
-    if not (np.isfinite(x) and np.isfinite(y)):
-        return False
-    if abs(x) > params.birth_max_abs_pos or abs(y) > params.birth_max_abs_pos:
-        return False
-
-    cov = getattr(st, "covar", None)
-    if cov is None:
-        return False
-    cov = np.asarray(cov, dtype=float)
-    if not np.all(np.isfinite(cov)):
-        return False
-    if float(np.trace(cov)) > params.birth_max_covar_trace:
-        return False
-
-    return True
-
-
 def birth_holding_track(birth: Track) -> Track:
     """Return the initiator holding-track metadata when available."""
     holding = birth.metadata.get("holding_track", None)
@@ -112,6 +88,19 @@ def birth_covar_trace(birth: Track) -> float:
     return trace_val
 
 
+def _sanitized_flat_state_components(state_vector) -> tuple[float, ...]:
+    values = np.asarray(state_vector, dtype=float).reshape(-1)
+    components: list[float] = []
+    for value in values:
+        component = float(value)
+        components.append(component if np.isfinite(component) else float("inf"))
+    return tuple(components)
+
+
+def _format_state_component(value: float) -> str:
+    return "inf" if not np.isfinite(value) else f"{value:.6g}"
+
+
 def birth_track_sort_key(
     tr: Track,
     *,
@@ -128,15 +117,7 @@ def birth_track_sort_key(
     cov_trace = birth_covar_trace(tr)
 
     st = tr.states[-1]
-    sv = np.asarray(st.state_vector, dtype=float).reshape(-1)
-
-    def _state_component(idx: int) -> float:
-        if idx >= sv.size:
-            return float("inf")
-        value = float(sv[idx])
-        if not np.isfinite(value):
-            return float("inf")
-        return value
+    state_components = _sanitized_flat_state_components(st.state_vector)
 
     used_idx = float(10**9 if used_key is None else int(used_key[1]))
     return (
@@ -145,10 +126,7 @@ def birth_track_sort_key(
         float(age),
         cov_trace,
         used_idx,
-        _state_component(0),  # x
-        _state_component(1),  # vx
-        _state_component(2),  # y
-        _state_component(3),  # vy
+        *state_components,
         float(len(tr.states)),
     )
 
@@ -194,10 +172,8 @@ def select_internal_birth_candidates(
     ctx: ScanContext,
     params: TOMHTParams,
 ) -> list[Track]:
-    """Apply deterministic internal-birth quality filtering and per-scan cap."""
-    kept_birth_tracks = [
-        track for track in initiated_tracks if birth_is_sane(track, params=params)
-    ]
+    """Apply deterministic internal-birth quality ordering and per-scan cap."""
+    kept_birth_tracks = list(initiated_tracks)
     # Initiators return sets; make cap selection deterministic across runs.
     kept_birth_tracks.sort(
         key=lambda track: birth_track_sort_key(
@@ -211,14 +187,14 @@ def select_internal_birth_candidates(
     return kept_birth_tracks
 
 
-def format_birth_state_xyvxvy(state_vector) -> str:
-    """Format `[x,vx,y,vy]` state vectors for compact debug output."""
-    sv = np.asarray(state_vector, dtype=float)
-    x = float(sv[0, 0])
-    vx = float(sv[1, 0])
-    y = float(sv[2, 0])
-    vy = float(sv[3, 0])
-    return f"(x={x:.1f}, vx={vx:.2f}, y={y:.1f}, vy={vy:.2f})"
+def format_birth_state_vector(state_vector) -> str:
+    """Format flattened state-vector components for compact debug output."""
+    components = _sanitized_flat_state_components(state_vector)
+    parts = [
+        f"{idx}={_format_state_component(value)}"
+        for idx, value in enumerate(components)
+    ]
+    return f"({', '.join(parts)})"
 
 
 def initiator_start_initial_log_delta(
@@ -311,7 +287,7 @@ def run_internal_births_from_residuals(
         for track in kept_birth_tracks[: params.debug_births_max]:
             # Debug-only display retained for quick replay inspection.
             state = track.states[-1].state_vector
-            print(f"  birth_state={format_birth_state_xyvxvy(state)}")
+            print(f"  birth_state={format_birth_state_vector(state)}")
 
     for birth_track in kept_birth_tracks:
         state = birth_track.states[-1]

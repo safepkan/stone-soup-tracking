@@ -27,6 +27,7 @@ Update (2026-05-14): `get_tomht_track_id(track)` was removed from `mht/tomht_tra
 Update (2026-05-14): whole-track score deletion now runs after sticky confirmation and MAP-only N-scan pruning. `TOMHTParams.track_deletion_existence_probability` defaults to `0.01` (log-odds about `-4.595`) and deletes a whole `TrackTree` when `max(active_leaf.accumulated_log_score)` is at or below the threshold. This is the primary principled mechanism for killing low-score spurious starts. Node-native miss deletion and optional Stone Soup deleters remain additional backstops/domain hooks, and `TRACK_LIFECYCLE` diagnostics report deletion reasons (`score`, `miss`, `deleter`).
 Update (2026-05-14): `NLLScoringModel` now uses a narrow `DetectionProbabilityModel` for dynamic per-hypothesis `P_D` and clutter density. The default tracker path wraps `TOMHTParams.prob_detect` and `TOMHTParams.clutter_density` in `ConstantDetectionProbabilityModel`, preserving scalar scoring behavior. `update_tracker(..., caller_scan_context=...)` threads opaque caller scan data to the DPM without exposing TOMHT's internal `ScanContext`; one update call is still expected to contain detections from one sensor / one measurement space. The DPM receives published public track IDs only, and unpublished trees pass `track_id=None`.
 Update (2026-05-14): whole-track lifecycle implementation now lives in `mht/tomht_lifecycle.py`. `TOMHTTracker` keeps thin gateway methods, while sticky confirmation, score deletion, miss/deleter evaluation, deterministic `TRACK_LIFECYCLE` diagnostics, and current-MAP live-tree filtering are delegated through explicit `TrackTreeStore`/parameter dependencies. This was a behavior-preserving extraction.
+Update (2026-05-14): internal-birth candidate handling no longer assumes a fixed state-vector layout. Initiator-returned tracks are not rejected by tracker-owned position/covariance sanity checks; retained candidates are still deterministically sorted and capped by `max_births_per_scan`. Birth tie-break sorting and debug output now flatten all state-vector components generically, with non-finite components sanitized deterministically.
 
 ---
 
@@ -178,8 +179,8 @@ detection-key filtering, and compact detection-key sample formatting, while
 `mht/utils.py` remains for generic environment/runtime helpers.
 
 Internal-birth handling is split out narrowly: `mht/tomht_births.py` owns birth
-used-key extraction, sanity checks, support/age/miss summaries, covariance-trace
-ranking, deterministic candidate sorting/capping, residual detection-index
+used-key extraction, support/age/miss summaries, covariance-trace ranking,
+state-layout-agnostic deterministic candidate sorting/capping, residual detection-index
 calculation after expansion, guardrail reasoning, initiator invocation, birth
 debug printing, birth scoring calls, and root-field construction. `TOMHTTracker`
 calls the high-level post-expansion birth helper, assigns `_last_unused_detections`
@@ -646,6 +647,9 @@ where `beta_NT` is new-target/birth density in the same measurement-space units 
 The current residual policy uses detections unused by the **union of all active leaves** after local expansion. This is conservative, but it preserves a strong no-conflict invariant for internal births and for residual-based external starts.
 
 Birth capping is deterministic and quality-ranked rather than arbitrary.
+The tracker does not interpret specific state-vector components as positions or
+velocities in this path; any layout-specific validity policy belongs in the
+configured initiator.
 
 ### What looks weak or provisional
 

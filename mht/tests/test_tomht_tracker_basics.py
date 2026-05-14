@@ -147,6 +147,8 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
         self.assertNotIn("internal_birth_mode", param_fields)
         self.assertNotIn("birth_log_penalty", param_fields)
         self.assertNotIn("birth_density", param_fields)
+        self.assertNotIn("birth_max_abs_pos", param_fields)
+        self.assertNotIn("birth_max_covar_trace", param_fields)
 
     def test_constructor_builds_nll_scoring_model_from_params(self) -> None:
         params = TOMHTParams(

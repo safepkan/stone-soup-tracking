@@ -111,10 +111,6 @@ class TOMHTParams:
     birth_skip_if_active_trees_above: int | None = 40
     birth_skip_if_active_leaves_above: int | None = 200
 
-    # Birth sanity guards.
-    birth_max_abs_pos: float = 1e5
-    birth_max_covar_trace: float = 1e12
-
     # Debug / instrumentation toggles.
     debug_display_detections: bool = False
     debug_display_config: bool = False

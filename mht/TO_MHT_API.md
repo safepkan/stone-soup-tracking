@@ -180,9 +180,11 @@ to decide whether and when to start tracks.
 
 If an initiator is provided, TOMHT passes residual detections to it and treats
 the returned Stone Soup tracks as candidate internal starts. Candidate starts may
-be filtered, capped, or skipped by current internal-start guardrails before
-insertion. The exact guardrail details are implementation controls and should
-not be treated as a stable integration contract.
+be capped or skipped by current internal-start guardrails before insertion. The
+tracker does not apply state-layout-specific candidate validity checks; those
+belong in the configured initiator. The exact guardrail details are
+implementation controls and should not be treated as a stable integration
+contract.
 
 Conceptually, the tracker does not distinguish between simple one-detection
 initializers, M/N initiators, or domain-specific initiators. They are all
@@ -517,7 +519,7 @@ If an initiator is supplied, TOMHT:
 2. determines residual detections unused by surviving active leaves,
 3. passes residual detections to the initiator,
 4. treats returned tracks as candidate internal starts,
-5. applies current internal-start filtering/capping/guardrails,
+5. applies current internal-start capping/guardrails,
 6. inserts retained candidates as new internal track trees,
 7. scores their roots using an initial existence prior.
 
@@ -528,9 +530,10 @@ The tracker does not conceptually care whether the initiator is:
 - an M/N initiator,
 - or a domain-aware ISAC start generator.
 
-However, the current implementation still has internal-start guardrails and
-sanity checks. These are intended as tractability and robustness controls, not
-as part of the mathematical initiation model, and they may be revised.
+However, the current implementation still has internal-start guardrails and a
+per-scan cap. These are intended as tractability controls, not as part of the
+mathematical initiation model, and they may be revised. Layout-specific state
+validity checks should be implemented by the initiator.
 
 ### Initial score for initiator-created starts
 
@@ -560,7 +563,7 @@ that mode, TOMHT returns the residual detections from the most recent scan.
 
 If an internal initiator is configured, residual detections passed to that
 initiator should generally be considered consumed by the internal-start path,
-even if the initiator returns no retained starts after filtering or capping.
+even if the initiator returns no retained starts after capping.
 Guardrail-blocked birth processing may leave residuals available, but callers
 should not rely on that as a stable external-start mechanism.
 
@@ -594,13 +597,14 @@ initiator and environment.
 
 Use an internal initiator when TOMHT should own the residual-detection handoff:
 residual detections are passed to the initiator, candidate starts may be subject
-to internal guardrails, and retained starts enter the normal tree lifecycle.
+to internal capping/guardrails, and retained starts enter the normal tree
+lifecycle.
 
 Use external starts when another caller-side process has already decided which
 starts should enter the tracker. External starts bypass the internal initiator
-path and its current candidate filtering/capping guardrails. They are still
-inserted as TOMHT trees and go through TOMHT confirmation, deletion, and
-publication after insertion.
+path and its current candidate capping/guardrails. They are still inserted as
+TOMHT trees and go through TOMHT confirmation, deletion, and publication after
+insertion.
 
 It is valid to use `initiator=None` and manage all starts externally. That is
 the cleanest integration pattern when the application already has a
@@ -991,8 +995,10 @@ Current important assumptions:
   detection hypotheses tied to the original scan detections,
 - clutter density units must match the NLL measurement coordinates,
 - the tracker does not own generic birth-state initialization,
-- current internal-start candidates may be filtered/capped by implementation
+- current internal-start candidates may be capped or skipped by implementation
   guardrails before insertion,
+- internal-start candidate validity remains initiator-owned; TOMHT does not
+  interpret state-vector components as specific coordinates in the birth path,
 - no tracker-core `beta_NT` / birth-density parameter exists,
 - the DPM sees public IDs only after publication,
 - unpublished trees pass `track_id=None` to the DPM,
