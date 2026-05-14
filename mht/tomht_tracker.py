@@ -36,8 +36,6 @@ from itertools import product
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
-import numpy as np
-
 from stonesoup.base import Property
 from stonesoup.deleter.base import Deleter
 from stonesoup.hypothesiser.base import Hypothesiser
@@ -106,6 +104,8 @@ from .tomht_stats import (
     RebuildStats,
     ScanStats,
     ScanTimingBreakdown,
+    build_scan_stats,
+    maybe_display_scan_debug_output,
     print_scan_stats as print_scan_stats_report,
     print_summary_stats as print_summary_stats_report,
 )
@@ -1135,9 +1135,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         timing_breakdown: ScanTimingBreakdown,
     ) -> None:
         """Build/store per-scan stats and emit optional debug displays."""
-        self._maybe_display_scan_debug_output(ctx)
-        scan_stats = self._build_scan_stats(
+        maybe_display_scan_debug_output(
             ctx=ctx,
+            cluster_snapshots=self._last_cluster_snapshots,
+            debug_display_detections=self.params.debug_display_detections,
+            debug_display_hypotheses=self.params.debug_display_hypotheses,
+            debug_globals_max=self.params.debug_globals_max,
+        )
+        scan_stats = build_scan_stats(
+            ctx=ctx,
+            map_global=self._last_map_global,
+            tree_store=self._tree_store,
             scan_wall_ms=scan_wall_ms,
             maxrss_mb=maxrss_mb,
             node_count_total=node_count_total,
@@ -1153,185 +1161,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self.last_scan_stats = scan_stats
         if self.params.collect_stats:
             self._stats.append(scan_stats)
-        self._maybe_display_scan_stats(timestamp=ctx.timestamp, scan_stats=scan_stats)
-
-    def _maybe_display_scan_debug_output(self, ctx: ScanContext) -> None:
-        """Emit optional per-scan debug displays before stats logging."""
-        if self.params.debug_display_detections:
-            print(f"\nDetections at timestamp {ctx.timestamp}:")
-            for det in ctx.detections:
-                print(f"  {det.state_vector}")
-
-        if self.params.debug_display_hypotheses:
-            print(f"\nCluster rebuilds scan={ctx.scan_index} t={ctx.timestamp}:")
-            self._display_cluster_rebuilds()
-
-    def _display_cluster_rebuilds(self) -> None:
-        """Print retained rebuilt globals for last scan (inspection only)."""
-        for snapshot in self._last_cluster_snapshots:
-            split_from = snapshot.overload_split_origin_cluster_id
-            split_tag = "" if split_from is None else f" split_from={split_from}"
-            print(
-                f"cluster={snapshot.cluster_id} tracks={list(snapshot.track_ids)}{split_tag} "
-                f"globals={len(snapshot.rebuilt_globals)} "
-                f"comb_eval={snapshot.evaluated_combinations} "
-                f"comb_feas={snapshot.feasible_combinations} "
-                f"disagree={snapshot.disagreement_count}"
-            )
-            for gh in snapshot.rebuilt_globals[: self.params.debug_globals_max]:
-                tids = sorted(gh.leaf_nodes_by_track_id.keys())
-                print(f"  logW={gh.log_weight:.3f} tids={tids}")
-
-    def _map_stats_for_current_map(
-        self,
-        detections: list[Detection],
-        scan_index: int,
-    ) -> tuple[int, int, int, int, int, dict[int, int], float]:
-        """Compute lightweight MAP-level counters for scan stats reporting."""
-        map_snapshot = self.get_map_hypothesis_snapshot()
-        map_tracks = 0
-        map_published_tracks = 0
-        map_unpublished_tracks = 0
-        map_used = 0
-        map_unused = len(detections)
-        map_miss_hist: dict[int, int] = {}
-        map_mean_hit_rate = 0.0
-        if map_snapshot is None:
-            return (
-                map_tracks,
-                map_published_tracks,
-                map_unpublished_tracks,
-                map_used,
-                map_unused,
-                map_miss_hist,
-                map_mean_hit_rate,
-            )
-
-        map_tracks = len(map_snapshot.leaf_nodes_by_track_id)
-        track_trees_by_track_id = self._tree_store.track_trees_by_track_id
-        for track_id in map_snapshot.leaf_nodes_by_track_id:
-            tree = track_trees_by_track_id.get(track_id)
-            if tree is not None and tree.publication_state == "published":
-                map_published_tracks += 1
-        map_unpublished_tracks = map_tracks - map_published_tracks
-
-        used_keys = {
-            leaf.used_det_key
-            for leaf in map_snapshot.leaf_nodes_by_track_id.values()
-            if leaf.used_det_key is not None and int(leaf.used_det_key[0]) == scan_index
-        }
-        map_used = len(used_keys)
-        map_unused = len(detections) - map_used
-
-        hit_rates: list[float] = []
-        for leaf_node in map_snapshot.leaf_nodes_by_track_id.values():
-            misses = int(leaf_node.missed_count)
-            map_miss_hist[misses] = map_miss_hist.get(misses, 0) + 1
-            age = int(leaf_node.age)
-            if age > 0:
-                hits = int(leaf_node.hits)
-                hit_rates.append(float(hits) / float(age))
-        if hit_rates:
-            map_mean_hit_rate = float(np.mean(hit_rates))
-        return (
-            map_tracks,
-            map_published_tracks,
-            map_unpublished_tracks,
-            map_used,
-            map_unused,
-            map_miss_hist,
-            map_mean_hit_rate,
-        )
-
-    def _active_lifecycle_tree_counts(self) -> tuple[int, int]:
-        """Return active-tree counts by tentative/confirmed lifecycle state."""
-        tentative = 0
-        confirmed = 0
-        for tree in self._tree_store.track_trees_by_track_id.values():
-            if tree.lifecycle_state == "confirmed":
-                confirmed += 1
-            else:
-                tentative += 1
-        return tentative, confirmed
-
-    def _build_scan_stats(
-        self,
-        *,
-        ctx: ScanContext,
-        scan_wall_ms: float,
-        maxrss_mb: float,
-        node_count_total: int,
-        active_trees: int,
-        active_leaves: int,
-        rebuild_stats: RebuildStats,
-        nscan_boundary_scan_index: int,
-        nscan_tracks_in_scope: int,
-        nscan_tracks_committed: int,
-        birth_stats: BirthStats,
-        timing_breakdown: ScanTimingBreakdown,
-    ) -> ScanStats:
-        """Assemble one immutable per-scan ScanStats record."""
-        (
-            map_tracks,
-            map_published_tracks,
-            map_unpublished_tracks,
-            map_used,
-            map_unused,
-            map_miss_hist,
-            map_mean_hit_rate,
-        ) = self._map_stats_for_current_map(ctx.detections, ctx.scan_index)
-        active_tentative_trees, active_confirmed_trees = (
-            self._active_lifecycle_tree_counts()
-        )
-        return ScanStats(
-            scan_index=int(ctx.scan_index),
-            timestamp=ctx.timestamp,
-            scan_wall_ms=float(scan_wall_ms),
-            maxrss_mb=float(maxrss_mb),
-            node_count_total=int(node_count_total),
-            active_trees=int(active_trees),
-            active_tentative_trees=active_tentative_trees,
-            active_confirmed_trees=active_confirmed_trees,
-            active_leaves=int(active_leaves),
-            num_detections=len(ctx.detections),
-            cluster_count=rebuild_stats.cluster_count,
-            combinations_evaluated=rebuild_stats.combinations_evaluated,
-            feasible_combinations=rebuild_stats.feasible_combinations,
-            rebuilt_globals_stored=rebuild_stats.rebuilt_globals_stored,
-            nscan_disagreement_total=rebuild_stats.nscan_disagreement_total,
-            overload_split_clusters=rebuild_stats.overload_split_clusters,
-            overload_split_operations=rebuild_stats.overload_split_operations,
-            historical_relaxation_attempts=rebuild_stats.historical_relaxation_attempts,
-            historical_relaxation_successes=rebuild_stats.historical_relaxation_successes,
-            historical_relaxed_keys_total=rebuild_stats.historical_relaxed_keys_total,
-            nscan_boundary_scan_index=nscan_boundary_scan_index,
-            nscan_tracks_in_scope=nscan_tracks_in_scope,
-            nscan_tracks_committed=nscan_tracks_committed,
-            birth_candidates=birth_stats.residual_detections_considered,
-            birth_tracks_created=birth_stats.birth_tracks_created,
-            birth_tracks_kept=birth_stats.birth_tracks_kept,
-            map_tracks=map_tracks,
-            map_published_tracks=map_published_tracks,
-            map_unpublished_tracks=map_unpublished_tracks,
-            map_used=map_used,
-            map_unused=map_unused,
-            map_miss_hist=map_miss_hist,
-            map_mean_hit_rate=map_mean_hit_rate,
-            timing_breakdown=timing_breakdown,
-        )
-
-    def _maybe_display_scan_stats(
-        self,
-        *,
-        timestamp: datetime.datetime,
-        scan_stats: ScanStats,
-    ) -> None:
-        """Emit optional human-readable scan stats summary output."""
         if not self.params.debug_display_scan_stats:
             return
         nscan_snapshot = self.get_n_scan_commitment_snapshot()
         print_scan_stats_report(
-            timestamp=timestamp,
+            timestamp=ctx.timestamp,
             scan_stats=scan_stats,
             nscan_snapshot=nscan_snapshot,
             debug_display_map_miss_hist=self.params.debug_display_map_miss_hist,
