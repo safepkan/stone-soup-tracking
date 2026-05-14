@@ -61,6 +61,10 @@ from .tomht_cluster_rebuild import (
 )
 from .tomht_cluster_solver import ClusterSolver
 from .tomht_cluster_solver_factory import make_cluster_solver
+from .tomht_external_starts import (
+    insert_external_start_trees,
+    validate_external_starts_timestamp,
+)
 from .tomht_expansion import (
     ExpansionCallStats as _ExpansionCallStats,
     expand_all_track_trees,
@@ -664,32 +668,25 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         starts: Iterable[Track],
     ) -> None:
         """Insert externally confirmed starts as new single-node track trees."""
-        self._validate_external_starts_timestamp(time)
+        validate_external_starts_timestamp(
+            time=time,
+            last_update_timestamp=self._last_update_timestamp,
+            last_scan_index=self._last_scan_index,
+        )
         start_list = list(starts)
         if not start_list:
             return
 
-        new_roots = [
-            self._make_external_start_root(start, time) for start in start_list
-        ]
-
-        # External starts are assumed to be from currently unused detections,
-        # so add them directly to the last MAP view.
-        tree_store = self._tree_store
-        merged = dict(self._last_map_global.leaf_nodes_by_track_id)
-        for track_id, tree in tree_store.track_trees_by_track_id.items():
-            if track_id in merged:
-                continue
-            if len(tree.active_leaf_node_ids) != 1:
-                continue
-            only_leaf_id = next(iter(tree.active_leaf_node_ids))
-            merged[track_id] = tree_store.nodes_by_id[only_leaf_id]
-
-        self._last_map_global = GlobalHypothesis(
-            leaf_nodes_by_track_id=merged,
-            log_weight=float(self._last_map_global.log_weight)
-            + sum(float(root.log_delta) for root in new_roots),
+        result = insert_external_start_trees(
+            time=time,
+            starts=start_list,
+            tree_store=self._tree_store,
+            last_scan_index=self._last_scan_index,
+            last_map_global=self._last_map_global,
+            external_start_default_log_delta=self._external_start_initial_log_delta,
+            assoc_pad_label=TOMHTTracker.ASSOC_PAD,
         )
+        self._last_map_global = result.map_global
         self._apply_output_publication(self._last_map_global)
         self.global_hypotheses = [self._last_map_global]
 
@@ -983,79 +980,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
             raise RuntimeError(
                 "Pruning feasibility check failed. " f"stage={stage}; {dbg}"
-            )
-
-    # =========================================================================
-    # External-Start Helpers
-    # =========================================================================
-
-    def _make_external_start_root(
-        self,
-        start: Track,
-        time: datetime.datetime,
-    ) -> TrackHypothesisNode:
-        """Convert one confirmed external start Track into an inserted root node."""
-        if len(start) == 0:
-            raise ValueError(
-                "External starts must contain at least one state at the current timestamp."
-            )
-
-        start_timestamp = getattr(start.states[-1], "timestamp", None)
-        if start_timestamp != time:
-            raise ValueError(
-                "External starts must already be initialised at the supplied "
-                f"timestamp. Expected {time!r}, got {start_timestamp!r}."
-            )
-
-        age = max(int(start.metadata.get("age", len(start))), 1)
-        hits = int(start.metadata.get("hits", age))
-        hits = min(max(hits, 1), age)
-        state = start.states[-1]
-        if self._last_scan_index is None:
-            raise RuntimeError(
-                "External starts require at least one completed update_tracker() call."
-            )
-        log_delta = self._external_start_initial_log_delta
-        # Input metadata["existence_probability"] is an optional upstream initial
-        # prior. Output metadata["existence_probability"] is tracker score-implied.
-        metadata_existence_probability = start.metadata.get("existence_probability")
-        if metadata_existence_probability is not None:
-            try:
-                log_delta = _existence_probability_to_log_odds(
-                    metadata_existence_probability,
-                    parameter_name="external start metadata['existence_probability']",
-                )
-            except ValueError:
-                log_delta = self._external_start_initial_log_delta
-
-        return self._tree_store.create_root_tree_for_new_track(
-            scan_index=int(self._last_scan_index),
-            timestamp=getattr(state, "timestamp", time),
-            state=state,
-            state_kind="external_start",
-            used_det_key=None,
-            assoc_label=TOMHTTracker.ASSOC_PAD,
-            log_delta=log_delta,
-            age=age,
-            hits=hits,
-            root_source="external_start",
-        )
-
-    def _validate_external_starts_timestamp(self, time: datetime.datetime) -> None:
-        """Validate add_external_starts(...) ordering and timestamp match."""
-        if not isinstance(time, datetime.datetime):
-            raise TypeError(
-                "add_external_starts() time must be a datetime.datetime instance."
-            )
-        if self._last_update_timestamp is None or self._last_scan_index is None:
-            raise RuntimeError(
-                "add_external_starts() requires a completed update_tracker() first."
-            )
-        if time != self._last_update_timestamp:
-            raise ValueError(
-                "add_external_starts() time must match the most recent "
-                f"completed update_tracker() timestamp. Expected {self._last_update_timestamp!r}, "
-                f"got {time!r}."
             )
 
     # =========================================================================
