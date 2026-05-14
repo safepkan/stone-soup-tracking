@@ -4,7 +4,7 @@ Experimental repository for exploring Stone Soup tracking capabilities.
 
 ## Working with the Coding Agent
 
-See `AGENTS.md` for the collaboration workflow and expectations on keeping the docs in `mht/doc` synchronized with code changes.
+See `AGENTS.md` for the collaboration workflow and expectations on keeping the TO-MHT docs synchronized with code changes.
 
 ## Setup
 

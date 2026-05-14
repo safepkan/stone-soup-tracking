@@ -1,18 +1,19 @@
 # Chat context (paste into a new ChatGPT thread)
 
 This file exists to quickly bootstrap a new ChatGPT thread with project context.
-Design and algorithm rationale live in the Markdown docs listed below.
+Design, API, and algorithm rationale live in the Markdown docs listed below.
 
 ## Goal
 Implement a clear, general TO-MHT-style tracker in Python on top of Stone Soup.
 Use ChatGPT for high-level design and review, and Codex/VS Code for implementation.
-Keep the design docs in sync with the code.
+Keep the TO-MHT docs in sync with the code.
 
 ## Read first (canonical docs)
-- `TO_MHT_CURRENT_STATE.md` — what the tracker currently does
-- `TO_MHT_NEXT_STEPS.md` — the current implementation phase
-- `TO_MHT_ROADMAP.md` — high-level direction and priorities
-- `TO_MHT_REFERENCE.md` — references and notes
+- `mht/TO_MHT_API.md` — public API and integration guide
+- `mht/doc/TO_MHT_CURRENT_STATE.md` — what the tracker currently does
+- `mht/doc/TO_MHT_NEXT_STEPS.md` — the current implementation phase
+- `mht/doc/TO_MHT_ROADMAP.md` — high-level direction and priorities
+- `mht/doc/TO_MHT_REFERENCE.md` — references and notes
 
 ## Current baseline
 As of 2026-05-14, the tracker already has:
@@ -42,7 +43,7 @@ This means external track initiation is a first-class integration requirement.
 ## Ways of working
 - High-level planning and design review happen in ChatGPT.
 - Coding and execution happen in VS Code / Codex.
-- When code changes are made, update the relevant docs in `mht/doc`.
+- When code changes are made, update the relevant TO-MHT docs.
 - Use the project venv Python for commands; avoid plain `python`.
 - Workflow details and repo conventions live in `AGENTS.md`.
 
