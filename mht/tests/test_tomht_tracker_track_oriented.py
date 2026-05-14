@@ -21,6 +21,7 @@ from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 from stonesoup.types.update import Update
 
+from mht.tomht_model import GlobalHypothesis, TrackHypothesisNode
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
 
 
@@ -247,6 +248,81 @@ def _build_tracker(
         deleter=deleter,
         params=params,
     )
+
+
+def _run_post_n_scan_lifecycle(
+    tracker: TOMHTTracker,
+    *,
+    timestamp: datetime.datetime,
+    map_global: GlobalHypothesis | None = None,
+) -> GlobalHypothesis:
+    if map_global is None:
+        map_global = tracker._last_map_global
+    scan_index = (
+        0 if tracker._last_scan_index is None else int(tracker._last_scan_index)
+    )
+    filtered = tracker._apply_post_n_scan_track_lifecycle(
+        map_global=map_global,
+        cluster_snapshots=[],
+        scan_index=scan_index,
+        timestamp=timestamp,
+    )
+    tracker._last_map_global = filtered
+    tracker.global_hypotheses = [filtered]
+    return filtered
+
+
+def _set_track_active_leaf_scores(
+    tracker: TOMHTTracker,
+    *,
+    track_id: int,
+    scores: list[float],
+) -> list[TrackHypothesisNode]:
+    tree = tracker.track_trees_by_track_id[track_id]
+    leaf_ids = sorted(tree.active_leaf_node_ids)
+    if len(leaf_ids) != len(scores):
+        raise AssertionError(
+            f"Expected {len(scores)} active leaves for track {track_id}, "
+            f"got {len(leaf_ids)}."
+        )
+    leaves = [tracker._nodes_by_id[leaf_id] for leaf_id in leaf_ids]
+    for leaf, score in zip(leaves, scores):
+        leaf.accumulated_log_score = float(score)
+    return leaves
+
+
+def _replace_active_leaves_with_scores(
+    tracker: TOMHTTracker,
+    *,
+    track_id: int,
+    scores: list[float],
+    timestamp: datetime.datetime,
+) -> list[TrackHypothesisNode]:
+    tree = tracker.track_trees_by_track_id[track_id]
+    root = tracker._nodes_by_id[tree.root_node_id]
+    leaves: list[TrackHypothesisNode] = []
+    for score in scores:
+        leaf = tracker._tree_store.create_track_hypothesis_node(
+            track_id=track_id,
+            parent=root,
+            scan_index=int(root.scan_index) + 1,
+            timestamp=timestamp,
+            state=root.state,
+            state_kind="manual_test_leaf",
+            used_det_key=None,
+            assoc_label=TOMHTTracker.ASSOC_MISS,
+            log_delta=float(score) - float(root.accumulated_log_score),
+            age=int(root.age) + 1,
+            hits=int(root.hits),
+            missed_count=0,
+            last_det_key=None,
+            last_det_hit=False,
+            root_source=root.root_source,
+            birth_scan_index=root.birth_scan_index,
+        )
+        leaves.append(leaf)
+    tree.active_leaf_node_ids = {leaf.node_id for leaf in leaves}
+    return leaves
 
 
 class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
@@ -775,6 +851,354 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertEqual("published", tree.publication_state)
         output_tracks = tracker.get_map_output_tracks()
         self.assertEqual(1, len(output_tracks))
+
+    def test_score_deletion_removes_tentative_tree_below_threshold(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.5,
+                track_deletion_existence_probability=0.01,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+        self.assertEqual(
+            "tentative", tracker.track_trees_by_track_id[0].lifecycle_state
+        )
+        _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[_logit(0.005)],
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            filtered = _run_post_n_scan_lifecycle(tracker, timestamp=timestamp)
+
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertEqual({}, filtered.leaf_nodes_by_track_id)
+        self.assertEqual(set(), tracker.get_map_output_tracks(include_unpublished=True))
+
+    def test_score_deletion_removes_confirmed_tree_below_threshold(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.5,
+                track_deletion_existence_probability=0.01,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+        tracker.track_trees_by_track_id[0].lifecycle_state = "confirmed"
+        _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[_logit(0.005)],
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            _run_post_n_scan_lifecycle(tracker, timestamp=timestamp)
+
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertEqual(set(), tracker.get_map_output_tracks(include_unpublished=True))
+
+    def test_score_deletion_keeps_tree_above_threshold(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.5,
+                track_deletion_existence_probability=0.01,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+        _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[_logit(0.02)],
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            filtered = _run_post_n_scan_lifecycle(tracker, timestamp=timestamp)
+
+        self.assertIn(0, tracker.track_trees_by_track_id)
+        self.assertEqual({0}, set(filtered.leaf_nodes_by_track_id))
+
+    def test_score_deletion_uses_max_active_leaf_score(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.5,
+                track_deletion_existence_probability=0.01,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+        low_leaf, high_leaf = _replace_active_leaves_with_scores(
+            tracker,
+            track_id=0,
+            scores=[_logit(0.005), _logit(0.02)],
+            timestamp=timestamp,
+        )
+        map_global = GlobalHypothesis(
+            leaf_nodes_by_track_id={0: low_leaf},
+            log_weight=float(low_leaf.accumulated_log_score),
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            filtered = _run_post_n_scan_lifecycle(
+                tracker,
+                timestamp=timestamp,
+                map_global=map_global,
+            )
+
+        self.assertIn(0, tracker.track_trees_by_track_id)
+        self.assertEqual(low_leaf.node_id, filtered.leaf_nodes_by_track_id[0].node_id)
+        tree_score = tracker._tree_store.active_tree_max_accumulated_log_score(
+            tracker.track_trees_by_track_id[0]
+        )
+        self.assertIsNotNone(tree_score)
+        assert tree_score is not None
+        self.assertAlmostEqual(
+            float(high_leaf.accumulated_log_score),
+            float(tree_score),
+        )
+
+    def test_score_deletion_filters_current_map_global_to_live_trees(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.5,
+                track_deletion_existence_probability=0.01,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(
+            timestamp,
+            [_track_start(0.0, timestamp), _track_start(10.0, timestamp)],
+        )
+        _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[_logit(0.005)],
+        )
+        _set_track_active_leaf_scores(
+            tracker,
+            track_id=1,
+            scores=[_logit(0.02)],
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            filtered = _run_post_n_scan_lifecycle(tracker, timestamp=timestamp)
+
+        self.assertEqual({1}, set(tracker.track_trees_by_track_id))
+        self.assertEqual({1}, set(filtered.leaf_nodes_by_track_id))
+        map_snapshot = tracker.get_map_hypothesis_snapshot()
+        self.assertIsNotNone(map_snapshot)
+        assert map_snapshot is not None
+        self.assertEqual({1}, set(map_snapshot.leaf_nodes_by_track_id))
+
+    def test_score_deletion_composes_with_miss_deletion_diagnostics(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.5,
+                track_deletion_existence_probability=0.01,
+                max_missed=0,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(
+            timestamp,
+            [_track_start(0.0, timestamp), _track_start(10.0, timestamp)],
+        )
+        score_leaf = _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[_logit(0.005)],
+        )[0]
+        miss_leaf = _set_track_active_leaf_scores(
+            tracker,
+            track_id=1,
+            scores=[_logit(0.02)],
+        )[0]
+        self.assertEqual(0, score_leaf.missed_count)
+        miss_leaf.missed_count = 1
+
+        log_stream = io.StringIO()
+        with contextlib.redirect_stdout(log_stream):
+            filtered = _run_post_n_scan_lifecycle(tracker, timestamp=timestamp)
+
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertEqual({}, filtered.leaf_nodes_by_track_id)
+        log_output = log_stream.getvalue()
+        self.assertIn("TRACK_LIFECYCLE", log_output)
+        self.assertIn("terminated=[0, 1]", log_output)
+        self.assertIn("score:[0]", log_output)
+        self.assertIn("miss:[1]", log_output)
+
+    def test_score_deletion_runs_with_configured_deleter(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            deleter=_MetadataMissCountDeleter(threshold=99),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.5,
+                track_deletion_existence_probability=0.01,
+                max_missed=999,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+        leaf = _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[_logit(0.005)],
+        )[0]
+        leaf.missed_count = 0
+
+        log_stream = io.StringIO()
+        with contextlib.redirect_stdout(log_stream):
+            _run_post_n_scan_lifecycle(tracker, timestamp=timestamp)
+
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertIn("deleter=_MetadataMissCountDeleter", log_stream.getvalue())
+        self.assertIn("score:[0]", log_stream.getvalue())
+
+    def test_score_deletion_does_not_reuse_public_ids(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.5,
+                track_deletion_existence_probability=0.01,
+                publish_lifecycle_states=("tentative", "confirmed"),
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+        first_tree = tracker.track_trees_by_track_id[0]
+        self.assertEqual("published", first_tree.publication_state)
+        self.assertEqual(0, first_tree.public_track_id)
+
+        _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[_logit(0.005)],
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            _run_post_n_scan_lifecycle(tracker, timestamp=timestamp)
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+
+        tracker.add_external_starts(timestamp, [_track_start(10.0, timestamp)])
+
+        self.assertEqual({1}, set(tracker.track_trees_by_track_id))
+        second_tree = tracker.track_trees_by_track_id[1]
+        self.assertEqual("published", second_tree.publication_state)
+        self.assertEqual(1, second_tree.public_track_id)
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        self.assertEqual(1, output_track.id)
+        self.assertEqual(1, output_track.metadata["public_track_id"])
+
+    def test_score_deletion_removes_published_and_unpublished_trees(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.5,
+                track_deletion_existence_probability=0.01,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(
+            timestamp,
+            [_track_start(0.0, timestamp), _track_start(10.0, timestamp)],
+        )
+        published_tree = tracker.track_trees_by_track_id[0]
+        tracker._ensure_public_track_id(published_tree)
+        published_tree.publication_state = "published"
+        self.assertEqual(
+            "unpublished", tracker.track_trees_by_track_id[1].publication_state
+        )
+
+        _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[_logit(0.005)],
+        )
+        _set_track_active_leaf_scores(
+            tracker,
+            track_id=1,
+            scores=[_logit(0.005)],
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            filtered = _run_post_n_scan_lifecycle(tracker, timestamp=timestamp)
+
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertEqual({}, filtered.leaf_nodes_by_track_id)
+        self.assertEqual(set(), tracker.get_map_output_tracks(include_unpublished=True))
 
     def test_max_missed_drops_leaf_and_removes_tree(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)

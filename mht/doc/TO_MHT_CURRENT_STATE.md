@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, determinism fixes, output-history restoration, solver-seam extraction, exact-backend experiments, local-association ownership refactor, explicit NLL scoring cleanup, local-association optimization work, internal-start cleanup, scoring-constructor simplification, first tree-level confirmation lifecycle step, and sticky output-publication gate completed through **2026-05-14**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, determinism fixes, output-history restoration, solver-seam extraction, exact-backend experiments, local-association ownership refactor, explicit NLL scoring cleanup, local-association optimization work, internal-start cleanup, scoring-constructor simplification, first tree-level confirmation lifecycle step, sticky output-publication gate, and score-based whole-track deletion completed through **2026-05-14**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -10,7 +10,7 @@ Update (2026-04-20): core TO-MHT modules now use package-relative intra-module i
 Update (2026-04-20): shared tracker/scoring context typing now starts in `mht/tomht_types.py` (`ScanContext`), reducing cross-module coupling and making room for additional shared type definitions.
 Update (2026-04-20): runtime utility helpers now live in `mht/utils.py` (`env_flag`, `env_float`, `ns_to_ms`, cross-platform `get_process_maxrss_mb`) and are reused by tracker and OR-Tools profiling paths.
 Update (2026-04-20): TOMHT output `Track.id` became tracker-controlled instead of relying on Stone Soup auto-UUIDs.
-Update (2026-04-20): post-N-scan whole-track lifecycle now has two lanes: default node-native miss-threshold policy (`max_missed`) and optional injected Stone Soup `Deleter` policy (`deleter=` in tracker constructor). `track_miss_termination_mode` remains the leaf-selection mode for either lane.
+Update (2026-04-20): post-N-scan whole-track lifecycle has a default node-native miss-threshold lane (`max_missed`) and an optional injected Stone Soup `Deleter` lane (`deleter=` in tracker constructor). `track_miss_termination_mode` remains the leaf-selection mode for miss/deleter evaluation.
 Update (2026-04-20): expansion timing instrumentation now splits `expand_ms` into explicit hypothesiser and updater components (`expand_hypothesise_ms`, `expand_update_ms`) plus call counts, so replay timing can attribute expansion cost between `hypothesise()` and `update()` directly.
 Update (2026-05-11): `TOMHTParams` now lives in `mht/tomht_params.py` so extracted helper modules can depend on tracker configuration without importing `TOMHTTracker`; `tomht_tracker.py` still re-exports it for compatibility. Local expansion orchestration now lives in `mht/tomht_expansion.py`, internal-birth candidate helpers now live in `mht/tomht_births.py`, cluster work construction and overload cluster decomposition now live in `mht/tomht_clustering.py`, post-solve supported-leaf pruning now lives in `mht/tomht_pruning.py`, and TOMHT-specific scan/debug helpers now live in `mht/tomht_utils.py`. `TOMHTTracker` still orchestrates the same pipeline, but local expansion/candidate handling, internal-birth residual/candidate utilities, full-history cluster construction, overload-split transformation, retained-global leaf-support pruning, detection sorting, detection-key filtering, and detection-key debug formatting are now isolated behind narrow helper functions.
 Update (2026-05-12): persistent tree/node bookkeeping now lives in `mht/tomht_tree_store.py`. Stable ID allocation, node/root creation, single-root tree insertion, active-leaf bookkeeping, active count helpers, empty-tree removal, and unreachable-node cleanup are now owned by `TrackTreeStore`, while `TOMHTTracker` keeps compatibility properties for direct tree/node table inspection.
@@ -22,6 +22,7 @@ Update (2026-05-13): `TOMHTTracker.__init__` no longer accepts a public `scoring
 Update (2026-05-14): `TrackTree` now carries sticky `lifecycle_state` (`tentative` or `confirmed`). New internal and external trees start tentative. After supported-leaf pruning and MAP-only N-scan pruning, tentative trees are promoted to confirmed when max active-leaf accumulated score crosses `TOMHTParams.track_confirmation_existence_probability` (default `0.9`, converted to log-odds internally). This does not change deletion behavior; MAP outputs include `metadata["lifecycle_state"]`. Scan stats and summary output include tentative/confirmed active-tree counts.
 Update (2026-05-14): output publication is now separate from internal confirmation. `TrackTree.publication_state` starts as `unpublished` and promotes stickily to `published` for MAP-selected live trees that pass `TOMHTParams.publish_lifecycle_states`, `publish_min_hits`, `publish_min_age`, and `publish_min_existence_probability`. The default publishes confirmed MAP tracks only, so tentative trees remain internal by default. Standard `update_tracker(...)`, `tracks`, and `get_map_output_tracks()` return published MAP tracks; `get_map_output_tracks(include_unpublished=True)` reconstructs all live MAP tracks for inspection. Output metadata now includes `publication_state` when tree context is available, and scan logs report MAP-published vs MAP-unpublished counts.
 Update (2026-05-14): public output IDs are now assigned at the sticky publication transition. `TrackTree.track_id` remains the internal logical ID allocated at tree creation, while `TrackTree.public_track_id` starts as `None` and is assigned once when the tree first becomes published. The default `output_track_id_mapper` now assigns dense integer public IDs in first-publication order; custom mappers are still honored at publication time. Published output `Track.id` uses `public_track_id`; metadata keeps `track_id`/`internal_track_id` for internal debugging and `public_track_id` for the output identity. Unpublished inspection tracks do not consume public IDs.
+Update (2026-05-14): whole-track score deletion now runs after sticky confirmation and MAP-only N-scan pruning. `TOMHTParams.track_deletion_existence_probability` defaults to `0.01` (log-odds about `-4.595`) and deletes a whole `TrackTree` when `max(active_leaf.accumulated_log_score)` is at or below the threshold. This is the primary principled mechanism for killing low-score spurious starts. Node-native miss deletion and optional Stone Soup deleters remain additional backstops/domain hooks, and `TRACK_LIFECYCLE` diagnostics report deletion reasons (`score`, `miss`, `deleter`).
 
 ---
 
@@ -206,7 +207,7 @@ The tracker’s current runtime pipeline is:
 7. post-solve prune each cluster tree frontier to leaves supported by retained rebuilt globals,
 8. merge cluster MAP selections into full-scan MAP,
 9. apply MAP-only N-scan pruning on explicit trees,
-10. apply whole-track lifecycle (sticky confirmation, then node-native miss-threshold by default or optional Stone Soup deleter),
+10. apply whole-track lifecycle (sticky confirmation, then score deletion plus node-native miss-threshold by default or optional Stone Soup deleter),
 11. update sticky output-publication state for MAP-selected live trees,
 12. reclaim unreachable node storage, keep last-scan debug snapshots, and return published MAP output tracks.
 
@@ -368,11 +369,23 @@ N-scan pruning remains MAP-only:
 
 The default N-scan window is currently `6`.
 
-### Whole-track miss lifecycle
+### Whole-track score/miss lifecycle
 
 Per-branch miss-based pruning during local expansion has been removed.
 
-Miss handling now happens as **whole-track termination after N-scan pruning**, using:
+Whole-track termination happens after sticky confirmation and MAP-only N-scan pruning.
+
+Score deletion uses the same tree-level aggregate convention as confirmation:
+
+```text
+tree_score = max(active_leaf.accumulated_log_score)
+```
+
+over active leaves. If `tree_score <= logit(track_deletion_existence_probability)`, the whole `TrackTree` is removed and the current MAP global is filtered to live trees. The default deletion probability is `0.01`, which is intentionally conservative. Confirmation and deletion are therefore hysteresis-style score gates: confirmation is sticky at the high threshold, while deletion removes the tree at the low threshold.
+
+Score deletion is the primary principled mechanism for killing low-score spurious starts. Miss-count and Stone Soup deleter paths are additional lifecycle backstops/domain hooks.
+
+Miss handling is still available as whole-track termination, using:
 
 - configurable `track_miss_termination_mode`
   - `all_active_leaves`
@@ -380,7 +393,7 @@ Miss handling now happens as **whole-track termination after N-scan pruning**, u
   - `global_k_leaves`
 - threshold `max(max_missed, ns_scan_window + 1)`
 
-This is cleaner than the earlier branch-local miss handling, but it is also part of why low-quality trees can persist longer than before.
+When no custom deleter is configured, score and miss deletion are OR-composed. When a custom Stone Soup deleter is configured, score deletion still runs and the deleter lane replaces the node-native miss lane. `TRACK_LIFECYCLE` logs summarize terminated track IDs by reason (`score`, `miss`, `deleter`) so replay output can show which lifecycle criterion is doing the work.
 
 ---
 
@@ -631,16 +644,17 @@ A few observations now look important:
 - once a birth candidate survives capping, it is inserted directly as a persistent `TrackTree`,
 - after insertion there is no old-style “track absent” alternative,
 - false starts therefore appear easier to preserve, not just easier to create,
-- whole-track miss kill is slower and more permissive than the earlier branch-local miss-pruning path,
+- score-based whole-track deletion is now the intended primary cleanup path for low-score spurious starts,
+- miss-count deletion remains a slower lifecycle backstop,
 - and the default `track_miss_termination_mode="map_leaf"` is conservative in ambiguous periods.
 
 Taken together, the current false-start behavior is most plausibly explained by the combination of:
 
 - direct birth insertion,
 - effectively mandatory post-birth existence,
-- and slower lifecycle kill.
+- and score/miss lifecycle tuning.
 
-Scoring may also contribute, but currently looks like a secondary factor rather than the first suspect.
+Scoring and score-threshold calibration are now central to false-start cleanup rather than only secondary review items.
 
 ### Operational note
 

@@ -31,7 +31,8 @@ The tracker is now in a better shape for this work because several pieces have a
 - the public `TOMHTTracker(scoring_model=...)` injection point and `make_default_scoring_model(...)` factory have been removed; the tracker directly constructs `NLLScoringModel`,
 - there is no tracker-core `birth_density` parameter; birth-density reasoning is guidance for choosing an initiator-start existence prior,
 - `TrackTree` now has sticky `tentative`/`confirmed` lifecycle state driven by max active-leaf score crossing `TOMHTParams.track_confirmation_existence_probability`,
-- output publication is now a separate sticky tree-level state (`unpublished`/`published`) with configurable emit gating; the default publishes confirmed tracks only.
+- output publication is now a separate sticky tree-level state (`unpublished`/`published`) with configurable emit gating; the default publishes confirmed tracks only,
+- whole-track score deletion now removes trees whose max active-leaf score falls below `TOMHTParams.track_deletion_existence_probability`.
 
 These changes make the next scoring/birth steps easier to reason about.
 
@@ -190,7 +191,6 @@ Confirmation is applied after supported-leaf pruning and MAP-only N-scan pruning
 
 - no un-confirming,
 - confirmation itself does not delete tracks or directly filter output,
-- no score-based deletion yet,
 - MAP output tracks include `metadata["lifecycle_state"]`,
 - scan stats and summary output report tentative vs confirmed active-tree counts.
 
@@ -224,11 +224,25 @@ Public output identity is now separate from internal tree identity. `TrackTree.t
 
 When simple one-detection initiators are used, the tracker may internally carry more tentative tracks. That is expected; the publication gate now controls only returned/emitted tracks, not whether the internal MHT state keeps tentative hypotheses.
 
-### Step 6: Revisit pruning and expansion-volume controls
+### Step 6: Add score-based whole-track deletion
 
-After scoring, births, and output confirmation are coherent, return to:
+Implemented (2026-05-14): `TOMHTParams.track_deletion_existence_probability` now defaults to `0.01` and is validated as `0.0 < p < 1.0`. The tracker converts it to log-odds internally and applies it after sticky confirmation and MAP-only N-scan pruning:
 
-- score-based track/leaf pruning,
+```text
+delete tree if max(active_leaf.accumulated_log_score) <= logit(track_deletion_existence_probability)
+```
+
+This deletes the whole `TrackTree` and filters the current MAP global to surviving live trees. Confirmation and deletion now form hysteresis-style score gates: confirmation is sticky at the high score threshold, while deletion is a low score threshold that removes the tree.
+
+Score deletion is the primary principled mechanism for killing low-score spurious starts. Existing miss-count deletion and optional Stone Soup deleters remain lifecycle backstops/domain hooks. Score deletion runs in both existing lifecycle lanes; with no custom deleter it OR-composes with node-native miss deletion, and with a custom deleter it still runs alongside deleter deletion. `TRACK_LIFECYCLE` logs now report terminated IDs by deterministic reason groups (`score`, `miss`, `deleter`).
+
+Published-tree deletion needs no separate unpublish step. Public IDs are not reused after deletion, and dense publication-time ID assignment remains unchanged.
+
+### Step 7: Revisit pruning and expansion-volume controls
+
+After scoring, births, confirmation, publication, and whole-track score deletion are coherent, return to:
+
+- broader score-based leaf pruning,
 - selective expansion,
 - expansion-volume characterization,
 - overload-split pruning behavior,

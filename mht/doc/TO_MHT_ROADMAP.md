@@ -108,13 +108,13 @@ Recent review notes still suggest that false starts likely became worse after th
 
 - birth candidates become real trees immediately,
 - post-birth existence is effectively mandatory,
-- and whole-track lifecycle kill is slower/more permissive than before.
+- and whole-track lifecycle tuning is now score-threshold driven, with miss-count/deleter paths as backstops.
 
 This topic includes:
 
 - whether internal births should remain direct tree insertion or gain a more uncertain/probationary stage,
 - whether the current residual policy is too conservative or appropriately protective,
-- whether miss-lifecycle policy is too permissive for low-quality birth trees,
+- whether the score deletion threshold and miss-lifecycle backstop are calibrated for low-quality birth trees,
 - candidate observability and TO-MHT-native birth impact statistics,
 - general false-start tuning,
 - and follow-up review of target swapping / track jumping in replay output.

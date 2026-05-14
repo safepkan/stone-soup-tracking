@@ -196,6 +196,19 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
                         track_confirmation_existence_probability=probability,
                     )
 
+    def test_track_deletion_existence_probability_rejects_boundaries(
+        self,
+    ) -> None:
+        for probability in (0.0, 1.0):
+            with self.subTest(probability=probability):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "track_deletion_existence_probability",
+                ):
+                    TOMHTParams(
+                        track_deletion_existence_probability=probability,
+                    )
+
     def test_publication_params_validate_domains(self) -> None:
         self.assertEqual(("confirmed",), TOMHTParams().publish_lifecycle_states)
         TOMHTParams(publish_lifecycle_states=())

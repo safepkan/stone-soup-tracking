@@ -77,6 +77,11 @@ class TOMHTParams:
     # Sticky tree-level confirmation threshold. Internally converted to log-odds
     # and compared against max active-leaf accumulated score.
     track_confirmation_existence_probability: float = 0.9
+    # Conservative tree-level deletion threshold. Internally converted to
+    # log-odds and compared against max active-leaf accumulated score after
+    # N-scan pruning. Confirmation/deletion form a hysteresis-style pair:
+    # confirmation is sticky, while deletion removes the whole tree.
+    track_deletion_existence_probability: float = 0.01
     # Sticky output-publication gate. By default, only confirmed MAP tracks are
     # published; tentative trees remain internal and inspectable.
     publish_lifecycle_states: tuple[str, ...] = ("confirmed",)
@@ -127,6 +132,10 @@ class TOMHTParams:
         _existence_probability_to_log_odds(
             self.track_confirmation_existence_probability,
             parameter_name="track_confirmation_existence_probability",
+        )
+        _existence_probability_to_log_odds(
+            self.track_deletion_existence_probability,
+            parameter_name="track_deletion_existence_probability",
         )
         _existence_probability_to_log_odds(
             self.initiator_start_initial_existence_probability,

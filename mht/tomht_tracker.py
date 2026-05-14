@@ -162,8 +162,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     9. Apply MAP-only N-scan tree pruning: root promotion, committed states,
        active leaves, and disagreement stats.
     10. Apply whole-track lifecycle: sticky score-based confirmation, then
-        post-N-scan termination (node-native miss policy by default, or optional
-        Stone Soup deleter when configured).
+        post-N-scan termination. Score deletion always runs; node-native miss
+        policy is used by default, and an optional Stone Soup deleter can replace
+        the miss lane as a domain-specific hook.
     11. Update sticky output-publication state for MAP-selected live trees.
     12. Keep last-scan debug snapshots and return published MAP output tracks.
 
@@ -221,6 +222,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     _output_track_id_mapper: Callable[[int], object]
     _external_start_initial_log_delta: float
     _track_confirmation_log_odds_threshold: float
+    _track_deletion_log_odds_threshold: float
     _publish_lifecycle_states: frozenset[str]
     _publish_min_existence_log_odds_threshold: float | None
 
@@ -265,7 +267,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         deleter : Deleter | None
             Optional Stone Soup deleter used for post-N-scan whole-track
             termination decisions. When provided, deleter-based lifecycle
-            supersedes node-native miss-threshold lifecycle.
+            supersedes node-native miss-threshold lifecycle, but score-based
+            deletion still runs.
         params : TOMHTParams
             Tracker configuration.
         params_overrides : Mapping[str, Any] | None
@@ -284,6 +287,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         track_confirmation_log_odds_threshold = _existence_probability_to_log_odds(
             params.track_confirmation_existence_probability,
             parameter_name="track_confirmation_existence_probability",
+        )
+        track_deletion_log_odds_threshold = _existence_probability_to_log_odds(
+            params.track_deletion_existence_probability,
+            parameter_name="track_deletion_existence_probability",
         )
         publish_min_existence_log_odds_threshold: float | None
         if float(params.publish_min_existence_probability) <= 0.0:
@@ -315,6 +322,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._track_confirmation_log_odds_threshold = (
             track_confirmation_log_odds_threshold
         )
+        self._track_deletion_log_odds_threshold = track_deletion_log_odds_threshold
         self._publish_lifecycle_states = frozenset(params.publish_lifecycle_states)
         self._publish_min_existence_log_odds_threshold = (
             publish_min_existence_log_odds_threshold
@@ -1327,6 +1335,80 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             log_weight=float(map_global.log_weight),
         )
 
+    @staticmethod
+    def _add_track_termination_reason(
+        termination_reasons_by_track_id: dict[int, set[str]],
+        *,
+        track_id: int,
+        reason: str,
+    ) -> None:
+        """Record one deterministic whole-track termination reason."""
+        termination_reasons_by_track_id.setdefault(int(track_id), set()).add(reason)
+
+    def _collect_score_track_termination_reasons(self) -> dict[int, set[str]]:
+        """Return whole-tree score deletions from max active-leaf score."""
+        threshold = float(self._track_deletion_log_odds_threshold)
+        termination_reasons_by_track_id: dict[int, set[str]] = {}
+        for track_id, tree in sorted(self._tree_store.track_trees_by_track_id.items()):
+            tree_score = self._tree_store.active_tree_max_accumulated_log_score(tree)
+            if tree_score is None:
+                continue
+            if float(tree_score) <= threshold:
+                self._add_track_termination_reason(
+                    termination_reasons_by_track_id,
+                    track_id=track_id,
+                    reason="score",
+                )
+        return termination_reasons_by_track_id
+
+    @staticmethod
+    def _format_track_termination_reasons(
+        termination_reasons_by_track_id: dict[int, set[str]],
+    ) -> str:
+        """Format track termination reasons in stable reason/track order."""
+        parts: list[str] = []
+        for reason in ("score", "miss", "deleter"):
+            track_ids = [
+                track_id
+                for track_id in sorted(termination_reasons_by_track_id)
+                if reason in termination_reasons_by_track_id[track_id]
+            ]
+            if track_ids:
+                parts.append(f"{reason}:{track_ids}")
+        return ";".join(parts)
+
+    def _remove_terminated_track_trees(
+        self,
+        *,
+        termination_reasons_by_track_id: dict[int, set[str]],
+        mode: str,
+        miss_threshold: int | None,
+        deleter: Deleter | None,
+    ) -> None:
+        """Remove terminated trees and emit one deterministic lifecycle diagnostic."""
+        if not termination_reasons_by_track_id:
+            return
+
+        terminated_track_ids = sorted(termination_reasons_by_track_id)
+        for track_id in terminated_track_ids:
+            self._tree_store.track_trees_by_track_id.pop(track_id, None)
+
+        diagnostic_parts = [
+            "TRACK_LIFECYCLE",
+            f"mode={mode}",
+            f"score_threshold={self._track_deletion_log_odds_threshold:.6g}",
+        ]
+        if miss_threshold is not None:
+            diagnostic_parts.append(f"miss_threshold={miss_threshold}")
+        if deleter is not None:
+            diagnostic_parts.append(f"deleter={type(deleter).__name__}")
+        diagnostic_parts.append(f"terminated={terminated_track_ids}")
+        diagnostic_parts.append(
+            "reasons="
+            + self._format_track_termination_reasons(termination_reasons_by_track_id)
+        )
+        print(" ".join(diagnostic_parts))
+
     def _apply_post_n_scan_track_miss_lifecycle(
         self,
         *,
@@ -1341,7 +1423,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         threshold = self._effective_track_miss_threshold()
 
-        terminated_track_ids: list[int] = []
+        termination_reasons_by_track_id = (
+            self._collect_score_track_termination_reasons()
+        )
         track_trees_by_track_id = self._tree_store.track_trees_by_track_id
         for track_id, tree in sorted(track_trees_by_track_id.items()):
             leaves = self._track_miss_termination_leaves(
@@ -1354,16 +1438,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             if not leaves:
                 continue
             if all(int(leaf.missed_count) >= threshold for leaf in leaves):
-                terminated_track_ids.append(track_id)
+                self._add_track_termination_reason(
+                    termination_reasons_by_track_id,
+                    track_id=track_id,
+                    reason="miss",
+                )
 
-        if terminated_track_ids:
-            for track_id in terminated_track_ids:
-                track_trees_by_track_id.pop(track_id, None)
-            print(
-                "TRACK_LIFECYCLE "
-                f"mode={mode} miss_threshold={threshold} "
-                f"terminated={terminated_track_ids}"
-            )
+        self._remove_terminated_track_trees(
+            termination_reasons_by_track_id=termination_reasons_by_track_id,
+            mode=mode,
+            miss_threshold=threshold,
+            deleter=None,
+        )
 
         self._tree_store.remove_empty_trees()
         return self._filter_map_global_to_live_trees(map_global)
@@ -1387,7 +1473,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             self.params.track_miss_termination_mode
         )
 
-        terminated_track_ids: list[int] = []
+        termination_reasons_by_track_id = (
+            self._collect_score_track_termination_reasons()
+        )
         track_trees_by_track_id = self._tree_store.track_trees_by_track_id
         for track_id, tree in sorted(track_trees_by_track_id.items()):
             leaves = self._track_miss_termination_leaves(
@@ -1415,16 +1503,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 )
                 leaf_delete_decisions.append(should_delete)
             if leaf_delete_decisions and all(leaf_delete_decisions):
-                terminated_track_ids.append(track_id)
+                self._add_track_termination_reason(
+                    termination_reasons_by_track_id,
+                    track_id=track_id,
+                    reason="deleter",
+                )
 
-        if terminated_track_ids:
-            for track_id in terminated_track_ids:
-                track_trees_by_track_id.pop(track_id, None)
-            print(
-                "TRACK_LIFECYCLE "
-                f"lane=deleter deleter={type(deleter).__name__} "
-                f"mode={mode} terminated={terminated_track_ids}"
-            )
+        self._remove_terminated_track_trees(
+            termination_reasons_by_track_id=termination_reasons_by_track_id,
+            mode=mode,
+            miss_threshold=None,
+            deleter=deleter,
+        )
 
         self._tree_store.remove_empty_trees()
         return self._filter_map_global_to_live_trees(map_global)
