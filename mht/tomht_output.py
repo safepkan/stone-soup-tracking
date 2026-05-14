@@ -1,6 +1,5 @@
 """Stone Soup output-adapter helpers for TOMHT node-based internals."""
 
-from collections.abc import Callable
 from math import exp
 
 from stonesoup.types.track import Track
@@ -39,6 +38,7 @@ def output_track_metadata_from_leaf_node(
     *,
     lifecycle_state: TrackLifecycleState | None = None,
     publication_state: TrackPublicationState | None = None,
+    public_track_id: object | None = None,
 ) -> dict[str, object]:
     """
     Build the explicit TOMHT-owned metadata projection for a reconstructed output
@@ -53,8 +53,10 @@ def output_track_metadata_from_leaf_node(
     - This is an explicit projection from the internal node state.
     - Arbitrary metadata from input birth tracks or external-start tracks is
       intentionally not propagated.
-    - ``track_id`` is the stable logical-track identifier exposed on output
-      tracks.
+    - ``track_id`` and ``internal_track_id`` are the stable internal TOMHT
+      logical-track identifier.
+    - ``public_track_id`` mirrors ``Track.id`` for published tracks and is
+      ``None`` for unpublished inspection tracks.
     - ``existence_probability`` is currently score-implied from accumulated
       log-odds, not a fully calibrated probability; birth scoring is still
       under review.
@@ -71,6 +73,8 @@ def output_track_metadata_from_leaf_node(
     """
     metadata: dict[str, object] = {
         "track_id": int(leaf_node.track_id),
+        "internal_track_id": int(leaf_node.track_id),
+        "public_track_id": public_track_id,
         "node_id": int(leaf_node.node_id),
         "age": int(leaf_node.age),
         "hits": int(leaf_node.hits),
@@ -108,7 +112,8 @@ def reconstruct_track_from_committed_prefix_and_leaf_node(
     *,
     committed_states: list[State],
     leaf_node: TrackHypothesisNode,
-    output_track_id_mapper: Callable[[int], object] | None = None,
+    output_track_id: object | None = None,
+    public_track_id: object | None = None,
     lifecycle_state: TrackLifecycleState | None = None,
     publication_state: TrackPublicationState | None = None,
 ) -> Track:
@@ -116,17 +121,14 @@ def reconstruct_track_from_committed_prefix_and_leaf_node(
     lineage = lineage_from_leaf_node(leaf_node)
     unresolved_states = [node.state for node in lineage]
     internal_track_id = int(leaf_node.track_id)
-    mapped_output_track_id = (
-        internal_track_id
-        if output_track_id_mapper is None
-        else output_track_id_mapper(internal_track_id)
-    )
-    tr = Track([*committed_states, *unresolved_states], id=mapped_output_track_id)
+    track_id = internal_track_id if output_track_id is None else output_track_id
+    tr = Track([*committed_states, *unresolved_states], id=track_id)
     tr.metadata.update(
         output_track_metadata_from_leaf_node(
             leaf_node,
             lifecycle_state=lifecycle_state,
             publication_state=publication_state,
+            public_track_id=public_track_id,
         )
     )
     return tr

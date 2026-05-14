@@ -149,10 +149,12 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         tree = next(iter(tracker.track_trees_by_track_id.values()))
         self.assertEqual("tentative", tree.lifecycle_state)
         self.assertEqual("unpublished", tree.publication_state)
+        self.assertIsNone(tree.public_track_id)
         self.assertEqual(
             "unpublished",
             next(iter(tree_snapshot.values()))["publication_state"],
         )
+        self.assertIsNone(next(iter(tree_snapshot.values()))["public_track_id"])
 
         map_snapshot = tracker.get_map_hypothesis_snapshot()
         self.assertIsNotNone(map_snapshot)
@@ -170,6 +172,9 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         self.assertEqual(1, len(output_tracks))
         output_track = next(iter(output_tracks))
         self.assertEqual(leaf.track_id, output_track.metadata["track_id"])
+        self.assertEqual(leaf.track_id, output_track.metadata["internal_track_id"])
+        self.assertIsNone(output_track.metadata["public_track_id"])
+        self.assertEqual(leaf.track_id, output_track.id)
         self.assertEqual(leaf.node_id, output_track.metadata["node_id"])
         self.assertEqual("external_start", output_track.metadata["root_source"])
         self.assertEqual("tentative", output_track.metadata["lifecycle_state"])

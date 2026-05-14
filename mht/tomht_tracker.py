@@ -108,6 +108,19 @@ from .utils import get_process_maxrss_mb
 # ============================================================================
 
 
+class _DensePublishedTrackIdMapper:
+    """Assign dense public IDs in first-publication order."""
+
+    def __init__(self) -> None:
+        self._next_public_track_id = 0
+
+    def __call__(self, internal_track_id: int) -> int:
+        del internal_track_id
+        public_track_id = self._next_public_track_id
+        self._next_public_track_id += 1
+        return public_track_id
+
+
 @dataclass(frozen=True)
 class _MapNScanPruningPlan:
     """Planned MAP-only N-scan choices and diagnostics before mutation."""
@@ -259,8 +272,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             Optional field-level overrides applied onto ``params``.
         output_track_id_mapper : Callable[[int], object] | None
             Optional mapping from the tracker-internal integer logical track ID
-            to the public Stone Soup ``Track.id`` object for MAP outputs.
-            Defaults to pass-through integer IDs.
+            to the public Stone Soup ``Track.id`` object assigned when a tree
+            first becomes published. Defaults to dense integer IDs in
+            first-publication order.
         """
         params = self._apply_params_overrides(params, params_overrides)
         external_start_initial_log_delta = _existence_probability_to_log_odds(
@@ -462,7 +476,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> Callable[[int], object]:
         """Resolve and validate output Track.id mapping strategy."""
         if output_track_id_mapper is None:
-            return lambda track_id: int(track_id)
+            return _DensePublishedTrackIdMapper()
         if not callable(output_track_id_mapper):
             raise TypeError("output_track_id_mapper must be callable when provided.")
         return output_track_id_mapper
@@ -715,16 +729,24 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             tree = tree_store.track_trees_by_track_id.get(int(leaf_node.track_id))
             if tree is None:
                 continue
-            if not include_unpublished and tree.publication_state != "published":
+            is_published = tree.publication_state == "published"
+            if not include_unpublished and not is_published:
                 continue
+            if is_published:
+                public_track_id = self._ensure_public_track_id(tree)
+                output_track_id = public_track_id
+            else:
+                public_track_id = None
+                output_track_id = int(leaf_node.track_id)
             committed_states = list(tree.committed_states)
             output_tracks.add(
                 reconstruct_track_from_committed_prefix_and_leaf_node(
                     committed_states=committed_states,
                     leaf_node=leaf_node,
-                    output_track_id_mapper=self._output_track_id_mapper,
+                    output_track_id=output_track_id,
                     lifecycle_state=tree.lifecycle_state,
                     publication_state=tree.publication_state,
+                    public_track_id=public_track_id,
                 )
             )
         return output_tracks
@@ -771,6 +793,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 "root_source": tree.root_source,
                 "lifecycle_state": tree.lifecycle_state,
                 "publication_state": tree.publication_state,
+                "public_track_id": tree.public_track_id,
             }
         return MappingProxyType(out)
 
@@ -1199,12 +1222,27 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             if tree is None:
                 continue
             if tree.publication_state == "published":
+                self._ensure_public_track_id(tree)
                 continue
             if not self._map_leaf_satisfies_publication_policy(tree=tree, leaf=leaf):
                 continue
+            self._ensure_public_track_id(tree)
             tree.publication_state = "published"
             published_count += 1
         return published_count
+
+    def _ensure_public_track_id(self, tree: TrackTree) -> object:
+        """Return an existing public ID, assigning one if publication needs repair."""
+        if tree.public_track_id is not None:
+            return tree.public_track_id
+        public_track_id = self._output_track_id_mapper(int(tree.track_id))
+        if public_track_id is None:
+            raise ValueError(
+                "output_track_id_mapper returned None for a published TOMHT track; "
+                "None is reserved for unpublished inspection tracks."
+            )
+        tree.public_track_id = public_track_id
+        return public_track_id
 
     # =========================================================================
     # Whole-Track Lifecycle
@@ -1368,8 +1406,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 candidate_track = reconstruct_track_from_committed_prefix_and_leaf_node(
                     committed_states=committed_states,
                     leaf_node=leaf,
-                    output_track_id_mapper=self._output_track_id_mapper,
+                    output_track_id=int(leaf.track_id),
                     lifecycle_state=tree.lifecycle_state,
+                    public_track_id=tree.public_track_id,
                 )
                 should_delete = bool(
                     deleter.check_for_deletion(candidate_track, timestamp=timestamp)
@@ -1715,7 +1754,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
 
 def get_tomht_track_id(track: Track) -> int:
-    """Return the stable TOMHT logical track ID from a TOMHT output track."""
+    """Return the internal TOMHT logical track ID from a TOMHT output track."""
     try:
         return int(track.metadata["track_id"])
     except KeyError as exc:

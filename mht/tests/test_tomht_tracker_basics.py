@@ -346,13 +346,26 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
         output_track_t0 = next(iter(tracker.get_map_output_tracks()))
         self.assertEqual(0, output_track_t0.id)
         self.assertIsInstance(output_track_t0.id, int)
+        self.assertEqual(0, output_track_t0.metadata["track_id"])
+        self.assertEqual(0, output_track_t0.metadata["internal_track_id"])
+        self.assertEqual(0, output_track_t0.metadata["public_track_id"])
 
         tracker.update_tracker(t1, [])
         output_track_t1 = next(iter(tracker.get_map_output_tracks()))
         self.assertEqual(0, output_track_t1.id)
         self.assertIsInstance(output_track_t1.id, int)
+        self.assertEqual(0, output_track_t1.metadata["public_track_id"])
 
     def test_map_output_tracks_support_custom_track_id_mapping(self) -> None:
+        mapper_calls: list[int] = []
+
+        def mapper(track_id: int) -> _SystemTrackId:
+            mapper_calls.append(track_id)
+            return _SystemTrackId(
+                id=track_id,
+                metadata={"origin": "test"},
+            )
+
         tracker = _build_tracker(
             params=TOMHTParams(
                 publish_lifecycle_states=("tentative", "confirmed"),
@@ -361,21 +374,25 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
                 debug_display_births=False,
                 collect_stats=False,
             ),
-            output_track_id_mapper=lambda track_id: _SystemTrackId(
-                id=track_id,
-                metadata={"origin": "test"},
-            ),
+            output_track_id_mapper=mapper,
         )
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
 
         tracker.update_tracker(timestamp, [])
         tracker.add_external_starts(timestamp, [_external_start(timestamp)])
 
+        self.assertEqual([0], mapper_calls)
         output_track = next(iter(tracker.get_map_output_tracks()))
         self.assertIsInstance(output_track.id, _SystemTrackId)
         self.assertEqual(0, int(output_track.id))
         self.assertEqual("sys:0", str(output_track.id))
         self.assertEqual({"origin": "test"}, output_track.id.metadata)
+        self.assertEqual(output_track.id, output_track.metadata["public_track_id"])
+        self.assertEqual(0, output_track.metadata["track_id"])
+        self.assertEqual(0, output_track.metadata["internal_track_id"])
+
+        tracker.get_map_output_tracks()
+        self.assertEqual([0], mapper_calls)
 
 
 if __name__ == "__main__":

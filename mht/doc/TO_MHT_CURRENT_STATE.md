@@ -9,7 +9,7 @@ It is a **current-state snapshot**, not a roadmap and not a full design history.
 Update (2026-04-20): core TO-MHT modules now use package-relative intra-module imports (for example `.tomht_model`, `.tomht_cluster_solver`) so the tracker package can be relocated within the repo without hard-coding `mht` in internal dependencies.
 Update (2026-04-20): shared tracker/scoring context typing now starts in `mht/tomht_types.py` (`ScanContext`), reducing cross-module coupling and making room for additional shared type definitions.
 Update (2026-04-20): runtime utility helpers now live in `mht/utils.py` (`env_flag`, `env_float`, `ns_to_ms`, cross-platform `get_process_maxrss_mb`) and are reused by tracker and OR-Tools profiling paths.
-Update (2026-04-20): TOMHT output `Track.id` is now stable by default (internal integer track ID instead of Stone Soup auto-UUID), and constructor injection (`output_track_id_mapper`) allows mapping internal integer IDs to integration-specific public ID objects while keeping TOMHT internals dependency-free.
+Update (2026-04-20): TOMHT output `Track.id` became tracker-controlled instead of relying on Stone Soup auto-UUIDs.
 Update (2026-04-20): post-N-scan whole-track lifecycle now has two lanes: default node-native miss-threshold policy (`max_missed`) and optional injected Stone Soup `Deleter` policy (`deleter=` in tracker constructor). `track_miss_termination_mode` remains the leaf-selection mode for either lane.
 Update (2026-04-20): expansion timing instrumentation now splits `expand_ms` into explicit hypothesiser and updater components (`expand_hypothesise_ms`, `expand_update_ms`) plus call counts, so replay timing can attribute expansion cost between `hypothesise()` and `update()` directly.
 Update (2026-05-11): `TOMHTParams` now lives in `mht/tomht_params.py` so extracted helper modules can depend on tracker configuration without importing `TOMHTTracker`; `tomht_tracker.py` still re-exports it for compatibility. Local expansion orchestration now lives in `mht/tomht_expansion.py`, internal-birth candidate helpers now live in `mht/tomht_births.py`, cluster work construction and overload cluster decomposition now live in `mht/tomht_clustering.py`, post-solve supported-leaf pruning now lives in `mht/tomht_pruning.py`, and TOMHT-specific scan/debug helpers now live in `mht/tomht_utils.py`. `TOMHTTracker` still orchestrates the same pipeline, but local expansion/candidate handling, internal-birth residual/candidate utilities, full-history cluster construction, overload-split transformation, retained-global leaf-support pruning, detection sorting, detection-key filtering, and detection-key debug formatting are now isolated behind narrow helper functions.
@@ -21,6 +21,7 @@ Update (2026-05-13): internal starts are controlled by constructor initiator pre
 Update (2026-05-13): `TOMHTTracker.__init__` no longer accepts a public `scoring_model` argument. The tracker now always constructs `NLLScoringModel` from `TOMHTParams.prob_detect`, `TOMHTParams.clutter_density`, and `TOMHTParams.log_epsilon`; `make_default_scoring_model(...)` was removed, while the narrow `ScoringModel` protocol remains only as an internal expansion-helper type boundary.
 Update (2026-05-14): `TrackTree` now carries sticky `lifecycle_state` (`tentative` or `confirmed`). New internal and external trees start tentative. After supported-leaf pruning and MAP-only N-scan pruning, tentative trees are promoted to confirmed when max active-leaf accumulated score crosses `TOMHTParams.track_confirmation_existence_probability` (default `0.9`, converted to log-odds internally). This does not change deletion behavior; MAP outputs include `metadata["lifecycle_state"]`. Scan stats and summary output include tentative/confirmed active-tree counts.
 Update (2026-05-14): output publication is now separate from internal confirmation. `TrackTree.publication_state` starts as `unpublished` and promotes stickily to `published` for MAP-selected live trees that pass `TOMHTParams.publish_lifecycle_states`, `publish_min_hits`, `publish_min_age`, and `publish_min_existence_probability`. The default publishes confirmed MAP tracks only, so tentative trees remain internal by default. Standard `update_tracker(...)`, `tracks`, and `get_map_output_tracks()` return published MAP tracks; `get_map_output_tracks(include_unpublished=True)` reconstructs all live MAP tracks for inspection. Output metadata now includes `publication_state` when tree context is available, and scan logs report MAP-published vs MAP-unpublished counts.
+Update (2026-05-14): public output IDs are now assigned at the sticky publication transition. `TrackTree.track_id` remains the internal logical ID allocated at tree creation, while `TrackTree.public_track_id` starts as `None` and is assigned once when the tree first becomes published. The default `output_track_id_mapper` now assigns dense integer public IDs in first-publication order; custom mappers are still honored at publication time. Published output `Track.id` uses `public_track_id`; metadata keeps `track_id`/`internal_track_id` for internal debugging and `public_track_id` for the output identity. Unpublished inspection tracks do not consume public IDs.
 
 ---
 
@@ -455,13 +456,21 @@ Public output tracks are now reconstructed from:
 - plus the current unresolved leaf-node lineage,
 - only when the MAP-selected tree is in sticky `published` publication state.
 
+Published output `Track.id` is the tree’s sticky `public_track_id`, assigned
+once at first publication. Internal tree IDs remain available as
+`metadata["track_id"]` and `metadata["internal_track_id"]`; these are TOMHT
+logical IDs and may have gaps in the public output sequence when tentative
+trees never publish.
+
 This restores full logical output history across N-scan pruning while preserving the intended meaning of the explicit unresolved tree structure.
 
-`get_map_output_tracks(include_unpublished=True)` is available for inspection and reconstructs unpublished/tentative MAP-selected tracks without changing tree state. Publication remains sticky once a tree first reaches `published`.
+`get_map_output_tracks(include_unpublished=True)` is available for inspection and reconstructs unpublished/tentative MAP-selected tracks without changing tree state or allocating public IDs. Unpublished inspection tracks use the internal ID as their inspection-only `Track.id` and carry `metadata["public_track_id"] = None`. Publication remains sticky once a tree first reaches `published`.
 
 Returned `Track` metadata remains an explicit projection from the current leaf node, including:
 
-- stable logical `track_id`
+- stable internal logical `track_id`
+- `internal_track_id` (same value as `track_id`, explicit for consumers)
+- `public_track_id` (`Track.id` for published tracks, `None` for unpublished inspection tracks)
 - `node_id`
 - `age`
 - `hits`
