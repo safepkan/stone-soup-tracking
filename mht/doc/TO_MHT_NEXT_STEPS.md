@@ -32,6 +32,7 @@ The tracker is now in a better shape for this work because several pieces have a
 - there is no tracker-core `birth_density` parameter; birth-density reasoning is guidance for choosing an initiator-start existence prior,
 - `TrackTree` now has sticky `tentative`/`confirmed` lifecycle state driven by max active-leaf score crossing `TOMHTParams.track_confirmation_existence_probability`,
 - output publication is now a separate sticky tree-level state (`unpublished`/`published`) with configurable emit gating; the default publishes confirmed tracks only,
+- sticky output-publication and MAP output reconstruction helpers now live in `mht/tomht_output.py`,
 - whole-track score deletion now removes trees whose max active-leaf score falls below `TOMHTParams.track_deletion_existence_probability`,
 - whole-track lifecycle implementation now lives in `mht/tomht_lifecycle.py`, with `TOMHTTracker` retaining thin gateway methods only.
 

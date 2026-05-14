@@ -82,7 +82,10 @@ from .tomht_lifecycle import (
     internal_track_id_for_deleter_candidate,
 )
 from .tomht_output import (
-    reconstruct_track_from_committed_prefix_and_leaf_node,
+    DensePublishedTrackIdMapper,
+    apply_output_publication,
+    ensure_public_track_id,
+    reconstruct_map_output_tracks,
 )
 from .tomht_params import TOMHTParams
 from .tomht_pruning import apply_post_solve_supported_leaf_pruning
@@ -107,23 +110,6 @@ from .tomht_utils import (
 from .tomht_tree_store import TrackTreeStore
 from .tomht_tree_utils import child_of_root_on_path, is_descendant_of
 from .utils import get_process_maxrss_mb
-
-# ============================================================================
-# Tracker-Local Support Structures
-# ============================================================================
-
-
-class _DensePublishedTrackIdMapper:
-    """Assign dense public IDs in first-publication order."""
-
-    def __init__(self) -> None:
-        self._next_public_track_id = 0
-
-    def __call__(self, internal_track_id: int) -> int:
-        del internal_track_id
-        public_track_id = self._next_public_track_id
-        self._next_public_track_id += 1
-        return public_track_id
 
 
 @dataclass(frozen=True)
@@ -489,7 +475,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     ) -> Callable[[int], object]:
         """Resolve and validate output Track.id mapping strategy."""
         if output_track_id_mapper is None:
-            return _DensePublishedTrackIdMapper()
+            return DensePublishedTrackIdMapper()
         if not callable(output_track_id_mapper):
             raise TypeError("output_track_id_mapper must be callable when provided.")
         return output_track_id_mapper
@@ -733,36 +719,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         ``include_unpublished=True``, all internal MAP-selected live trees are
         reconstructed for inspection and carry publication metadata.
         """
-        map_snapshot = self.get_map_hypothesis_snapshot()
-        if map_snapshot is None:
-            return set()
-        tree_store = self._tree_store
-        output_tracks: set[Track] = set()
-        for leaf_node in map_snapshot.leaf_nodes_by_track_id.values():
-            tree = tree_store.track_trees_by_track_id.get(int(leaf_node.track_id))
-            if tree is None:
-                continue
-            is_published = tree.publication_state == "published"
-            if not include_unpublished and not is_published:
-                continue
-            if is_published:
-                public_track_id = self._ensure_public_track_id(tree)
-                output_track_id = public_track_id
-            else:
-                public_track_id = None
-                output_track_id = int(leaf_node.track_id)
-            committed_states = list(tree.committed_states)
-            output_tracks.add(
-                reconstruct_track_from_committed_prefix_and_leaf_node(
-                    committed_states=committed_states,
-                    leaf_node=leaf_node,
-                    output_track_id=output_track_id,
-                    lifecycle_state=tree.lifecycle_state,
-                    publication_state=tree.publication_state,
-                    public_track_id=public_track_id,
-                )
-            )
-        return output_tracks
+        return reconstruct_map_output_tracks(
+            tree_store=self._tree_store,
+            map_snapshot=self.get_map_hypothesis_snapshot(),
+            include_unpublished=include_unpublished,
+            output_track_id_mapper=self._output_track_id_mapper,
+        )
 
     def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
         """Return read-only node-native MAP state for inspection/debug."""
@@ -1199,55 +1161,26 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # Output Publication State
     # =========================================================================
 
-    def _map_leaf_satisfies_publication_policy(
-        self,
-        *,
-        tree: TrackTree,
-        leaf: TrackHypothesisNode,
-    ) -> bool:
-        """Return whether a MAP leaf can first transition to published output."""
-        if tree.lifecycle_state not in self._publish_lifecycle_states:
-            return False
-        if int(leaf.hits) < int(self.params.publish_min_hits):
-            return False
-        if int(leaf.age) < int(self.params.publish_min_age):
-            return False
-
-        threshold = self._publish_min_existence_log_odds_threshold
-        if threshold is not None and float(leaf.accumulated_log_score) < threshold:
-            return False
-        return True
-
     def _apply_output_publication(self, map_global: GlobalHypothesis) -> int:
         """Stickily publish MAP-selected trees that satisfy output policy."""
-        published_count = 0
-        track_trees_by_track_id = self._tree_store.track_trees_by_track_id
-        for track_id, leaf in sorted(map_global.leaf_nodes_by_track_id.items()):
-            tree = track_trees_by_track_id.get(track_id)
-            if tree is None:
-                continue
-            if tree.publication_state == "published":
-                self._ensure_public_track_id(tree)
-                continue
-            if not self._map_leaf_satisfies_publication_policy(tree=tree, leaf=leaf):
-                continue
-            self._ensure_public_track_id(tree)
-            tree.publication_state = "published"
-            published_count += 1
-        return published_count
+        return apply_output_publication(
+            tree_store=self._tree_store,
+            map_global=map_global,
+            publish_lifecycle_states=self._publish_lifecycle_states,
+            publish_min_hits=self.params.publish_min_hits,
+            publish_min_age=self.params.publish_min_age,
+            publish_min_existence_log_odds_threshold=(
+                self._publish_min_existence_log_odds_threshold
+            ),
+            output_track_id_mapper=self._output_track_id_mapper,
+        )
 
     def _ensure_public_track_id(self, tree: TrackTree) -> object:
         """Return an existing public ID, assigning one if publication needs repair."""
-        if tree.public_track_id is not None:
-            return tree.public_track_id
-        public_track_id = self._output_track_id_mapper(int(tree.track_id))
-        if public_track_id is None:
-            raise ValueError(
-                "output_track_id_mapper returned None for a published TOMHT track; "
-                "None is reserved for unpublished inspection tracks."
-            )
-        tree.public_track_id = public_track_id
-        return public_track_id
+        return ensure_public_track_id(
+            tree=tree,
+            output_track_id_mapper=self._output_track_id_mapper,
+        )
 
     # =========================================================================
     # Whole-Track Lifecycle
