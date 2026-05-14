@@ -92,6 +92,8 @@ from .tomht_pruning import apply_post_solve_supported_leaf_pruning
 from .tomht_types import ScanContext
 from .tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from .tomht_scoring import (
+    ConstantDetectionProbabilityModel,
+    DetectionProbabilityModel,
     NLLScoringModel,
     _existence_probability_to_log_odds,
     maybe_log_scoring_diagnostics,
@@ -233,6 +235,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         params: TOMHTParams = TOMHTParams(),
         params_overrides: Mapping[str, Any] | None = None,
         output_track_id_mapper: Callable[[int], object] | None = None,
+        detection_probability_model: DetectionProbabilityModel | None = None,
     ) -> None:
         """Construct the tracker with Stone Soup components and TO-MHT params.
 
@@ -269,6 +272,11 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             to the public Stone Soup ``Track.id`` object assigned when a tree
             first becomes published. Defaults to dense integer IDs in
             first-publication order.
+        detection_probability_model : DetectionProbabilityModel | None
+            Optional dynamic model for per-hypothesis ``P_D`` and clutter
+            density. When omitted, scalar ``TOMHTParams.prob_detect`` and
+            ``TOMHTParams.clutter_density`` are wrapped in
+            ``ConstantDetectionProbabilityModel`` to preserve default scoring.
         """
         params = self._apply_params_overrides(params, params_overrides)
         external_start_initial_log_delta = _existence_probability_to_log_odds(
@@ -320,9 +328,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         self.initiator = initiator
         self._deleter = deleter
+        resolved_dpm = detection_probability_model
+        if resolved_dpm is None:
+            resolved_dpm = ConstantDetectionProbabilityModel(
+                prob_detect=float(params.prob_detect),
+                clutter_density=float(params.clutter_density),
+            )
         self.scoring_model = NLLScoringModel(
-            prob_detect=float(params.prob_detect),
-            clutter_density=float(params.clutter_density),
+            detection_probability_model=resolved_dpm,
             log_epsilon=params.log_epsilon,
         )
         maybe_log_scoring_diagnostics(self.scoring_model)
@@ -494,8 +507,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self,
         time: datetime.datetime,
         detections: Iterable[Detection],
+        *,
+        caller_scan_context: object | None = None,
     ) -> tuple[datetime.datetime, set[Track]]:
-        """Run one scan update and return ``(time, MAP tracks)``."""
+        """Run one single-sensor scan update and return ``(time, MAP tracks)``.
+
+        One call is expected to contain detections from one sensor / one
+        measurement space. Multi-sensor applications should call this once per
+        sensor update with the corresponding opaque ``caller_scan_context``.
+        That caller context is threaded to the DetectionProbabilityModel and is
+        distinct from TOMHT's internal ``ScanContext`` bookkeeping.
+        """
         scan_wall_start_ns = wall_clock.perf_counter_ns()
         phase_start_ns = scan_wall_start_ns
 
@@ -509,6 +531,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             timestamp=time,
             detections=det_list,
             det_index_by_obj=det_index_by_obj,
+            caller_scan_context=caller_scan_context,
         )
         prep_ctx_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
         phase_start_ns = wall_clock.perf_counter_ns()

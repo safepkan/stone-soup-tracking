@@ -35,6 +35,7 @@ The tracker is now in a better shape for this work because several pieces have a
 - sticky output-publication and MAP output reconstruction helpers now live in `mht/tomht_output.py`,
 - whole-track score deletion now removes trees whose max active-leaf score falls below `TOMHTParams.track_deletion_existence_probability`,
 - whole-track lifecycle implementation now lives in `mht/tomht_lifecycle.py`, with `TOMHTTracker` retaining thin gateway methods only.
+- `NLLScoringModel` now consumes a narrow `DetectionProbabilityModel`; the default `ConstantDetectionProbabilityModel` wraps the scalar `TOMHTParams.prob_detect` and `TOMHTParams.clutter_density`, while custom DPMs can vary `P_D` and clutter density by prediction, detection, and opaque caller scan context.
 
 These changes make the next scoring/birth steps easier to reason about.
 
@@ -64,6 +65,12 @@ where:
 - `P_D` is detection probability,
 - `lambda` is clutter density,
 - `lambda` must be expressed in the same measurement-space units as the hypothesiser NLL.
+- default scalar `P_D`/`lambda` come from `ConstantDetectionProbabilityModel`,
+- advanced callers can provide a DPM for finite-FOV, range-dependent, sensor-mode, or other scan/state-dependent scoring,
+- the opaque `caller_scan_context` passed to `update_tracker(...)` is distinct from TOMHT's internal scan bookkeeping and is available even when a scan has no detections,
+- one `update_tracker(...)` call should contain detections from one sensor / one measurement space; multi-sensor applications should call it separately for each sensor update,
+- DPM callbacks receive public track IDs only after publication; unpublished trees pass `track_id=None`,
+- hit clutter density callbacks receive both the prediction and concrete detection, and `P_D ~= 0` outside coverage makes misses nearly penalty-free.
 
 Legacy unused-detection scoring has been removed because the clutter-density contrast is already represented in the hit score. This was expected to change smoke/replay outputs because old scenarios were tuned against older heuristic scoring. That is acceptable: we are prioritizing a coherent scoring interpretation before retuning.
 

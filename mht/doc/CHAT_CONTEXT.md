@@ -15,10 +15,11 @@ Keep the design docs in sync with the code.
 - `TO_MHT_REFERENCE.md` — references and notes
 
 ## Current baseline
-As of 2026-05-13, the tracker already has:
+As of 2026-05-14, the tracker already has:
 - stable per-scan detection ordering,
-- tracker-owned NLL-to-LLR local scoring configured by `prob_detect`, `clutter_density`, and `log_epsilon`,
+- tracker-owned NLL-to-LLR local scoring backed by `DetectionProbabilityModel`, with default scalar `prob_detect`/`clutter_density` wrapped by `ConstantDetectionProbabilityModel`,
 - existence-prior log-odds scoring for external starts and initiator-created starts,
+- sticky lifecycle confirmation, output publication, public track IDs, and score-based deletion,
 - association history plus N-scan-lite deduplication,
 - scan/run instrumentation (`ScanStats`, `BirthStats`, summary metrics).
 

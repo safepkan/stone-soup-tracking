@@ -24,6 +24,7 @@ Update (2026-05-14): output publication is now separate from internal confirmati
 Update (2026-05-14): sticky output-publication helpers now live in `mht/tomht_output.py` alongside output reconstruction and metadata projection. `TOMHTTracker` delegates publication policy evaluation, public-ID assignment/repair, and MAP output-track reconstruction through explicit `TrackTreeStore`/mapper dependencies. This was a behavior-preserving extraction.
 Update (2026-05-14): public output IDs are now assigned at the sticky publication transition. `TrackTree.track_id` remains the internal logical ID allocated at tree creation, while `TrackTree.public_track_id` starts as `None` and is assigned once when the tree first becomes published. The default `output_track_id_mapper` now assigns dense integer public IDs in first-publication order; custom mappers are still honored at publication time. Published output `Track.id` uses `public_track_id`; metadata keeps `track_id`/`internal_track_id` for internal debugging and `public_track_id` for the output identity. Unpublished inspection tracks do not consume public IDs.
 Update (2026-05-14): whole-track score deletion now runs after sticky confirmation and MAP-only N-scan pruning. `TOMHTParams.track_deletion_existence_probability` defaults to `0.01` (log-odds about `-4.595`) and deletes a whole `TrackTree` when `max(active_leaf.accumulated_log_score)` is at or below the threshold. This is the primary principled mechanism for killing low-score spurious starts. Node-native miss deletion and optional Stone Soup deleters remain additional backstops/domain hooks, and `TRACK_LIFECYCLE` diagnostics report deletion reasons (`score`, `miss`, `deleter`).
+Update (2026-05-14): `NLLScoringModel` now uses a narrow `DetectionProbabilityModel` for dynamic per-hypothesis `P_D` and clutter density. The default tracker path wraps `TOMHTParams.prob_detect` and `TOMHTParams.clutter_density` in `ConstantDetectionProbabilityModel`, preserving scalar scoring behavior. `update_tracker(..., caller_scan_context=...)` threads opaque caller scan data to the DPM without exposing TOMHT's internal `ScanContext`; one update call is still expected to contain detections from one sensor / one measurement space. The DPM receives published public track IDs only, and unpublished trees pass `track_id=None`.
 Update (2026-05-14): whole-track lifecycle implementation now lives in `mht/tomht_lifecycle.py`. `TOMHTTracker` keeps thin gateway methods, while sticky confirmation, score deletion, miss/deleter evaluation, deterministic `TRACK_LIFECYCLE` diagnostics, and current-MAP live-tree filtering are delegated through explicit `TrackTreeStore`/parameter dependencies. This was a behavior-preserving extraction.
 
 ---
@@ -435,7 +436,7 @@ These mechanisms are pragmatic, not final. They should be understood as explicit
 
 ## Scoring state
 
-Local scoring uses an explicit tracker-owned NLL-to-LLR additive model in `tomht_scoring.py`. It is configured through `TOMHTParams.prob_detect`, `TOMHTParams.clutter_density`, and `TOMHTParams.log_epsilon`; the public tracker constructor no longer accepts a custom scoring-model object, and `TOMHTParams.scoring_mode` has been removed.
+Local scoring uses an explicit tracker-owned NLL-to-LLR additive model in `tomht_scoring.py`. By default it is configured through `TOMHTParams.prob_detect`, `TOMHTParams.clutter_density`, and `TOMHTParams.log_epsilon`; the scalar probability/density values are wrapped in `ConstantDetectionProbabilityModel`. Advanced callers can provide a `DetectionProbabilityModel` to `TOMHTTracker` for sensor-, state-, or scan-dependent `P_D` and clutter density without reintroducing arbitrary public scoring-model injection. `TOMHTParams.scoring_mode` has been removed.
 
 Current behavior:
 
@@ -445,6 +446,11 @@ Current behavior:
 - external-start roots use `logit(external_start_initial_existence_probability)`,
 - initiator-created roots use `logit(initiator_start_initial_existence_probability)`,
 - start-root existence-prior scoring is handled outside `NLLScoringModel`,
+- hit clutter density can use both the hypothesis prediction and the concrete detection,
+- `P_D ~= 0` outside coverage makes a miss score approximately zero,
+- DPM callbacks receive only published public track IDs; unpublished trees pass `track_id=None`,
+- `caller_scan_context` is opaque caller data, available even for empty-detection scans, and is distinct from TOMHT's internal `ScanContext`,
+- one `update_tracker(...)` call should contain detections from one sensor / one measurement space; multi-sensor applications should call the tracker separately for each sensor update with the matching caller context,
 - scoring diagnostics are logged at tracker construction time.
 
 ### Unit / scale contract
@@ -453,6 +459,7 @@ The unit contract is now explicit:
 
 - hypothesiser detection distance must be `NLL = -log p(z|x)` in a particular measurement space,
 - `clutter_density` (`lambda`) must be expressed in the **same measurement-space units**,
+- dynamic DPM-provided clutter density follows the same unit contract,
 - with that contract, linear coordinate rescaling cancels between `-log(lambda)` and the Gaussian normalization term inside `NLL`.
 
 Miss-hypothesis distance from the hypothesiser is intentionally ignored by `NLLScoringModel`; the miss score is computed explicitly.

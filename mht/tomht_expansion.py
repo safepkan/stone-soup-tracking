@@ -128,6 +128,7 @@ def candidate_from_distance_hypothesis(
 def candidates_for_track_leaf(
     *,
     leaf_node: TrackHypothesisNode,
+    public_track_id: object | None,
     ctx: ScanContext,
     hypothesiser: Hypothesiser,
     updater: Updater,
@@ -155,6 +156,7 @@ def candidates_for_track_leaf(
     local_log_deltas = scoring_model.score_track_hypotheses(
         hypotheses=hypotheses,
         ctx=ctx,
+        track_id=public_track_id,
     )
     if len(local_log_deltas) != len(hypotheses):
         raise RuntimeError(
@@ -255,6 +257,7 @@ def expand_one_track_tree(
         leaf = nodes_by_id[leaf_id]
         candidates = candidates_for_track_leaf(
             leaf_node=leaf,
+            public_track_id=tree.public_track_id,
             ctx=ctx,
             hypothesiser=hypothesiser,
             updater=updater,

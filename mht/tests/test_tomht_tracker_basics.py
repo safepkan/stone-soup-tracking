@@ -14,7 +14,7 @@ from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 
 from mht.tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
-from mht.tomht_scoring import NLLScoringModel
+from mht.tomht_scoring import ConstantDetectionProbabilityModel, NLLScoringModel
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
 
 
@@ -166,8 +166,14 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
         )
 
         self.assertIsInstance(tracker.scoring_model, NLLScoringModel)
-        self.assertEqual(0.7, tracker.scoring_model.prob_detect)
-        self.assertEqual(0.25, tracker.scoring_model.clutter_density)
+        self.assertIsInstance(
+            tracker.scoring_model.detection_probability_model,
+            ConstantDetectionProbabilityModel,
+        )
+        constant_dpm = tracker.scoring_model.detection_probability_model
+        assert isinstance(constant_dpm, ConstantDetectionProbabilityModel)
+        self.assertEqual(0.7, constant_dpm.prob_detect)
+        self.assertEqual(0.25, constant_dpm.constant_clutter_density)
         self.assertEqual(1e-9, tracker.scoring_model.log_epsilon)
 
     def test_initiator_start_initial_existence_probability_rejects_boundaries(

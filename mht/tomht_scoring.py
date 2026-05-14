@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import isfinite, log, log1p
 from typing import Protocol, Sequence
 
-from stonesoup.types.detection import MissedDetection
+from stonesoup.types.detection import Detection, MissedDetection
 from stonesoup.types.hypothesis import SingleDistanceHypothesis
+from stonesoup.types.prediction import Prediction
 
 from .tomht_types import ScanContext
 
@@ -42,8 +43,75 @@ class ScoringModel(Protocol):
         *,
         hypotheses: Sequence[SingleDistanceHypothesis],
         ctx: ScanContext,
+        track_id: object | None = None,
     ) -> list[float]:
         """Return one local log-delta per hypothesis (same order as input)."""
+
+
+class DetectionProbabilityModel(Protocol):
+    """Caller-facing dynamic detection/clutter model used by NLL scoring.
+
+    ``caller_scan_context`` is opaque caller data supplied to
+    ``TOMHTTracker.update_tracker(...)``. It is distinct from TOMHT's internal
+    ``ScanContext`` bookkeeping and may contain sensor identity, scan geometry,
+    operating mode, weather/calibration data, or any other domain-specific
+    information needed to evaluate detection probability and clutter density.
+    """
+
+    def detection_probability(
+        self,
+        *,
+        track_id: object | None,
+        prediction: Prediction,
+        caller_scan_context: object | None,
+    ) -> float:
+        """Return ``P_D`` for one predicted target state in this scan."""
+
+    def clutter_density(
+        self,
+        *,
+        prediction: Prediction,
+        detection: Detection | None,
+        caller_scan_context: object | None,
+    ) -> float:
+        """Return clutter density in the same measurement-space units as NLL."""
+
+
+@dataclass(frozen=True, init=False)
+class ConstantDetectionProbabilityModel:
+    """Scalar fallback DPM preserving the historical NLL scoring behavior."""
+
+    prob_detect: float
+    _clutter_density: float = field(repr=False)
+
+    def __init__(self, prob_detect: float, clutter_density: float) -> None:
+        object.__setattr__(self, "prob_detect", prob_detect)
+        object.__setattr__(self, "_clutter_density", clutter_density)
+
+    @property
+    def constant_clutter_density(self) -> float:
+        """Scalar clutter density backing the constant protocol method."""
+        return self._clutter_density
+
+    def detection_probability(
+        self,
+        *,
+        track_id: object | None,
+        prediction: Prediction,
+        caller_scan_context: object | None,
+    ) -> float:
+        del track_id, prediction, caller_scan_context
+        return float(self.prob_detect)
+
+    def clutter_density(
+        self,
+        *,
+        prediction: Prediction,
+        detection: Detection | None,
+        caller_scan_context: object | None,
+    ) -> float:
+        del prediction, detection, caller_scan_context
+        return float(self._clutter_density)
 
 
 @dataclass(frozen=True)
@@ -70,26 +138,32 @@ class NLLScoringModel:
       hit term through ``-log(lambda)``.
     - Initiator/external-start root scores are existence-prior log-odds and are
       handled outside this local NLL scorer.
+    - ``detection_probability_model`` may vary ``P_D`` and ``lambda`` per
+      prediction, detection, or caller-provided scan context. A scalar
+      ``ConstantDetectionProbabilityModel`` preserves the default behavior.
+    - ``clutter_density`` units must match the measurement-space NLL; hit
+      clutter density callbacks receive both the hypothesis prediction and
+      concrete detection. If a DPM returns ``P_D`` near zero outside sensor
+      coverage, miss scores become near zero and avoid unfair miss penalties.
     """
 
-    prob_detect: float
-    clutter_density: float
+    detection_probability_model: DetectionProbabilityModel
     log_epsilon: float
 
-    def _clamped_prob_detect(self) -> float:
-        return min(1.0, max(0.0, float(self.prob_detect)))
+    def _clamped_prob_detect(self, prob_detect: float) -> float:
+        return min(1.0, max(0.0, float(prob_detect)))
 
-    def _safe_log_clutter_density(self) -> float:
-        return log(max(float(self.clutter_density), self.log_epsilon))
+    def _safe_log_clutter_density(self, clutter_density: float) -> float:
+        return log(max(float(clutter_density), self.log_epsilon))
 
-    def _log_hit_base(self) -> float:
-        prob_detect = self._clamped_prob_detect()
-        return (
-            log(max(prob_detect, self.log_epsilon)) - self._safe_log_clutter_density()
+    def _log_hit_base(self, *, prob_detect: float, clutter_density: float) -> float:
+        prob_detect = self._clamped_prob_detect(prob_detect)
+        return log(max(prob_detect, self.log_epsilon)) - self._safe_log_clutter_density(
+            clutter_density
         )
 
-    def _log_miss(self) -> float:
-        prob_detect = self._clamped_prob_detect()
+    def _log_miss(self, *, prob_detect: float) -> float:
+        prob_detect = self._clamped_prob_detect(prob_detect)
         return log(max(1.0 - prob_detect, self.log_epsilon))
 
     def score_track_hypotheses(
@@ -97,26 +171,53 @@ class NLLScoringModel:
         *,
         hypotheses: Sequence[SingleDistanceHypothesis],
         ctx: ScanContext,
+        track_id: object | None = None,
     ) -> list[float]:
-        del ctx
-        log_hit_base = self._log_hit_base()
-        log_miss = self._log_miss()
-
         out: list[float] = []
         for hypothesis in hypotheses:
-            if isinstance(hypothesis.measurement, MissedDetection):
-                out.append(log_miss)
+            prediction = hypothesis.prediction
+            measurement = hypothesis.measurement
+            prob_detect = self.detection_probability_model.detection_probability(
+                track_id=track_id,
+                prediction=prediction,
+                caller_scan_context=ctx.caller_scan_context,
+            )
+            if isinstance(measurement, MissedDetection):
+                out.append(self._log_miss(prob_detect=prob_detect))
             else:
-                out.append(log_hit_base - float(hypothesis.distance))
+                clutter_density = self.detection_probability_model.clutter_density(
+                    prediction=prediction,
+                    detection=measurement,
+                    caller_scan_context=ctx.caller_scan_context,
+                )
+                out.append(
+                    self._log_hit_base(
+                        prob_detect=prob_detect,
+                        clutter_density=clutter_density,
+                    )
+                    - float(hypothesis.distance)
+                )
         return out
 
 
 def maybe_log_scoring_diagnostics(scoring_model: NLLScoringModel) -> None:
     """Emit optional diagnostics for the tracker-owned NLL scorer."""
-    clutter = scoring_model.clutter_density
+    dpm = scoring_model.detection_probability_model
+    if isinstance(dpm, ConstantDetectionProbabilityModel):
+        log_hit_base = scoring_model._log_hit_base(
+            prob_detect=dpm.prob_detect,
+            clutter_density=dpm.constant_clutter_density,
+        )
+        log_miss = scoring_model._log_miss(prob_detect=dpm.prob_detect)
+        print(
+            f"[Scoring] nll: prob_detect={dpm.prob_detect}, "
+            f"clutter_density={dpm.constant_clutter_density}, "
+            f"log_hit_base={log_hit_base:+.3f}, "
+            f"log_miss={log_miss:+.3f}"
+        )
+        return
+
     print(
-        f"[Scoring] nll: prob_detect={scoring_model.prob_detect}, "
-        f"clutter_density={clutter}, "
-        f"log_hit_base={scoring_model._log_hit_base():+.3f}, "
-        f"log_miss={scoring_model._log_miss():+.3f}"
+        "[Scoring] nll: dynamic DetectionProbabilityModel "
+        f"log_epsilon={scoring_model.log_epsilon}"
     )
