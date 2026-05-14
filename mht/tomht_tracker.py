@@ -76,6 +76,11 @@ from .tomht_model import (
     TrackHypothesisNode,
     TrackTree,
 )
+from .tomht_lifecycle import (
+    apply_post_n_scan_track_lifecycle,
+    apply_score_based_track_confirmation,
+    internal_track_id_for_deleter_candidate,
+)
 from .tomht_output import (
     reconstruct_track_from_committed_prefix_and_leaf_node,
 )
@@ -1185,18 +1190,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     def _apply_score_based_track_confirmation(self) -> int:
         """Promote tentative trees whose active frontier score crosses threshold."""
-        confirmed_count = 0
-        threshold = float(self._track_confirmation_log_odds_threshold)
-        for _, tree in sorted(self._tree_store.track_trees_by_track_id.items()):
-            if tree.lifecycle_state != "tentative":
-                continue
-            tree_score = self._tree_store.active_tree_max_accumulated_log_score(tree)
-            if tree_score is None:
-                continue
-            if float(tree_score) >= threshold:
-                tree.lifecycle_state = "confirmed"
-                confirmed_count += 1
-        return confirmed_count
+        return apply_score_based_track_confirmation(
+            tree_store=self._tree_store,
+            confirmation_log_odds_threshold=self._track_confirmation_log_odds_threshold,
+        )
 
     # =========================================================================
     # Output Publication State
@@ -1256,269 +1253,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # Whole-Track Lifecycle
     # =========================================================================
 
-    @staticmethod
-    def _normalized_track_miss_termination_mode(mode_raw: str) -> str:
-        """Normalize and validate track-level miss termination mode."""
-        mode = str(mode_raw).strip().lower()
-        valid = {"all_active_leaves", "map_leaf", "global_k_leaves"}
-        if mode not in valid:
-            raise ValueError(
-                "Invalid TOMHTParams.track_miss_termination_mode. "
-                f"Expected one of {sorted(valid)}, got {mode_raw!r}."
-            )
-        return mode
-
-    def _effective_track_miss_threshold(self) -> int:
-        """Track-level miss termination threshold with N-scan safety floor."""
-        return max(
-            int(self.params.max_missed),
-            int(self.params.ns_scan_window) + 1,
-        )
-
-    def _track_miss_termination_leaves(
-        self,
-        *,
-        track_id: int,
-        tree: TrackTree,
-        mode: str,
-        map_global: GlobalHypothesis,
-        cluster_snapshots: list[ClusterRebuildSnapshot],
-    ) -> list[TrackHypothesisNode]:
-        """Return leaves to evaluate for whole-track miss termination."""
-        nodes_by_id = self._tree_store.nodes_by_id
-        root = nodes_by_id[tree.root_node_id]
-
-        if mode == "map_leaf":
-            map_leaf = map_global.leaf_nodes_by_track_id.get(track_id)
-            if map_leaf is not None and is_descendant_of(
-                node=map_leaf,
-                ancestor=root,
-            ):
-                return [map_leaf]
-
-        if mode == "global_k_leaves":
-            candidate_node_ids: set[int] = set()
-            for snapshot in cluster_snapshots:
-                if track_id not in snapshot.track_ids:
-                    continue
-                for rebuilt_global in snapshot.rebuilt_globals:
-                    leaf = rebuilt_global.leaf_nodes_by_track_id.get(track_id)
-                    if leaf is not None:
-                        candidate_node_ids.add(int(leaf.node_id))
-
-            candidate_leaves: list[TrackHypothesisNode] = []
-            for node_id in sorted(candidate_node_ids):
-                leaf = nodes_by_id.get(node_id)
-                if leaf is None:
-                    continue
-                if is_descendant_of(node=leaf, ancestor=root):
-                    candidate_leaves.append(leaf)
-            if candidate_leaves:
-                return candidate_leaves
-
-        # Default and safe fallback for empty map/global-k sets.
-        return [nodes_by_id[node_id] for node_id in sorted(tree.active_leaf_node_ids)]
-
-    def _filter_map_global_to_live_trees(
-        self,
-        map_global: GlobalHypothesis,
-    ) -> GlobalHypothesis:
-        """Drop map entries for tracks that no longer have active trees."""
-        track_trees_by_track_id = self._tree_store.track_trees_by_track_id
-        filtered_nodes = {
-            track_id: leaf
-            for track_id, leaf in map_global.leaf_nodes_by_track_id.items()
-            if track_id in track_trees_by_track_id
-        }
-        return GlobalHypothesis(
-            leaf_nodes_by_track_id=filtered_nodes,
-            log_weight=float(map_global.log_weight),
-        )
-
-    @staticmethod
-    def _add_track_termination_reason(
-        termination_reasons_by_track_id: dict[int, set[str]],
-        *,
-        track_id: int,
-        reason: str,
-    ) -> None:
-        """Record one deterministic whole-track termination reason."""
-        termination_reasons_by_track_id.setdefault(int(track_id), set()).add(reason)
-
-    def _collect_score_track_termination_reasons(self) -> dict[int, set[str]]:
-        """Return whole-tree score deletions from max active-leaf score."""
-        threshold = float(self._track_deletion_log_odds_threshold)
-        termination_reasons_by_track_id: dict[int, set[str]] = {}
-        for track_id, tree in sorted(self._tree_store.track_trees_by_track_id.items()):
-            tree_score = self._tree_store.active_tree_max_accumulated_log_score(tree)
-            if tree_score is None:
-                continue
-            if float(tree_score) <= threshold:
-                self._add_track_termination_reason(
-                    termination_reasons_by_track_id,
-                    track_id=track_id,
-                    reason="score",
-                )
-        return termination_reasons_by_track_id
-
-    @staticmethod
-    def _format_track_termination_reasons(
-        termination_reasons_by_track_id: dict[int, set[str]],
-    ) -> str:
-        """Format track termination reasons in stable reason/track order."""
-        parts: list[str] = []
-        for reason in ("score", "miss", "deleter"):
-            track_ids = [
-                track_id
-                for track_id in sorted(termination_reasons_by_track_id)
-                if reason in termination_reasons_by_track_id[track_id]
-            ]
-            if track_ids:
-                parts.append(f"{reason}:{track_ids}")
-        return ";".join(parts)
-
-    def _remove_terminated_track_trees(
-        self,
-        *,
-        termination_reasons_by_track_id: dict[int, set[str]],
-        mode: str,
-        miss_threshold: int | None,
-        deleter: Deleter | None,
-    ) -> None:
-        """Remove terminated trees and emit one deterministic lifecycle diagnostic."""
-        if not termination_reasons_by_track_id:
-            return
-
-        terminated_track_ids = sorted(termination_reasons_by_track_id)
-        for track_id in terminated_track_ids:
-            self._tree_store.track_trees_by_track_id.pop(track_id, None)
-
-        diagnostic_parts = [
-            "TRACK_LIFECYCLE",
-            f"mode={mode}",
-            f"score_threshold={self._track_deletion_log_odds_threshold:.6g}",
-        ]
-        if miss_threshold is not None:
-            diagnostic_parts.append(f"miss_threshold={miss_threshold}")
-        if deleter is not None:
-            diagnostic_parts.append(f"deleter={type(deleter).__name__}")
-        diagnostic_parts.append(f"terminated={terminated_track_ids}")
-        diagnostic_parts.append(
-            "reasons="
-            + self._format_track_termination_reasons(termination_reasons_by_track_id)
-        )
-        print(" ".join(diagnostic_parts))
-
-    def _apply_post_n_scan_track_miss_lifecycle(
-        self,
-        *,
-        map_global: GlobalHypothesis,
-        cluster_snapshots: list[ClusterRebuildSnapshot],
-        scan_index: int,
-    ) -> GlobalHypothesis:
-        """Apply whole-track miss termination after N-scan pruning."""
-        del scan_index  # reserved for potential future diagnostics.
-        mode = self._normalized_track_miss_termination_mode(
-            self.params.track_miss_termination_mode
-        )
-        threshold = self._effective_track_miss_threshold()
-
-        termination_reasons_by_track_id = (
-            self._collect_score_track_termination_reasons()
-        )
-        track_trees_by_track_id = self._tree_store.track_trees_by_track_id
-        for track_id, tree in sorted(track_trees_by_track_id.items()):
-            leaves = self._track_miss_termination_leaves(
-                track_id=track_id,
-                tree=tree,
-                mode=mode,
-                map_global=map_global,
-                cluster_snapshots=cluster_snapshots,
-            )
-            if not leaves:
-                continue
-            if all(int(leaf.missed_count) >= threshold for leaf in leaves):
-                self._add_track_termination_reason(
-                    termination_reasons_by_track_id,
-                    track_id=track_id,
-                    reason="miss",
-                )
-
-        self._remove_terminated_track_trees(
-            termination_reasons_by_track_id=termination_reasons_by_track_id,
-            mode=mode,
-            miss_threshold=threshold,
-            deleter=None,
-        )
-
-        self._tree_store.remove_empty_trees()
-        return self._filter_map_global_to_live_trees(map_global)
-
-    def _apply_post_n_scan_track_deleter_lifecycle(
-        self,
-        *,
-        map_global: GlobalHypothesis,
-        cluster_snapshots: list[ClusterRebuildSnapshot],
-        scan_index: int,
-        timestamp: datetime.datetime,
-    ) -> GlobalHypothesis:
-        """Apply whole-track lifecycle using the configured Stone Soup deleter."""
-        del scan_index  # reserved for potential future diagnostics.
-        deleter = self._deleter
-        if deleter is None:
-            raise RuntimeError(
-                "Deleter lifecycle requested without a configured deleter."
-            )
-        mode = self._normalized_track_miss_termination_mode(
-            self.params.track_miss_termination_mode
-        )
-
-        termination_reasons_by_track_id = (
-            self._collect_score_track_termination_reasons()
-        )
-        track_trees_by_track_id = self._tree_store.track_trees_by_track_id
-        for track_id, tree in sorted(track_trees_by_track_id.items()):
-            leaves = self._track_miss_termination_leaves(
-                track_id=track_id,
-                tree=tree,
-                mode=mode,
-                map_global=map_global,
-                cluster_snapshots=cluster_snapshots,
-            )
-            if not leaves:
-                continue
-
-            committed_states = list(tree.committed_states)
-            leaf_delete_decisions: list[bool] = []
-            for leaf in leaves:
-                candidate_track = reconstruct_track_from_committed_prefix_and_leaf_node(
-                    committed_states=committed_states,
-                    leaf_node=leaf,
-                    output_track_id=int(leaf.track_id),
-                    lifecycle_state=tree.lifecycle_state,
-                    public_track_id=tree.public_track_id,
-                )
-                should_delete = bool(
-                    deleter.check_for_deletion(candidate_track, timestamp=timestamp)
-                )
-                leaf_delete_decisions.append(should_delete)
-            if leaf_delete_decisions and all(leaf_delete_decisions):
-                self._add_track_termination_reason(
-                    termination_reasons_by_track_id,
-                    track_id=track_id,
-                    reason="deleter",
-                )
-
-        self._remove_terminated_track_trees(
-            termination_reasons_by_track_id=termination_reasons_by_track_id,
-            mode=mode,
-            miss_threshold=None,
-            deleter=deleter,
-        )
-
-        self._tree_store.remove_empty_trees()
-        return self._filter_map_global_to_live_trees(map_global)
-
     def _apply_post_n_scan_track_lifecycle(
         self,
         *,
@@ -1528,17 +1262,16 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         timestamp: datetime.datetime,
     ) -> GlobalHypothesis:
         """Apply post-N-scan whole-track lifecycle using the configured lane."""
-        if self._deleter is not None:
-            return self._apply_post_n_scan_track_deleter_lifecycle(
-                map_global=map_global,
-                cluster_snapshots=cluster_snapshots,
-                scan_index=scan_index,
-                timestamp=timestamp,
-            )
-        return self._apply_post_n_scan_track_miss_lifecycle(
+        del scan_index  # reserved for potential future diagnostics.
+        return apply_post_n_scan_track_lifecycle(
+            tree_store=self._tree_store,
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
-            scan_index=scan_index,
+            params=self.params,
+            deletion_log_odds_threshold=self._track_deletion_log_odds_threshold,
+            deleter=self._deleter,
+            output_track_id_for_deleter=internal_track_id_for_deleter_candidate,
+            timestamp=timestamp,
         )
 
     # =========================================================================
