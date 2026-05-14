@@ -214,6 +214,20 @@ class TrackTreeStore:
             for tree in self.track_trees_by_track_id.values()
         )
 
+    def active_tree_max_accumulated_log_score(
+        self,
+        tree: TrackTree,
+    ) -> float | None:
+        """Return max accumulated score over one tree's active leaves."""
+        scores = [
+            float(self.nodes_by_id[node_id].accumulated_log_score)
+            for node_id in sorted(tree.active_leaf_node_ids)
+            if node_id in self.nodes_by_id
+        ]
+        if not scores:
+            return None
+        return max(scores)
+
     def remove_empty_trees(self) -> None:
         """Drop any tree that has no surviving active leaves."""
         dead_track_ids = [

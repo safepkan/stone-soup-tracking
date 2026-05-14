@@ -59,6 +59,8 @@ class ScanStats:
     maxrss_mb: float
     node_count_total: int
     active_trees: int
+    active_tentative_trees: int
+    active_confirmed_trees: int
     active_leaves: int
     num_detections: int
     cluster_count: int
@@ -78,6 +80,8 @@ class ScanStats:
     birth_tracks_created: int
     birth_tracks_kept: int
     map_tracks: int
+    map_published_tracks: int
+    map_unpublished_tracks: int
     map_used: int
     map_unused: int
     map_miss_hist: dict[int, int]
@@ -118,6 +122,8 @@ def print_scan_stats(
         f"SCAN scan={scan_stats.scan_index} t={timestamp} "
         f"det={scan_stats.num_detections} "
         f"trees={scan_stats.active_trees} leaves={scan_stats.active_leaves} "
+        f"tentative={scan_stats.active_tentative_trees} "
+        f"confirmed={scan_stats.active_confirmed_trees} "
         f"clusters={scan_stats.cluster_count} "
         f"comb_eval={scan_stats.combinations_evaluated} "
         f"comb_feas={scan_stats.feasible_combinations} "
@@ -136,6 +142,8 @@ def print_scan_stats(
         f"tracks_created={scan_stats.birth_tracks_created} "
         f"tracks_kept={scan_stats.birth_tracks_kept} "
         f"MAP tracks={scan_stats.map_tracks} "
+        f"published={scan_stats.map_published_tracks} "
+        f"unpublished={scan_stats.map_unpublished_tracks} "
         f"used={scan_stats.map_used} unused={scan_stats.map_unused} "
         f"hit_rate={scan_stats.map_mean_hit_rate:.2f}"
     )
@@ -221,6 +229,8 @@ def print_summary_stats(
         )
 
     trees = [s.active_trees for s in stats]
+    tentative_trees = [s.active_tentative_trees for s in stats]
+    confirmed_trees = [s.active_confirmed_trees for s in stats]
     leaves = [s.active_leaves for s in stats]
     clusters = [s.cluster_count for s in stats]
     comb_eval = [s.combinations_evaluated for s in stats]
@@ -238,6 +248,8 @@ def print_summary_stats(
     birth_cand = [s.birth_candidates for s in stats]
 
     map_tracks = [s.map_tracks for s in stats]
+    map_published_tracks = [s.map_published_tracks for s in stats]
+    map_unpublished_tracks = [s.map_unpublished_tracks for s in stats]
     map_unused = [s.map_unused for s in stats]
     map_used = [s.map_used for s in stats]
     map_hit_rate = [s.map_mean_hit_rate for s in stats]
@@ -306,6 +318,8 @@ def print_summary_stats(
     print(
         "SUMMARY trees "
         f"active med={median(trees):.1f} max={max(trees)} "
+        f"tentative med={median(tentative_trees):.1f} max={max(tentative_trees)} "
+        f"confirmed med={median(confirmed_trees):.1f} max={max(confirmed_trees)} "
         f"leaves med={median(leaves):.1f} max={max(leaves)}"
     )
     print(
@@ -390,6 +404,8 @@ def print_summary_stats(
     print(
         "SUMMARY map "
         f"tracks med={median(map_tracks):.1f} mean={_mean(map_tracks):.2f} "
+        f"published med={median(map_published_tracks):.1f} mean={_mean(map_published_tracks):.2f} "
+        f"unpublished med={median(map_unpublished_tracks):.1f} mean={_mean(map_unpublished_tracks):.2f} "
         f"used med={median(map_used):.1f} mean={_mean(map_used):.2f} "
         f"unused med={median(map_unused):.1f} mean={_mean(map_unused):.2f} "
         f"hit_rate mean={_mean(map_hit_rate):.3f} "

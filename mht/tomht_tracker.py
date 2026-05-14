@@ -145,10 +145,14 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
        severing weakest full-history conflict edges.
     7. Post-solve prune each cluster tree frontier to leaves supported by at
        least one retained rebuilt top-K global for that cluster.
-    8. Merge cluster MAP selections into full-scan MAP, then apply MAP-only
-       N-scan tree pruning and whole-track lifecycle (node-native miss policy
-       by default, or optional Stone Soup deleter when configured).
-    9. Keep last-scan debug snapshots and return MAP output tracks.
+    8. Merge cluster MAP selections into full-scan MAP.
+    9. Apply MAP-only N-scan tree pruning: root promotion, committed states,
+       active leaves, and disagreement stats.
+    10. Apply whole-track lifecycle: sticky score-based confirmation, then
+        post-N-scan termination (node-native miss policy by default, or optional
+        Stone Soup deleter when configured).
+    11. Update sticky output-publication state for MAP-selected live trees.
+    12. Keep last-scan debug snapshots and return published MAP output tracks.
 
     Behavior notes for readability:
     - Exact behavior: cluster feasibility checks and exclusivity constraints use
@@ -203,6 +207,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     _deleter: Deleter | None
     _output_track_id_mapper: Callable[[int], object]
     _external_start_initial_log_delta: float
+    _track_confirmation_log_odds_threshold: float
+    _publish_lifecycle_states: frozenset[str]
+    _publish_min_existence_log_odds_threshold: float | None
 
     # =========================================================================
     # Public API
@@ -260,6 +267,20 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             params.external_start_initial_existence_probability,
             parameter_name="external_start_initial_existence_probability",
         )
+        track_confirmation_log_odds_threshold = _existence_probability_to_log_odds(
+            params.track_confirmation_existence_probability,
+            parameter_name="track_confirmation_existence_probability",
+        )
+        publish_min_existence_log_odds_threshold: float | None
+        if float(params.publish_min_existence_probability) <= 0.0:
+            publish_min_existence_log_odds_threshold = None
+        else:
+            publish_min_existence_log_odds_threshold = (
+                _existence_probability_to_log_odds(
+                    params.publish_min_existence_probability,
+                    parameter_name="publish_min_existence_probability",
+                )
+            )
         super().__init__(
             predictor=predictor,
             updater=updater,
@@ -277,6 +298,13 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self.detector = detector
         self.params = params
         self._external_start_initial_log_delta = external_start_initial_log_delta
+        self._track_confirmation_log_odds_threshold = (
+            track_confirmation_log_odds_threshold
+        )
+        self._publish_lifecycle_states = frozenset(params.publish_lifecycle_states)
+        self._publish_min_existence_log_odds_threshold = (
+            publish_min_existence_log_odds_threshold
+        )
         self.initiator = initiator
         self._deleter = deleter
         self.scoring_model = NLLScoringModel(
@@ -536,6 +564,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
         )
+
+        # 7) Whole-track lifecycle: sticky score-based confirmation,
+        # then post-N-scan termination policy.
+        self._apply_score_based_track_confirmation()
         map_global = self._apply_post_n_scan_track_lifecycle(
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
@@ -546,6 +578,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             stage="post_n_scan_pruning",
             ctx=ctx,
         )
+
+        # 8) Sticky output publication state for MAP-selected live trees.
+        self._apply_output_publication(map_global)
 
         rebuild_stats = replace(
             rebuild_stats,
@@ -559,7 +594,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         nscan_lifecycle_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
         phase_start_ns = wall_clock.perf_counter_ns()
 
-        # 7) Reclaim node storage not reachable from surviving roots/leaves/commitments.
+        # 9) Reclaim node storage not reachable from surviving roots/leaves/commitments.
         nscan_snapshot = self._nscan_commitment_snapshot
         cleanup_seed_nodes = list(
             nscan_snapshot.latest_committed_ancestor_by_track_id.values()
@@ -572,7 +607,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         cleanup_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
 
-        # 8) Post-scan instrumentation.
+        # 10) Post-scan instrumentation.
         scan_wall_ms = (wall_clock.perf_counter_ns() - scan_wall_start_ns) / 1e6
         maxrss_mb = get_process_maxrss_mb()
         node_count_total = len(self._tree_store.nodes_by_id)
@@ -647,6 +682,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             log_weight=float(self._last_map_global.log_weight)
             + sum(float(root.log_delta) for root in new_roots),
         )
+        self._apply_output_publication(self._last_map_global)
         self.global_hypotheses = [self._last_map_global]
 
     def get_unused_detections(self) -> list[Detection]:
@@ -659,8 +695,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     # --- Read-only inspection / reporting helpers ---
 
-    def get_map_output_tracks(self) -> set[Track]:
-        """Return current MAP outputs as Stone Soup ``Track`` objects."""
+    def get_map_output_tracks(
+        self,
+        *,
+        include_unpublished: bool = False,
+    ) -> set[Track]:
+        """Return current MAP outputs as Stone Soup ``Track`` objects.
+
+        By default this is the published output boundary. With
+        ``include_unpublished=True``, all internal MAP-selected live trees are
+        reconstructed for inspection and carry publication metadata.
+        """
         map_snapshot = self.get_map_hypothesis_snapshot()
         if map_snapshot is None:
             return set()
@@ -668,12 +713,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         output_tracks: set[Track] = set()
         for leaf_node in map_snapshot.leaf_nodes_by_track_id.values():
             tree = tree_store.track_trees_by_track_id.get(int(leaf_node.track_id))
-            committed_states = [] if tree is None else list(tree.committed_states)
+            if tree is None:
+                continue
+            if not include_unpublished and tree.publication_state != "published":
+                continue
+            committed_states = list(tree.committed_states)
             output_tracks.add(
                 reconstruct_track_from_committed_prefix_and_leaf_node(
                     committed_states=committed_states,
                     leaf_node=leaf_node,
                     output_track_id_mapper=self._output_track_id_mapper,
+                    lifecycle_state=tree.lifecycle_state,
+                    publication_state=tree.publication_state,
                 )
             )
         return output_tracks
@@ -718,6 +769,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 "root_node_id": int(tree.root_node_id),
                 "active_leaf_node_ids": tuple(sorted(tree.active_leaf_node_ids)),
                 "root_source": tree.root_source,
+                "lifecycle_state": tree.lifecycle_state,
+                "publication_state": tree.publication_state,
             }
         return MappingProxyType(out)
 
@@ -1096,7 +1149,65 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     # =========================================================================
-    # Post-N-Scan Whole-Track Lifecycle
+    # Tree-Level Confirmation Lifecycle
+    # =========================================================================
+
+    def _apply_score_based_track_confirmation(self) -> int:
+        """Promote tentative trees whose active frontier score crosses threshold."""
+        confirmed_count = 0
+        threshold = float(self._track_confirmation_log_odds_threshold)
+        for _, tree in sorted(self._tree_store.track_trees_by_track_id.items()):
+            if tree.lifecycle_state != "tentative":
+                continue
+            tree_score = self._tree_store.active_tree_max_accumulated_log_score(tree)
+            if tree_score is None:
+                continue
+            if float(tree_score) >= threshold:
+                tree.lifecycle_state = "confirmed"
+                confirmed_count += 1
+        return confirmed_count
+
+    # =========================================================================
+    # Output Publication State
+    # =========================================================================
+
+    def _map_leaf_satisfies_publication_policy(
+        self,
+        *,
+        tree: TrackTree,
+        leaf: TrackHypothesisNode,
+    ) -> bool:
+        """Return whether a MAP leaf can first transition to published output."""
+        if tree.lifecycle_state not in self._publish_lifecycle_states:
+            return False
+        if int(leaf.hits) < int(self.params.publish_min_hits):
+            return False
+        if int(leaf.age) < int(self.params.publish_min_age):
+            return False
+
+        threshold = self._publish_min_existence_log_odds_threshold
+        if threshold is not None and float(leaf.accumulated_log_score) < threshold:
+            return False
+        return True
+
+    def _apply_output_publication(self, map_global: GlobalHypothesis) -> int:
+        """Stickily publish MAP-selected trees that satisfy output policy."""
+        published_count = 0
+        track_trees_by_track_id = self._tree_store.track_trees_by_track_id
+        for track_id, leaf in sorted(map_global.leaf_nodes_by_track_id.items()):
+            tree = track_trees_by_track_id.get(track_id)
+            if tree is None:
+                continue
+            if tree.publication_state == "published":
+                continue
+            if not self._map_leaf_satisfies_publication_policy(tree=tree, leaf=leaf):
+                continue
+            tree.publication_state = "published"
+            published_count += 1
+        return published_count
+
+    # =========================================================================
+    # Whole-Track Lifecycle
     # =========================================================================
 
     @staticmethod
@@ -1258,6 +1369,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                     committed_states=committed_states,
                     leaf_node=leaf,
                     output_track_id_mapper=self._output_track_id_mapper,
+                    lifecycle_state=tree.lifecycle_state,
                 )
                 should_delete = bool(
                     deleter.check_for_deletion(candidate_track, timestamp=timestamp)
@@ -1445,18 +1557,35 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self,
         detections: list[Detection],
         scan_index: int,
-    ) -> tuple[int, int, int, dict[int, int], float]:
+    ) -> tuple[int, int, int, int, int, dict[int, int], float]:
         """Compute lightweight MAP-level counters for scan stats reporting."""
         map_snapshot = self.get_map_hypothesis_snapshot()
         map_tracks = 0
+        map_published_tracks = 0
+        map_unpublished_tracks = 0
         map_used = 0
         map_unused = len(detections)
         map_miss_hist: dict[int, int] = {}
         map_mean_hit_rate = 0.0
         if map_snapshot is None:
-            return map_tracks, map_used, map_unused, map_miss_hist, map_mean_hit_rate
+            return (
+                map_tracks,
+                map_published_tracks,
+                map_unpublished_tracks,
+                map_used,
+                map_unused,
+                map_miss_hist,
+                map_mean_hit_rate,
+            )
 
         map_tracks = len(map_snapshot.leaf_nodes_by_track_id)
+        track_trees_by_track_id = self._tree_store.track_trees_by_track_id
+        for track_id in map_snapshot.leaf_nodes_by_track_id:
+            tree = track_trees_by_track_id.get(track_id)
+            if tree is not None and tree.publication_state == "published":
+                map_published_tracks += 1
+        map_unpublished_tracks = map_tracks - map_published_tracks
+
         used_keys = {
             leaf.used_det_key
             for leaf in map_snapshot.leaf_nodes_by_track_id.values()
@@ -1475,7 +1604,26 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 hit_rates.append(float(hits) / float(age))
         if hit_rates:
             map_mean_hit_rate = float(np.mean(hit_rates))
-        return map_tracks, map_used, map_unused, map_miss_hist, map_mean_hit_rate
+        return (
+            map_tracks,
+            map_published_tracks,
+            map_unpublished_tracks,
+            map_used,
+            map_unused,
+            map_miss_hist,
+            map_mean_hit_rate,
+        )
+
+    def _active_lifecycle_tree_counts(self) -> tuple[int, int]:
+        """Return active-tree counts by tentative/confirmed lifecycle state."""
+        tentative = 0
+        confirmed = 0
+        for tree in self._tree_store.track_trees_by_track_id.values():
+            if tree.lifecycle_state == "confirmed":
+                confirmed += 1
+            else:
+                tentative += 1
+        return tentative, confirmed
 
     def _build_scan_stats(
         self,
@@ -1494,8 +1642,17 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         timing_breakdown: ScanTimingBreakdown,
     ) -> ScanStats:
         """Assemble one immutable per-scan ScanStats record."""
-        map_tracks, map_used, map_unused, map_miss_hist, map_mean_hit_rate = (
-            self._map_stats_for_current_map(ctx.detections, ctx.scan_index)
+        (
+            map_tracks,
+            map_published_tracks,
+            map_unpublished_tracks,
+            map_used,
+            map_unused,
+            map_miss_hist,
+            map_mean_hit_rate,
+        ) = self._map_stats_for_current_map(ctx.detections, ctx.scan_index)
+        active_tentative_trees, active_confirmed_trees = (
+            self._active_lifecycle_tree_counts()
         )
         return ScanStats(
             scan_index=int(ctx.scan_index),
@@ -1504,6 +1661,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             maxrss_mb=float(maxrss_mb),
             node_count_total=int(node_count_total),
             active_trees=int(active_trees),
+            active_tentative_trees=active_tentative_trees,
+            active_confirmed_trees=active_confirmed_trees,
             active_leaves=int(active_leaves),
             num_detections=len(ctx.detections),
             cluster_count=rebuild_stats.cluster_count,
@@ -1523,6 +1682,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             birth_tracks_created=birth_stats.birth_tracks_created,
             birth_tracks_kept=birth_stats.birth_tracks_kept,
             map_tracks=map_tracks,
+            map_published_tracks=map_published_tracks,
+            map_unpublished_tracks=map_unpublished_tracks,
             map_used=map_used,
             map_unused=map_unused,
             map_miss_hist=map_miss_hist,

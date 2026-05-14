@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 
 from .tomht_scoring import _existence_probability_to_log_odds
 
@@ -73,6 +74,15 @@ class TOMHTParams:
     # Public external-start prior. Internally converted to log-odds for the root
     # log_delta; default 0.95 reflects externally confirmed starts.
     external_start_initial_existence_probability: float = 0.95
+    # Sticky tree-level confirmation threshold. Internally converted to log-odds
+    # and compared against max active-leaf accumulated score.
+    track_confirmation_existence_probability: float = 0.9
+    # Sticky output-publication gate. By default, only confirmed MAP tracks are
+    # published; tentative trees remain internal and inspectable.
+    publish_lifecycle_states: tuple[str, ...] = ("confirmed",)
+    publish_min_hits: int = 0
+    publish_min_age: int = 0
+    publish_min_existence_probability: float = 0.0
 
     # MAP-only N-scan pruning: boundary is b = k - N.
     ns_scan_window: int = 6
@@ -115,6 +125,52 @@ class TOMHTParams:
             parameter_name="external_start_initial_existence_probability",
         )
         _existence_probability_to_log_odds(
+            self.track_confirmation_existence_probability,
+            parameter_name="track_confirmation_existence_probability",
+        )
+        _existence_probability_to_log_odds(
             self.initiator_start_initial_existence_probability,
             parameter_name="initiator_start_initial_existence_probability",
         )
+        self._validate_publication_params()
+
+    def _validate_publication_params(self) -> None:
+        """Validate sticky output-publication gate controls."""
+        states_raw = self.publish_lifecycle_states
+        if isinstance(states_raw, str):
+            raise ValueError(
+                "publish_lifecycle_states must be an iterable of lifecycle states, "
+                "not a string."
+            )
+        try:
+            states = tuple(states_raw)
+        except TypeError as exc:
+            raise ValueError(
+                "publish_lifecycle_states must be an iterable of lifecycle states."
+            ) from exc
+
+        valid_states = {"tentative", "confirmed"}
+        invalid_states = sorted(set(states).difference(valid_states))
+        if invalid_states:
+            invalid_states_str = ", ".join(repr(state) for state in invalid_states)
+            valid_states_str = ", ".join(repr(state) for state in sorted(valid_states))
+            raise ValueError(
+                "publish_lifecycle_states must contain only valid lifecycle states "
+                f"({valid_states_str}); got {invalid_states_str}."
+            )
+        if int(self.publish_min_hits) < 0:
+            raise ValueError("publish_min_hits must be >= 0.")
+        if int(self.publish_min_age) < 0:
+            raise ValueError("publish_min_age must be >= 0.")
+
+        publish_min_existence_probability = float(
+            self.publish_min_existence_probability
+        )
+        if (
+            not isfinite(publish_min_existence_probability)
+            or publish_min_existence_probability < 0.0
+            or publish_min_existence_probability >= 1.0
+        ):
+            raise ValueError(
+                "publish_min_existence_probability must satisfy 0.0 <= p < 1.0."
+            )

@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, determinism fixes, output-history restoration, solver-seam extraction, exact-backend experiments, local-association ownership refactor, explicit NLL scoring cleanup, local-association optimization work, internal-start cleanup, and scoring-constructor simplification completed through **2026-05-13**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, determinism fixes, output-history restoration, solver-seam extraction, exact-backend experiments, local-association ownership refactor, explicit NLL scoring cleanup, local-association optimization work, internal-start cleanup, scoring-constructor simplification, first tree-level confirmation lifecycle step, and sticky output-publication gate completed through **2026-05-14**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -19,6 +19,8 @@ Update (2026-05-13): external-start root scoring is now configurable through `TO
 Update (2026-05-13): legacy unused-detection scoring was removed from the default scoring contract and cluster rebuild path. The local hit score already carries the clutter-density contrast via `-log(lambda)`, so cluster solving now ranks combinations directly by accumulated leaf scores without a current-scan unused-detection offset.
 Update (2026-05-13): internal starts are controlled by constructor initiator presence: `initiator=None` creates no internal starts and leaves residual detections available, while a configured initiator receives residual detections and returns candidate start tracks. This covers both one-shot measurement initializers and more complex/stateful/domain-aware initiators. Initiator-created starts use `TOMHTParams.initiator_start_initial_existence_probability` (default `0.8`, log-odds about `+1.386`) for root `log_delta`, with optional per-track `metadata["existence_probability"]` override and invalid metadata fallback. The legacy `birth_log_penalty` parameter, `TOMHTParams.internal_birth_mode`, and `ScoringModel.score_birth(...)` hook were removed; no tracker-core `birth_density` parameter was added.
 Update (2026-05-13): `TOMHTTracker.__init__` no longer accepts a public `scoring_model` argument. The tracker now always constructs `NLLScoringModel` from `TOMHTParams.prob_detect`, `TOMHTParams.clutter_density`, and `TOMHTParams.log_epsilon`; `make_default_scoring_model(...)` was removed, while the narrow `ScoringModel` protocol remains only as an internal expansion-helper type boundary.
+Update (2026-05-14): `TrackTree` now carries sticky `lifecycle_state` (`tentative` or `confirmed`). New internal and external trees start tentative. After supported-leaf pruning and MAP-only N-scan pruning, tentative trees are promoted to confirmed when max active-leaf accumulated score crosses `TOMHTParams.track_confirmation_existence_probability` (default `0.9`, converted to log-odds internally). This does not change deletion behavior; MAP outputs include `metadata["lifecycle_state"]`. Scan stats and summary output include tentative/confirmed active-tree counts.
+Update (2026-05-14): output publication is now separate from internal confirmation. `TrackTree.publication_state` starts as `unpublished` and promotes stickily to `published` for MAP-selected live trees that pass `TOMHTParams.publish_lifecycle_states`, `publish_min_hits`, `publish_min_age`, and `publish_min_existence_probability`. The default publishes confirmed MAP tracks only, so tentative trees remain internal by default. Standard `update_tracker(...)`, `tracks`, and `get_map_output_tracks()` return published MAP tracks; `get_map_output_tracks(include_unpublished=True)` reconstructs all live MAP tracks for inspection. Output metadata now includes `publication_state` when tree context is available, and scan logs report MAP-published vs MAP-unpublished counts.
 
 ---
 
@@ -30,7 +32,7 @@ The tracker is now a **real track-oriented TO-MHT implementation** in the practi
 - globals are rebuilt per cluster on every scan from current leaves,
 - the previous scan’s explicit global list is **not** the persistent search frontier,
 - MAP-only N-scan pruning operates directly on explicit trees,
-- and public output tracks are reconstructed from **committed prefix history plus current unresolved lineage**.
+- and public output tracks are reconstructed from **committed prefix history plus current unresolved lineage** for MAP tracks that have crossed the sticky publication gate.
 
 The code treats track trees as the primary persistent state, with rebuilt globals retained only as last-scan inspection/debug artifacts.
 
@@ -58,7 +60,7 @@ The intended operational public surface remains:
 The tracker also exposes read-only inspection helpers such as:
 
 - `get_map_hypothesis_snapshot()`
-- `get_map_output_tracks()`
+- `get_map_output_tracks(include_unpublished=False)`
 - `get_n_scan_commitment_snapshot()`
 - `get_last_cluster_snapshots()`
 - `get_track_tree_snapshot()`
@@ -201,8 +203,11 @@ The tracker’s current runtime pipeline is:
 5. recompute clusters from current trees,
 6. rebuild feasible globals per cluster through the exact cluster-solver contract (default backend = branch-and-bound exact search), with optional overload splitting first and optional narrow historical-relaxation retry around the exact solve,
 7. post-solve prune each cluster tree frontier to leaves supported by retained rebuilt globals,
-8. merge cluster MAP selections into full-scan MAP, apply MAP-only N-scan pruning, then apply whole-track lifecycle (node-native miss-threshold by default, optional Stone Soup deleter when configured),
-9. reclaim unreachable node storage, keep last-scan debug snapshots, and return MAP output tracks.
+8. merge cluster MAP selections into full-scan MAP,
+9. apply MAP-only N-scan pruning on explicit trees,
+10. apply whole-track lifecycle (sticky confirmation, then node-native miss-threshold by default or optional Stone Soup deleter),
+11. update sticky output-publication state for MAP-selected live trees,
+12. reclaim unreachable node storage, keep last-scan debug snapshots, and return published MAP output tracks.
 
 This is the main runtime story the code now implements.
 
@@ -447,9 +452,12 @@ This scoring split should still be understood as **pragmatic and serviceable**, 
 Public output tracks are now reconstructed from:
 
 - the tree’s committed prefix history,
-- plus the current unresolved leaf-node lineage.
+- plus the current unresolved leaf-node lineage,
+- only when the MAP-selected tree is in sticky `published` publication state.
 
 This restores full logical output history across N-scan pruning while preserving the intended meaning of the explicit unresolved tree structure.
+
+`get_map_output_tracks(include_unpublished=True)` is available for inspection and reconstructs unpublished/tentative MAP-selected tracks without changing tree state. Publication remains sticky once a tree first reaches `published`.
 
 Returned `Track` metadata remains an explicit projection from the current leaf node, including:
 
@@ -464,6 +472,8 @@ Returned `Track` metadata remains an explicit projection from the current leaf n
 - `birth_scan_index`
 - `existence_log_odds`
 - `existence_probability` (currently score-implied from accumulated log-odds, not yet a fully calibrated existence probability)
+- `lifecycle_state`
+- `publication_state`
 
 ### Instrumentation
 
@@ -477,7 +487,7 @@ Per-scan and summary instrumentation reports:
 - historical relaxation counters
 - N-scan commitment counts
 - birth statistics
-- MAP track usage
+- MAP track usage and MAP-published / MAP-unpublished counts
 - explicit scan index in `SCAN ...` lines
 - scan wall time
 - memory / node counts

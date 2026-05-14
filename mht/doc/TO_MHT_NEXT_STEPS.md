@@ -29,7 +29,9 @@ The tracker is now in a better shape for this work because several pieces have a
 - the legacy fixed `birth_log_penalty` and `ScoringModel.score_birth(...)` hook have been removed,
 - `TOMHTParams.internal_birth_mode` has been removed,
 - the public `TOMHTTracker(scoring_model=...)` injection point and `make_default_scoring_model(...)` factory have been removed; the tracker directly constructs `NLLScoringModel`,
-- there is no tracker-core `birth_density` parameter; birth-density reasoning is guidance for choosing an initiator-start existence prior.
+- there is no tracker-core `birth_density` parameter; birth-density reasoning is guidance for choosing an initiator-start existence prior,
+- `TrackTree` now has sticky `tentative`/`confirmed` lifecycle state driven by max active-leaf score crossing `TOMHTParams.track_confirmation_existence_probability`,
+- output publication is now a separate sticky tree-level state (`unpublished`/`published`) with configurable emit gating; the default publishes confirmed tracks only.
 
 These changes make the next scoring/birth steps easier to reason about.
 
@@ -168,23 +170,59 @@ This remains guidance for choosing `initiator_start_initial_existence_probabilit
 
 Do not introduce a tracker-owned two-point or M/N initiator in this step. If output noise becomes a problem, solve that with initiator configuration and output confirmation gates first.
 
-### Step 4: Add output confirmation / emit gate
+### Step 4: Add first tree-level confirmation lifecycle state
 
-When simple one-detection initiators are used, the tracker may internally carry more tentative tracks. That is expected.
+Implemented (2026-05-14): `TrackTree.lifecycle_state` now starts as `"tentative"` for both internal initiator starts and external starts, and promotes stickily to `"confirmed"` when:
 
-Visible output should be controlled separately from internal hypothesis maintenance.
+```text
+max(active_leaf.accumulated_log_score) >= logit(track_confirmation_existence_probability)
+```
 
-Add an output gate based on some combination of:
+The new user-facing parameter is:
 
-- score-implied existence probability,
-- minimum hits,
-- minimum age.
+```text
+track_confirmation_existence_probability = 0.9
+```
 
-The first version should probably preserve current output behavior by default, then allow stricter settings for cleaner consumer-facing output.
+with validation `0.0 < p < 1.0` and internal conversion to log-odds.
 
-This gate should apply to returned/emitted tracks, not to whether the internal MHT state keeps tentative hypotheses.
+Confirmation is applied after supported-leaf pruning and MAP-only N-scan pruning, before whole-track deletion lifecycle and output generation. It is intentionally conservative:
 
-### Step 5: Revisit pruning and expansion-volume controls
+- no un-confirming,
+- confirmation itself does not delete tracks or directly filter output,
+- no score-based deletion yet,
+- MAP output tracks include `metadata["lifecycle_state"]`,
+- scan stats and summary output report tentative vs confirmed active-tree counts.
+
+This gives later publication and termination work a stable tree-level state to build on.
+
+### Step 5: Add output confirmation / emit gate
+
+Implemented (2026-05-14): `TrackTree.publication_state` now starts as `"unpublished"` and promotes stickily to `"published"` when a MAP-selected live tree satisfies the configured output-publication policy. Publication is separate from internal confirmation and does not alter MAP hypotheses, active leaves, N-scan pruning, or whole-track deletion.
+
+The user-facing publication parameters are:
+
+```text
+publish_lifecycle_states = ("confirmed",)
+publish_min_hits = 0
+publish_min_age = 0
+publish_min_existence_probability = 0.0
+```
+
+The default keeps tentative MAP tracks internal and publishes only confirmed tracks. Stricter settings can add hit, age, or score-implied existence requirements; permissive settings can opt back into tentative publication for experiments.
+
+Publication criteria are evaluated against the MAP-selected leaf for each live tree:
+
+- tree `lifecycle_state` is allowed by `publish_lifecycle_states`,
+- `leaf.hits >= publish_min_hits`,
+- `leaf.age >= publish_min_age`,
+- score-implied existence from `leaf.accumulated_log_score` meets `publish_min_existence_probability`.
+
+Once published, a tree remains published until it is deleted/recreated. Standard `get_map_output_tracks()`, `tracks`, and `update_tracker(...)` return only published MAP tracks. `get_map_hypothesis_snapshot()` remains the internal MAP inspection API, and `get_map_output_tracks(include_unpublished=True)` can reconstruct tentative/unpublished MAP tracks for inspection with `metadata["publication_state"]`. Scan stats and summary output now report MAP-published and MAP-unpublished counts so publication suppression is visible without changing internal MAP logging.
+
+When simple one-detection initiators are used, the tracker may internally carry more tentative tracks. That is expected; the publication gate now controls only returned/emitted tracks, not whether the internal MHT state keeps tentative hypotheses.
+
+### Step 6: Revisit pruning and expansion-volume controls
 
 After scoring, births, and output confirmation are coherent, return to:
 

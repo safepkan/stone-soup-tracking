@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import replace
 import datetime
+import io
 from math import exp, log, log1p
 import unittest
 from typing import Iterable, cast
@@ -317,6 +319,371 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
 
         tree_snapshot = tracker.get_track_tree_snapshot()
         self.assertEqual({0, 1}, set(tree_snapshot.keys()))
+
+    def test_track_confirmation_uses_max_active_leaf_score(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.6,
+                track_confirmation_existence_probability=0.8,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=True,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        self.assertEqual(
+            "tentative",
+            tracker.track_trees_by_track_id[0].lifecycle_state,
+        )
+
+        hypothesiser.set_options(
+            timestamp=t1,
+            track_id=0,
+            options=[(0, -1.0), (1, 2.0), (None, 0.0)],
+        )
+        tracker.update_tracker(
+            t1,
+            [_detection(1.0, 1.0, t1), _detection(2.0, 2.0, t1)],
+        )
+
+        tree = tracker.track_trees_by_track_id[0]
+        self.assertEqual("confirmed", tree.lifecycle_state)
+        self.assertIsNotNone(tracker.last_scan_stats)
+        assert tracker.last_scan_stats is not None
+        self.assertEqual(0, tracker.last_scan_stats.active_tentative_trees)
+        self.assertEqual(1, tracker.last_scan_stats.active_confirmed_trees)
+        self.assertEqual(1, tracker.last_scan_stats.map_tracks)
+        self.assertEqual(1, tracker.last_scan_stats.map_published_tracks)
+        self.assertEqual(0, tracker.last_scan_stats.map_unpublished_tracks)
+
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        self.assertEqual("confirmed", output_track.metadata["lifecycle_state"])
+
+    def test_track_confirmation_is_sticky_if_score_later_drops(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.6,
+                track_confirmation_existence_probability=0.8,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+
+        hypothesiser.set_options(
+            timestamp=t1,
+            track_id=0,
+            options=[(0, 2.0), (None, 0.0)],
+        )
+        tracker.update_tracker(t1, [_detection(1.0, 1.0, t1)])
+        self.assertEqual(
+            "confirmed",
+            tracker.track_trees_by_track_id[0].lifecycle_state,
+        )
+
+        tree = tracker.track_trees_by_track_id[0]
+        for leaf_id in tree.active_leaf_node_ids:
+            tracker._nodes_by_id[leaf_id].accumulated_log_score = _logit(0.1)
+        tracker._apply_score_based_track_confirmation()
+
+        self.assertEqual("confirmed", tree.lifecycle_state)
+        tree_score = tracker._tree_store.active_tree_max_accumulated_log_score(tree)
+        self.assertIsNotNone(tree_score)
+        assert tree_score is not None
+        self.assertLess(tree_score, _logit(0.8))
+
+    def test_default_publication_keeps_tentative_map_track_internal(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.6,
+                track_confirmation_existence_probability=0.8,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=True,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+
+        hypothesiser.set_options(timestamp=t1, track_id=0, options=[(None, 0.0)])
+        tracker.update_tracker(t1, [])
+
+        self.assertIn(0, tracker.track_trees_by_track_id)
+        self.assertEqual(
+            "tentative",
+            tracker.track_trees_by_track_id[0].lifecycle_state,
+        )
+        self.assertEqual(
+            "unpublished",
+            tracker.track_trees_by_track_id[0].publication_state,
+        )
+        self.assertIsNotNone(tracker.last_scan_stats)
+        assert tracker.last_scan_stats is not None
+        self.assertEqual(1, tracker.last_scan_stats.active_tentative_trees)
+        self.assertEqual(0, tracker.last_scan_stats.active_confirmed_trees)
+        self.assertEqual(1, tracker.last_scan_stats.map_tracks)
+        self.assertEqual(0, tracker.last_scan_stats.map_published_tracks)
+        self.assertEqual(1, tracker.last_scan_stats.map_unpublished_tracks)
+
+        self.assertEqual(set(), tracker.get_map_output_tracks())
+        self.assertEqual(set(), tracker.tracks)
+
+        map_snapshot = tracker.get_map_hypothesis_snapshot()
+        self.assertIsNotNone(map_snapshot)
+        assert map_snapshot is not None
+        self.assertEqual(1, len(map_snapshot.leaf_nodes_by_track_id))
+
+        inspection_tracks = tracker.get_map_output_tracks(include_unpublished=True)
+        self.assertEqual(1, len(inspection_tracks))
+        inspection_track = next(iter(inspection_tracks))
+        self.assertEqual("tentative", inspection_track.metadata["lifecycle_state"])
+        self.assertEqual(
+            "unpublished",
+            inspection_track.metadata["publication_state"],
+        )
+
+    def test_default_publication_publishes_confirmed_map_output(
+        self,
+    ) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.6,
+                track_confirmation_existence_probability=0.8,
+                debug_display_scan_stats=True,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        log_stream = io.StringIO()
+        with contextlib.redirect_stdout(log_stream):
+            tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+
+        tree = tracker.track_trees_by_track_id[0]
+        self.assertEqual("tentative", tree.lifecycle_state)
+        self.assertEqual("unpublished", tree.publication_state)
+        self.assertEqual(set(), tracker.get_map_output_tracks())
+        self.assertEqual(set(), tracker.tracks)
+
+        map_snapshot = tracker.get_map_hypothesis_snapshot()
+        self.assertIsNotNone(map_snapshot)
+        assert map_snapshot is not None
+        self.assertEqual(1, len(map_snapshot.leaf_nodes_by_track_id))
+
+        inspection_tracks = tracker.get_map_output_tracks(include_unpublished=True)
+        self.assertEqual(1, len(inspection_tracks))
+        inspection_track = next(iter(inspection_tracks))
+        self.assertEqual(
+            "unpublished",
+            inspection_track.metadata["publication_state"],
+        )
+
+        hypothesiser.set_options(
+            timestamp=t1,
+            track_id=0,
+            options=[(0, 2.0), (None, 0.0)],
+        )
+        with contextlib.redirect_stdout(log_stream):
+            _, output_tracks = tracker.update_tracker(t1, [_detection(1.0, 1.0, t1)])
+
+        tree = tracker.track_trees_by_track_id[0]
+        self.assertEqual("confirmed", tree.lifecycle_state)
+        self.assertEqual("published", tree.publication_state)
+        self.assertIn(
+            "MAP tracks=1 published=1 unpublished=0",
+            log_stream.getvalue(),
+        )
+        self.assertEqual(1, len(output_tracks))
+        self.assertEqual(1, len(tracker.tracks))
+        output_track = next(iter(output_tracks))
+        self.assertEqual("confirmed", output_track.metadata["lifecycle_state"])
+        self.assertEqual("published", output_track.metadata["publication_state"])
+
+    def test_publish_min_hits_gates_initial_publication(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                publish_min_hits=2,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+
+        self.assertEqual(
+            "unpublished", tracker.track_trees_by_track_id[0].publication_state
+        )
+        self.assertEqual(set(), tracker.get_map_output_tracks())
+
+        hypothesiser.set_options(
+            timestamp=t1,
+            track_id=0,
+            options=[(0, 1.0), (None, 0.0)],
+        )
+        tracker.update_tracker(t1, [_detection(1.0, 1.0, t1)])
+
+        tree = tracker.track_trees_by_track_id[0]
+        self.assertEqual("published", tree.publication_state)
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        self.assertEqual(2, output_track.metadata["hits"])
+
+    def test_publish_min_age_gates_initial_publication(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                publish_min_age=2,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+
+        self.assertEqual(
+            "unpublished", tracker.track_trees_by_track_id[0].publication_state
+        )
+        self.assertEqual(set(), tracker.get_map_output_tracks())
+
+        hypothesiser.set_options(timestamp=t1, track_id=0, options=[(None, 0.0)])
+        tracker.update_tracker(t1, [])
+
+        tree = tracker.track_trees_by_track_id[0]
+        self.assertEqual("published", tree.publication_state)
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        self.assertEqual(2, output_track.metadata["age"])
+
+    def test_publish_min_existence_probability_gates_initial_publication(
+        self,
+    ) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.6,
+                publish_min_existence_probability=0.8,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+
+        self.assertEqual(
+            "unpublished", tracker.track_trees_by_track_id[0].publication_state
+        )
+        self.assertEqual(set(), tracker.get_map_output_tracks())
+
+        hypothesiser.set_options(
+            timestamp=t1,
+            track_id=0,
+            options=[(0, 2.0), (None, 0.0)],
+        )
+        tracker.update_tracker(t1, [_detection(1.0, 1.0, t1)])
+
+        tree = tracker.track_trees_by_track_id[0]
+        self.assertEqual("published", tree.publication_state)
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        self.assertGreaterEqual(
+            float(output_track.metadata["existence_probability"]),
+            0.8,
+        )
+
+    def test_publication_is_sticky_if_score_later_drops(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                external_start_initial_existence_probability=0.6,
+                publish_min_existence_probability=0.8,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        hypothesiser.set_options(
+            timestamp=t1,
+            track_id=0,
+            options=[(0, 2.0), (None, 0.0)],
+        )
+        tracker.update_tracker(t1, [_detection(1.0, 1.0, t1)])
+
+        tree = tracker.track_trees_by_track_id[0]
+        self.assertEqual("published", tree.publication_state)
+        for leaf_id in tree.active_leaf_node_ids:
+            tracker._nodes_by_id[leaf_id].accumulated_log_score = _logit(0.1)
+
+        tracker._apply_output_publication(tracker._last_map_global)
+
+        self.assertEqual("published", tree.publication_state)
+        output_tracks = tracker.get_map_output_tracks()
+        self.assertEqual(1, len(output_tracks))
 
     def test_max_missed_drops_leaf_and_removes_tree(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
@@ -706,14 +1073,28 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
             ),
         )
 
-        tracker.update_tracker(timestamp, [_detection(1.0, 1.0, timestamp)])
+        _, output_tracks = tracker.update_tracker(
+            timestamp,
+            [_detection(1.0, 1.0, timestamp)],
+        )
 
         tree = next(iter(tracker.track_trees_by_track_id.values()))
         root = tracker._nodes_by_id[tree.root_node_id]
         expected_log_delta = _logit(0.7)
         self.assertEqual("internal_birth", root.root_source)
+        self.assertEqual("tentative", tree.lifecycle_state)
+        self.assertEqual("unpublished", tree.publication_state)
         self.assertAlmostEqual(expected_log_delta, root.log_delta)
         self.assertAlmostEqual(expected_log_delta, root.accumulated_log_score)
+        self.assertEqual(set(), output_tracks)
+
+        inspection_tracks = tracker.get_map_output_tracks(include_unpublished=True)
+        self.assertEqual(1, len(inspection_tracks))
+        inspection_track = next(iter(inspection_tracks))
+        self.assertEqual(
+            "unpublished",
+            inspection_track.metadata["publication_state"],
+        )
 
     def test_initiator_birth_metadata_existence_probability_overrides_default(
         self,

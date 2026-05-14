@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import datetime
 import unittest
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 import numpy as np
 from stonesoup.types.detection import Detection
@@ -99,17 +99,20 @@ class _SystemTrackId:
 
 def _build_tracker(
     *,
+    params: TOMHTParams | None = None,
     output_track_id_mapper: Callable[[int], object] | None = None,
 ) -> TOMHTTracker:
-    return TOMHTTracker(
-        hypothesiser=_NoopHypothesiser(),
-        updater=_NoopUpdater(),
-        params=TOMHTParams(
+    if params is None:
+        params = TOMHTParams(
             debug_display_scan_stats=False,
             debug_display_hypotheses=False,
             debug_display_births=False,
             collect_stats=False,
-        ),
+        )
+    return TOMHTTracker(
+        hypothesiser=_NoopHypothesiser(),
+        updater=_NoopUpdater(),
+        params=params,
         output_track_id_mapper=output_track_id_mapper,
     )
 
@@ -179,6 +182,38 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
                     TOMHTParams(
                         initiator_start_initial_existence_probability=probability,
                     )
+
+    def test_track_confirmation_existence_probability_rejects_boundaries(
+        self,
+    ) -> None:
+        for probability in (0.0, 1.0):
+            with self.subTest(probability=probability):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "track_confirmation_existence_probability",
+                ):
+                    TOMHTParams(
+                        track_confirmation_existence_probability=probability,
+                    )
+
+    def test_publication_params_validate_domains(self) -> None:
+        self.assertEqual(("confirmed",), TOMHTParams().publish_lifecycle_states)
+        TOMHTParams(publish_lifecycle_states=())
+
+        invalid_cases: list[tuple[dict[str, Any], str]] = [
+            ({"publish_lifecycle_states": ("tentative", "invalid")}, "lifecycle"),
+            ({"publish_lifecycle_states": "confirmed"}, "not a string"),
+            ({"publish_min_hits": -1}, "publish_min_hits"),
+            ({"publish_min_age": -1}, "publish_min_age"),
+            ({"publish_min_existence_probability": -0.1}, "existence"),
+            ({"publish_min_existence_probability": 1.0}, "existence"),
+            ({"publish_min_existence_probability": float("nan")}, "existence"),
+            ({"publish_min_existence_probability": float("inf")}, "existence"),
+        ]
+        for overrides, message in invalid_cases:
+            with self.subTest(overrides=overrides):
+                with self.assertRaisesRegex(ValueError, message):
+                    TOMHTParams(**overrides)
 
     def test_constructor_applies_params_overrides(self) -> None:
         tracker = _build_tracker_with_overrides(
@@ -293,7 +328,15 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
         self.assertEqual([detection], tracker.get_unused_detections())
 
     def test_map_output_tracks_default_track_id_is_stable_integer(self) -> None:
-        tracker = _build_tracker()
+        tracker = _build_tracker(
+            params=TOMHTParams(
+                publish_lifecycle_states=("tentative", "confirmed"),
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            )
+        )
         t0 = datetime.datetime(2026, 3, 12, 10, 0, 0)
         t1 = t0 + datetime.timedelta(seconds=1)
 
@@ -311,10 +354,17 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
 
     def test_map_output_tracks_support_custom_track_id_mapping(self) -> None:
         tracker = _build_tracker(
+            params=TOMHTParams(
+                publish_lifecycle_states=("tentative", "confirmed"),
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
             output_track_id_mapper=lambda track_id: _SystemTrackId(
                 id=track_id,
                 metadata={"origin": "test"},
-            )
+            ),
         )
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
 

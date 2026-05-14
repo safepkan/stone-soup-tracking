@@ -6,7 +6,11 @@ from math import exp
 from stonesoup.types.track import Track
 from stonesoup.types.state import State
 
-from .tomht_model import TrackHypothesisNode
+from .tomht_model import (
+    TrackHypothesisNode,
+    TrackLifecycleState,
+    TrackPublicationState,
+)
 
 
 def lineage_from_leaf_node(leaf_node: TrackHypothesisNode) -> list[TrackHypothesisNode]:
@@ -32,6 +36,9 @@ def _sigmoid_from_log_odds(log_odds: float) -> float:
 
 def output_track_metadata_from_leaf_node(
     leaf_node: TrackHypothesisNode,
+    *,
+    lifecycle_state: TrackLifecycleState | None = None,
+    publication_state: TrackPublicationState | None = None,
 ) -> dict[str, object]:
     """
     Build the explicit TOMHT-owned metadata projection for a reconstructed output
@@ -51,6 +58,10 @@ def output_track_metadata_from_leaf_node(
     - ``existence_probability`` is currently score-implied from accumulated
       log-odds, not a fully calibrated probability; birth scoring is still
       under review.
+    - ``lifecycle_state`` is included when tree-level lifecycle context is
+      available at the output boundary.
+    - ``publication_state`` is included when tree-level publication context is
+      available at the output boundary.
     - The remaining keys are diagnostic/inspection fields describing the current
       leaf node and its cached maintenance/provenance state.
 
@@ -58,7 +69,7 @@ def output_track_metadata_from_leaf_node(
     reason about and avoids carrying opaque metadata through the internal
     node-based hypothesis structure.
     """
-    return {
+    metadata: dict[str, object] = {
         "track_id": int(leaf_node.track_id),
         "node_id": int(leaf_node.node_id),
         "age": int(leaf_node.age),
@@ -73,6 +84,11 @@ def output_track_metadata_from_leaf_node(
             leaf_node.accumulated_log_score
         ),
     }
+    if lifecycle_state is not None:
+        metadata["lifecycle_state"] = lifecycle_state
+    if publication_state is not None:
+        metadata["publication_state"] = publication_state
+    return metadata
 
 
 def reconstruct_track_from_leaf_node(leaf_node: TrackHypothesisNode) -> Track:
@@ -93,6 +109,8 @@ def reconstruct_track_from_committed_prefix_and_leaf_node(
     committed_states: list[State],
     leaf_node: TrackHypothesisNode,
     output_track_id_mapper: Callable[[int], object] | None = None,
+    lifecycle_state: TrackLifecycleState | None = None,
+    publication_state: TrackPublicationState | None = None,
 ) -> Track:
     """Reconstruct output track from committed prefix plus unresolved lineage."""
     lineage = lineage_from_leaf_node(leaf_node)
@@ -104,5 +122,11 @@ def reconstruct_track_from_committed_prefix_and_leaf_node(
         else output_track_id_mapper(internal_track_id)
     )
     tr = Track([*committed_states, *unresolved_states], id=mapped_output_track_id)
-    tr.metadata.update(output_track_metadata_from_leaf_node(leaf_node))
+    tr.metadata.update(
+        output_track_metadata_from_leaf_node(
+            leaf_node,
+            lifecycle_state=lifecycle_state,
+            publication_state=publication_state,
+        )
+    )
     return tr

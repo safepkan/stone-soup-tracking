@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import datetime
-from typing import Mapping
+from typing import Literal, Mapping
 
 from stonesoup.types.state import State
 
@@ -13,6 +13,9 @@ from stonesoup.types.state import State
 # Key format is (scan_index, det_index), so keys are unique across the unresolved
 # tree window and cannot collide when multiple scans are still represented.
 type DetectionKey = tuple[int, int]
+
+type TrackLifecycleState = Literal["tentative", "confirmed"]
+type TrackPublicationState = Literal["unpublished", "published"]
 
 
 @dataclass
@@ -57,6 +60,8 @@ class TrackTree:
     root_node_id: int
     active_leaf_node_ids: set[int]
     root_source: str
+    lifecycle_state: TrackLifecycleState = "tentative"
+    publication_state: TrackPublicationState = "unpublished"
     committed_states: list[State] = field(default_factory=list)
 
 
