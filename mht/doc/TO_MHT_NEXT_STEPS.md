@@ -18,7 +18,7 @@ The tracker is now in a better shape for this work because several pieces have a
 
 - major `TOMHTTracker` substeps have been extracted into dedicated modules,
 - persistent tree/node bookkeeping now lives in `TrackTreeStore`,
-- local expansion, internal-birth handling, clustering, overload splitting, cluster rebuild, post-solve pruning, and TOMHT utilities are no longer monolithic tracker methods,
+- local expansion, internal-birth handling, clustering, overload splitting, cluster rebuild, post-solve pruning, MAP-only N-scan pruning, and TOMHT utilities are no longer monolithic tracker methods,
 - external starts now use an existence-prior probability mapped internally to log-odds,
 - external starts can optionally override that prior per track via `Track.metadata["existence_probability"]`,
 - output tracks now expose score-implied existence metadata,

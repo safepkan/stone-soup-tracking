@@ -27,6 +27,7 @@ Update (2026-05-14): `get_tomht_track_id(track)` was removed from `mht/tomht_tra
 Update (2026-05-14): whole-track score deletion now runs after sticky confirmation and MAP-only N-scan pruning. `TOMHTParams.track_deletion_existence_probability` defaults to `0.01` (log-odds about `-4.595`) and deletes a whole `TrackTree` when `max(active_leaf.accumulated_log_score)` is at or below the threshold. This is the primary principled mechanism for killing low-score spurious starts. Node-native miss deletion and optional Stone Soup deleters remain additional backstops/domain hooks, and `TRACK_LIFECYCLE` diagnostics report deletion reasons (`score`, `miss`, `deleter`).
 Update (2026-05-14): `NLLScoringModel` now uses a narrow `DetectionProbabilityModel` for dynamic per-hypothesis `P_D` and clutter density. The default tracker path wraps `TOMHTParams.prob_detect` and `TOMHTParams.clutter_density` in `ConstantDetectionProbabilityModel`, preserving scalar scoring behavior. `update_tracker(..., caller_scan_context=...)` threads opaque caller scan data to the DPM without exposing TOMHT's internal `ScanContext`; one update call is still expected to contain detections from one sensor / one measurement space. The DPM receives published public track IDs only, and unpublished trees pass `track_id=None`.
 Update (2026-05-14): whole-track lifecycle implementation now lives in `mht/tomht_lifecycle.py`. `TOMHTTracker` keeps thin gateway methods, while sticky confirmation, score deletion, miss/deleter evaluation, deterministic `TRACK_LIFECYCLE` diagnostics, and current-MAP live-tree filtering are delegated through explicit `TrackTreeStore`/parameter dependencies. This was a behavior-preserving extraction.
+Update (2026-05-14): MAP-only N-scan pruning implementation now lives in `mht/tomht_pruning.py` alongside post-solve supported-leaf pruning. `TOMHTTracker` keeps a thin gateway method, while root-promotion planning, disagreement annotation, tree mutation, and commitment-snapshot updates are delegated through explicit `TrackTreeStore`/snapshot/window dependencies. This was a behavior-preserving extraction.
 Update (2026-05-14): internal-birth candidate handling no longer assumes a fixed state-vector layout. Initiator-returned tracks are not rejected by tracker-owned position/covariance sanity checks; retained candidates are still deterministically sorted and capped by `max_births_per_scan`. Birth tie-break sorting and debug output now flatten all state-vector components generically, with non-finite components sanitized deterministically.
 
 ---
@@ -191,7 +192,8 @@ Persistent tree/node bookkeeping is centralized in `mht/tomht_tree_store.py`:
 `TrackTreeStore` owns logical track IDs, node IDs, the node table, the track-tree
 table, root/child node construction, single-root tree insertion, active leaf/tree
 counts, empty-tree removal, and unreachable-node cleanup. Expansion, clustering,
-and post-solve pruning now take the store as their persistent-state dependency.
+post-solve pruning, and MAP-only N-scan pruning now take the store as their
+persistent-state dependency.
 The store also provides a narrow new-track root insertion helper for internal
 births and external starts. `TOMHTTracker` keeps `track_trees_by_track_id` and
 `_nodes_by_id` as compatibility properties that forward to the store; tracker
