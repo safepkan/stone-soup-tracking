@@ -5,7 +5,7 @@ Output directory: <REPLAY_OUTPUT_ROOT>/mcap_replay__<RUN_ID>
 [Scoring] nll: prob_detect=0.9, clutter_density=1e-05, log_hit_base=+11.408, log_miss=-2.303
 
 Internal births at 2025-12-10 17:39:48.685000+00:00: kept=1
-  birth_state=(x=63.4, vx=0.00, y=1.3, vy=0.00)
+  birth_state=(0=63.3995, 1=0, 2=1.34943, 3=0)
 
 Cluster rebuilds scan=0 t=2025-12-10 17:39:48.685000+00:00:
 cluster=0 tracks=[0] globals=1 comb_eval=1 comb_feas=1 disagree=0
@@ -224,7 +224,7 @@ SCAN scan=22 t=2025-12-10 17:39:53.085000+00:00 det=2 trees=1 leaves=16 tentativ
 SCAN_NSCAN_COMMITTED scan=22 t=2025-12-10 17:39:53.085000+00:00 boundary=16 0->node449@s16
 
 Internal births at 2025-12-10 17:39:53.285000+00:00: kept=1
-  birth_state=(x=126.3, vx=0.00, y=-23.0, vy=0.00)
+  birth_state=(0=126.3, 1=0, 2=-22.9976, 3=0)
 
 Cluster rebuilds scan=23 t=2025-12-10 17:39:53.285000+00:00:
 cluster=0 tracks=[0] globals=20 comb_eval=21 comb_feas=20 disagree=1
@@ -239,7 +239,7 @@ SCAN scan=23 t=2025-12-10 17:39:53.285000+00:00 det=3 trees=2 leaves=20 tentativ
 SCAN_NSCAN_COMMITTED scan=23 t=2025-12-10 17:39:53.285000+00:00 boundary=17 0->node493@s17
 
 Internal births at 2025-12-10 17:39:53.485000+00:00: kept=1
-  birth_state=(x=127.0, vx=0.00, y=-16.7, vy=0.00)
+  birth_state=(0=126.99, 1=0, 2=-16.7237, 3=0)
 
 Cluster rebuilds scan=24 t=2025-12-10 17:39:53.485000+00:00:
 cluster=0 tracks=[0] globals=20 comb_eval=21 comb_feas=20 disagree=13
@@ -286,7 +286,7 @@ SCAN scan=26 t=2025-12-10 17:39:53.885000+00:00 det=2 trees=2 leaves=22 tentativ
 SCAN_NSCAN_COMMITTED scan=26 t=2025-12-10 17:39:53.885000+00:00 boundary=20 0->node621@s20
 
 Internal births at 2025-12-10 17:39:54.085000+00:00: kept=1
-  birth_state=(x=127.3, vx=0.00, y=-7.0, vy=0.00)
+  birth_state=(0=127.317, 1=0, 2=-7.0049, 3=0)
 
 Cluster rebuilds scan=27 t=2025-12-10 17:39:54.085000+00:00:
 cluster=0 tracks=[0] globals=20 comb_eval=21 comb_feas=20 disagree=4
@@ -319,7 +319,7 @@ SCAN scan=28 t=2025-12-10 17:39:54.285000+00:00 det=1 trees=3 leaves=21 tentativ
 SCAN_NSCAN_COMMITTED scan=28 t=2025-12-10 17:39:54.285000+00:00 boundary=22 0->node709@s22
 
 Internal births at 2025-12-10 17:39:54.485000+00:00: kept=1
-  birth_state=(x=57.0, vx=0.00, y=1.0, vy=0.00)
+  birth_state=(0=57.0138, 1=0, 2=1.01574, 3=0)
 
 Cluster rebuilds scan=29 t=2025-12-10 17:39:54.485000+00:00:
 cluster=0 tracks=[0] globals=20 comb_eval=21 comb_feas=20 disagree=2
@@ -503,8 +503,8 @@ SCAN scan=40 t=2025-12-10 17:39:56.685000+00:00 det=1 trees=1 leaves=15 tentativ
 SCAN_NSCAN_COMMITTED scan=40 t=2025-12-10 17:39:56.685000+00:00 boundary=34 0->node1114@s34
 
 Internal births at 2025-12-10 17:39:56.885000+00:00: kept=2
-  birth_state=(x=52.1, vx=0.00, y=-1.0, vy=0.00)
-  birth_state=(x=114.5, vx=0.00, y=1.0, vy=0.00)
+  birth_state=(0=52.0559, 1=0, 2=-1.02965, 3=0)
+  birth_state=(0=114.465, 1=0, 2=1.03217, 3=0)
 
 Cluster rebuilds scan=41 t=2025-12-10 17:39:56.885000+00:00:
 cluster=0 tracks=[0] globals=20 comb_eval=21 comb_feas=20 disagree=5
@@ -590,7 +590,7 @@ SCAN scan=46 t=2025-12-10 17:39:57.885000+00:00 det=1 trees=3 leaves=21 tentativ
 SCAN_NSCAN_COMMITTED scan=46 t=2025-12-10 17:39:57.885000+00:00 boundary=40 0->node1402@s40
 
 Internal births at 2025-12-10 17:39:58.085000+00:00: kept=1
-  birth_state=(x=35.1, vx=0.00, y=-51.7, vy=0.00)
+  birth_state=(0=35.1095, 1=0, 2=-51.6808, 3=0)
 
 Cluster rebuilds scan=47 t=2025-12-10 17:39:58.085000+00:00:
 cluster=0 tracks=[0, 5] globals=20 comb_eval=276 comb_feas=34 disagree=0
@@ -609,7 +609,7 @@ SCAN scan=47 t=2025-12-10 17:39:58.085000+00:00 det=2 trees=4 leaves=27 tentativ
 SCAN_NSCAN_COMMITTED scan=47 t=2025-12-10 17:39:58.085000+00:00 boundary=41 0->node1430@s41
 
 Internal births at 2025-12-10 17:39:58.285000+00:00: kept=1
-  birth_state=(x=44.4, vx=0.00, y=22.0, vy=0.00)
+  birth_state=(0=44.4313, 1=0, 2=21.9915, 3=0)
 TRACK_LIFECYCLE mode=map_leaf score_threshold=-4.59512 miss_threshold=7 terminated=[6] reasons=score:[6]
 
 Cluster rebuilds scan=48 t=2025-12-10 17:39:58.285000+00:00:
@@ -673,7 +673,7 @@ SCAN scan=51 t=2025-12-10 17:39:58.885000+00:00 det=1 trees=2 leaves=30 tentativ
 SCAN_NSCAN_COMMITTED scan=51 t=2025-12-10 17:39:58.885000+00:00 boundary=45 0->node1591@s45, 5->node1615@s45
 
 Internal births at 2025-12-10 17:39:59.085000+00:00: kept=1
-  birth_state=(x=114.1, vx=0.00, y=-5.5, vy=0.00)
+  birth_state=(0=114.148, 1=0, 2=-5.494, 3=0)
 
 Cluster rebuilds scan=52 t=2025-12-10 17:39:59.085000+00:00:
 cluster=0 tracks=[0, 5] globals=20 comb_eval=238 comb_feas=31 disagree=8
@@ -688,7 +688,7 @@ SCAN scan=52 t=2025-12-10 17:39:59.085000+00:00 det=1 trees=3 leaves=17 tentativ
 SCAN_NSCAN_COMMITTED scan=52 t=2025-12-10 17:39:59.085000+00:00 boundary=46 0->node1635@s46, 5->node1654@s46
 
 Internal births at 2025-12-10 17:39:59.285000+00:00: kept=1
-  birth_state=(x=108.9, vx=0.00, y=1.6, vy=0.00)
+  birth_state=(0=108.861, 1=0, 2=1.56481, 3=0)
 
 Cluster rebuilds scan=53 t=2025-12-10 17:39:59.285000+00:00:
 cluster=0 tracks=[0, 5] globals=20 comb_eval=252 comb_feas=36 disagree=11
@@ -747,7 +747,7 @@ SCAN scan=56 t=2025-12-10 17:39:59.885000+00:00 det=0 trees=1 leaves=6 tentative
 SCAN_NSCAN_COMMITTED scan=56 t=2025-12-10 17:39:59.885000+00:00 boundary=50 0->node1857@s50, 5->node1870@s50
 
 Internal births at 2025-12-10 17:40:00.085000+00:00: kept=1
-  birth_state=(x=118.2, vx=0.00, y=0.6, vy=0.00)
+  birth_state=(0=118.203, 1=0, 2=0.599513, 3=0)
 
 Cluster rebuilds scan=57 t=2025-12-10 17:40:00.085000+00:00:
 cluster=0 tracks=[5] globals=6 comb_eval=6 comb_feas=6 disagree=2
@@ -762,8 +762,8 @@ SCAN scan=57 t=2025-12-10 17:40:00.085000+00:00 det=1 trees=2 leaves=5 tentative
 SCAN_NSCAN_COMMITTED scan=57 t=2025-12-10 17:40:00.085000+00:00 boundary=51 5->node1906@s51
 
 Internal births at 2025-12-10 17:40:00.285000+00:00: kept=2
-  birth_state=(x=106.4, vx=0.00, y=0.1, vy=0.00)
-  birth_state=(x=118.1, vx=0.00, y=-4.2, vy=0.00)
+  birth_state=(0=106.364, 1=0, 2=0.130614, 3=0)
+  birth_state=(0=118.071, 1=0, 2=-4.24619, 3=0)
 
 Cluster rebuilds scan=58 t=2025-12-10 17:40:00.285000+00:00:
 cluster=0 tracks=[5] globals=8 comb_eval=8 comb_feas=8 disagree=0
@@ -840,7 +840,7 @@ SCAN scan=62 t=2025-12-10 17:40:01.085000+00:00 det=0 trees=1 leaves=8 tentative
 SCAN_NSCAN_COMMITTED scan=62 t=2025-12-10 17:40:01.085000+00:00 boundary=56 5->node2035@s56
 
 Internal births at 2025-12-10 17:40:01.285000+00:00: kept=1
-  birth_state=(x=114.7, vx=0.00, y=-1.4, vy=0.00)
+  birth_state=(0=114.745, 1=0, 2=-1.40041, 3=0)
 
 Cluster rebuilds scan=63 t=2025-12-10 17:40:01.285000+00:00:
 cluster=0 tracks=[5] globals=8 comb_eval=8 comb_feas=8 disagree=0
@@ -855,8 +855,8 @@ SCAN scan=63 t=2025-12-10 17:40:01.285000+00:00 det=1 trees=2 leaves=9 tentative
 SCAN_NSCAN_COMMITTED scan=63 t=2025-12-10 17:40:01.285000+00:00 boundary=57 5->node2050@s57
 
 Internal births at 2025-12-10 17:40:01.485000+00:00: kept=2
-  birth_state=(x=102.8, vx=0.00, y=-1.4, vy=0.00)
-  birth_state=(x=108.4, vx=0.00, y=-7.1, vy=0.00)
+  birth_state=(0=102.784, 1=0, 2=-1.43371, 3=0)
+  birth_state=(0=108.413, 1=0, 2=-7.10767, 3=0)
 
 Cluster rebuilds scan=64 t=2025-12-10 17:40:01.485000+00:00:
 cluster=0 tracks=[5] globals=8 comb_eval=8 comb_feas=8 disagree=4
@@ -925,7 +925,7 @@ SCAN scan=67 t=2025-12-10 17:40:02.085000+00:00 det=1 trees=3 leaves=6 tentative
 SCAN_NSCAN_COMMITTED scan=67 t=2025-12-10 17:40:02.085000+00:00 boundary=61 5->node2090@s61
 
 Internal births at 2025-12-10 17:40:02.285000+00:00: kept=1
-  birth_state=(x=112.3, vx=0.00, y=7.0, vy=0.00)
+  birth_state=(0=112.314, 1=0, 2=6.97498, 3=0)
 
 Cluster rebuilds scan=68 t=2025-12-10 17:40:02.285000+00:00:
 cluster=0 tracks=[5] globals=4 comb_eval=4 comb_feas=4 disagree=0
@@ -1064,8 +1064,8 @@ SCAN scan=74 t=2025-12-10 17:40:03.485000+00:00 det=2 trees=3 leaves=30 tentativ
 SCAN_NSCAN_COMMITTED scan=74 t=2025-12-10 17:40:03.485000+00:00 boundary=68 5->node2162@s68, 15->node2167@s68, 16->node2171@s68
 
 Internal births at 2025-12-10 17:40:03.685000+00:00: kept=2
-  birth_state=(x=83.1, vx=0.00, y=53.2, vy=0.00)
-  birth_state=(x=109.1, vx=0.00, y=-1.6, vy=0.00)
+  birth_state=(0=83.0924, 1=0, 2=53.1622, 3=0)
+  birth_state=(0=109.095, 1=0, 2=-1.63486, 3=0)
 
 Cluster rebuilds scan=75 t=2025-12-10 17:40:03.685000+00:00:
 cluster=0 tracks=[5] globals=18 comb_eval=18 comb_feas=18 disagree=4
@@ -1094,7 +1094,7 @@ SCAN scan=75 t=2025-12-10 17:40:03.685000+00:00 det=3 trees=5 leaves=29 tentativ
 SCAN_NSCAN_COMMITTED scan=75 t=2025-12-10 17:40:03.685000+00:00 boundary=69 5->node2176@s69, 15->node2185@s69, 16->node2190@s69
 
 Internal births at 2025-12-10 17:40:03.885000+00:00: kept=1
-  birth_state=(x=99.4, vx=0.00, y=32.3, vy=0.00)
+  birth_state=(0=99.3664, 1=0, 2=32.2615, 3=0)
 
 Cluster rebuilds scan=76 t=2025-12-10 17:40:03.885000+00:00:
 cluster=0 tracks=[5] globals=20 comb_eval=21 comb_feas=20 disagree=0
@@ -1409,7 +1409,7 @@ SCAN scan=88 t=2025-12-10 17:40:06.285000+00:00 det=3 trees=4 leaves=23 tentativ
 SCAN_NSCAN_COMMITTED scan=88 t=2025-12-10 17:40:06.285000+00:00 boundary=82 5->node2797@s82, 15->node2817@s82, 16->node2825@s82, 19->node2833@s82
 
 Internal births at 2025-12-10 17:40:06.485000+00:00: kept=1
-  birth_state=(x=95.2, vx=0.00, y=7.7, vy=0.00)
+  birth_state=(0=95.1926, 1=0, 2=7.71678, 3=0)
 
 Cluster rebuilds scan=89 t=2025-12-10 17:40:06.485000+00:00:
 cluster=0 tracks=[5] globals=8 comb_eval=8 comb_feas=8 disagree=4
@@ -1546,7 +1546,7 @@ SCAN scan=93 t=2025-12-10 17:40:07.285000+00:00 det=3 trees=5 leaves=15 tentativ
 SCAN_NSCAN_COMMITTED scan=93 t=2025-12-10 17:40:07.285000+00:00 boundary=87 5->node2979@s87, 15->node2995@s87, 16->node3001@s87, 19->node3018@s87
 
 Internal births at 2025-12-10 17:40:07.485000+00:00: kept=1
-  birth_state=(x=82.1, vx=0.00, y=0.9, vy=0.00)
+  birth_state=(0=82.0781, 1=0, 2=0.915507, 3=0)
 TRACK_LIFECYCLE mode=map_leaf score_threshold=-4.59512 miss_threshold=7 terminated=[16] reasons=miss:[16]
 
 Cluster rebuilds scan=94 t=2025-12-10 17:40:07.485000+00:00:
@@ -1584,7 +1584,7 @@ SCAN scan=95 t=2025-12-10 17:40:07.685000+00:00 det=3 trees=5 leaves=20 tentativ
 SCAN_NSCAN_COMMITTED scan=95 t=2025-12-10 17:40:07.685000+00:00 boundary=89 5->node3055@s89, 15->node3063@s89, 19->node3076@s89
 
 Internal births at 2025-12-10 17:40:07.885000+00:00: kept=1
-  birth_state=(x=91.8, vx=0.00, y=7.1, vy=0.00)
+  birth_state=(0=91.7957, 1=0, 2=7.1345, 3=0)
 
 Cluster rebuilds scan=96 t=2025-12-10 17:40:07.885000+00:00:
 cluster=0 tracks=[5] globals=2 comb_eval=2 comb_feas=2 disagree=1
@@ -1629,7 +1629,7 @@ SCAN scan=97 t=2025-12-10 17:40:08.085000+00:00 det=3 trees=5 leaves=24 tentativ
 SCAN_NSCAN_COMMITTED scan=97 t=2025-12-10 17:40:08.085000+00:00 boundary=91 5->node3104@s91, 15->node3112@s91, 19->node3120@s91, 21->node3123@s91
 
 Internal births at 2025-12-10 17:40:08.285000+00:00: kept=1
-  birth_state=(x=76.9, vx=0.00, y=-25.9, vy=0.00)
+  birth_state=(0=76.8989, 1=0, 2=-25.8672, 3=0)
 
 Cluster rebuilds scan=98 t=2025-12-10 17:40:08.285000+00:00:
 cluster=0 tracks=[15, 21, 22, 23] globals=20 comb_eval=558 comb_feas=51 disagree=0
@@ -1650,7 +1650,7 @@ SCAN scan=98 t=2025-12-10 17:40:08.285000+00:00 det=4 trees=6 leaves=24 tentativ
 SCAN_NSCAN_COMMITTED scan=98 t=2025-12-10 17:40:08.285000+00:00 boundary=92 15->node3135@s92, 19->node3145@s92, 21->node3148@s92
 
 Internal births at 2025-12-10 17:40:08.485000+00:00: kept=1
-  birth_state=(x=89.5, vx=0.00, y=-4.8, vy=0.00)
+  birth_state=(0=89.5079, 1=0, 2=-4.80951, 3=0)
 
 Cluster rebuilds scan=99 t=2025-12-10 17:40:08.485000+00:00:
 cluster=0 tracks=[15, 22] globals=20 comb_eval=66 comb_feas=29 disagree=3
@@ -1859,7 +1859,7 @@ SCAN scan=105 t=2025-12-10 17:40:09.685000+00:00 det=3 trees=6 leaves=56 tentati
 SCAN_NSCAN_COMMITTED scan=105 t=2025-12-10 17:40:09.685000+00:00 boundary=99 15->node3358@s99, 19->node3368@s99, 22->node3380@s99, 23->node3386@s99, 24->node3390@s99
 
 Internal births at 2025-12-10 17:40:09.885000+00:00: kept=1
-  birth_state=(x=85.1, vx=0.00, y=51.2, vy=0.00)
+  birth_state=(0=85.1212, 1=0, 2=51.2429, 3=0)
 OVERLOAD_SPLIT scan=106 cluster=0 track_ids=[15, 19, 22, 23, 25] projected_before=1028160 threshold=500000 split_ops=2 stop=all_components_under_threshold removed_edges=[15-25:1, 22-25:1] subclusters=[[15, 22], [19, 23, 25]] projected_after=[340, 3024]
 
 Cluster rebuilds scan=106 t=2025-12-10 17:40:09.885000+00:00:
@@ -2175,7 +2175,7 @@ SCAN scan=116 t=2025-12-10 17:40:11.885000+00:00 det=3 trees=6 leaves=36 tentati
 SCAN_NSCAN_COMMITTED scan=116 t=2025-12-10 17:40:11.885000+00:00 boundary=110 15->node4640@s110, 19->node4768@s110, 22->node4791@s110, 23->node4798@s110, 24->node4814@s110, 25->node4846@s110
 
 Internal births at 2025-12-10 17:40:12.085000+00:00: kept=1
-  birth_state=(x=84.1, vx=0.00, y=4.3, vy=0.00)
+  birth_state=(0=84.0689, 1=0, 2=4.28951, 3=0)
 
 Cluster rebuilds scan=117 t=2025-12-10 17:40:12.085000+00:00:
 cluster=0 tracks=[15, 22] globals=20 comb_eval=63 comb_feas=27 disagree=0
@@ -2385,7 +2385,7 @@ SCAN scan=122 t=2025-12-10 17:40:13.085000+00:00 det=4 trees=7 leaves=54 tentati
 SCAN_NSCAN_COMMITTED scan=122 t=2025-12-10 17:40:13.085000+00:00 boundary=116 15->node5468@s116, 19->node5482@s116, 22->node5485@s116, 23->node5497@s116, 24->node5501@s116, 25->node5512@s116
 
 Internal births at 2025-12-10 17:40:13.285000+00:00: kept=1
-  birth_state=(x=73.2, vx=0.00, y=16.8, vy=0.00)
+  birth_state=(0=73.17, 1=0, 2=16.8019, 3=0)
 
 Cluster rebuilds scan=123 t=2025-12-10 17:40:13.285000+00:00:
 cluster=0 tracks=[15, 22] globals=20 comb_eval=135 comb_feas=32 disagree=2
@@ -2566,7 +2566,7 @@ SCAN scan=127 t=2025-12-10 17:40:14.085000+00:00 det=4 trees=6 leaves=55 tentati
 SCAN_NSCAN_COMMITTED scan=127 t=2025-12-10 17:40:14.085000+00:00 boundary=121 15->node5855@s121, 22->node5871@s121, 23->node5878@s121, 24->node5888@s121, 25->node5904@s121, 27->node5934@s121
 
 Internal births at 2025-12-10 17:40:14.285000+00:00: kept=1
-  birth_state=(x=76.9, vx=0.00, y=2.3, vy=0.00)
+  birth_state=(0=76.8708, 1=0, 2=2.26771, 3=0)
 
 Cluster rebuilds scan=128 t=2025-12-10 17:40:14.285000+00:00:
 cluster=0 tracks=[15] globals=12 comb_eval=12 comb_feas=12 disagree=0
@@ -2795,8 +2795,8 @@ SCAN scan=134 t=2025-12-10 17:40:15.485000+00:00 det=6 trees=6 leaves=50 tentati
 SCAN_NSCAN_COMMITTED scan=134 t=2025-12-10 17:40:15.485000+00:00 boundary=128 15->node6474@s128, 22->node6486@s128, 23->node6500@s128, 24->node6524@s128, 25->node6560@s128
 
 Internal births at 2025-12-10 17:40:15.685000+00:00: kept=2
-  birth_state=(x=45.3, vx=0.00, y=-41.8, vy=0.00)
-  birth_state=(x=48.7, vx=0.00, y=-45.7, vy=0.00)
+  birth_state=(0=45.3447, 1=0, 2=-41.8035, 3=0)
+  birth_state=(0=48.6949, 1=0, 2=-45.721, 3=0)
 
 Cluster rebuilds scan=135 t=2025-12-10 17:40:15.685000+00:00:
 cluster=0 tracks=[15] globals=10 comb_eval=10 comb_feas=10 disagree=0
@@ -2843,7 +2843,7 @@ SCAN scan=135 t=2025-12-10 17:40:15.685000+00:00 det=7 trees=8 leaves=65 tentati
 SCAN_NSCAN_COMMITTED scan=135 t=2025-12-10 17:40:15.685000+00:00 boundary=129 15->node6576@s129, 22->node6601@s129, 23->node6632@s129, 24->node6656@s129, 25->node6672@s129, 29->node6689@s129
 
 Internal births at 2025-12-10 17:40:15.885000+00:00: kept=1
-  birth_state=(x=43.1, vx=0.00, y=42.4, vy=0.00)
+  birth_state=(0=43.1313, 1=0, 2=42.402, 3=0)
 
 Cluster rebuilds scan=136 t=2025-12-10 17:40:15.885000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=20 comb_feas=20 disagree=0
@@ -2938,7 +2938,7 @@ SCAN scan=137 t=2025-12-10 17:40:16.085000+00:00 det=4 trees=9 leaves=75 tentati
 SCAN_NSCAN_COMMITTED scan=137 t=2025-12-10 17:40:16.085000+00:00 boundary=131 15->node6781@s131, 22->node6801@s131, 23->node6833@s131, 24->node6863@s131, 25->node6875@s131, 29->node6902@s131
 
 Internal births at 2025-12-10 17:40:16.285000+00:00: kept=1
-  birth_state=(x=70.6, vx=0.00, y=-2.5, vy=0.00)
+  birth_state=(0=70.5619, 1=0, 2=-2.51885, 3=0)
 TRACK_LIFECYCLE mode=map_leaf score_threshold=-4.59512 miss_threshold=7 terminated=[30, 31] reasons=score:[30, 31]
 
 Cluster rebuilds scan=138 t=2025-12-10 17:40:16.285000+00:00:
@@ -3371,7 +3371,7 @@ SCAN scan=148 t=2025-12-10 17:40:18.285000+00:00 det=8 trees=7 leaves=91 tentati
 SCAN_NSCAN_COMMITTED scan=148 t=2025-12-10 17:40:18.285000+00:00 boundary=142 15->node8161@s142, 22->node8197@s142, 23->node8213@s142, 24->node8225@s142, 25->node8235@s142, 29->node8245@s142, 33->node8251@s142
 
 Internal births at 2025-12-10 17:40:18.485000+00:00: kept=1
-  birth_state=(x=77.5, vx=0.00, y=110.6, vy=0.00)
+  birth_state=(0=77.5106, 1=0, 2=110.607, 3=0)
 
 Cluster rebuilds scan=149 t=2025-12-10 17:40:18.485000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=21 comb_feas=20 disagree=2
@@ -3654,7 +3654,7 @@ SCAN scan=154 t=2025-12-10 17:40:19.485000+00:00 det=7 trees=8 leaves=82 tentati
 SCAN_NSCAN_COMMITTED scan=154 t=2025-12-10 17:40:19.485000+00:00 boundary=148 15->node8820@s148, 22->node8854@s148, 23->node8895@s148, 24->node8918@s148, 25->node8932@s148, 29->node8977@s148, 33->node8981@s148
 
 Internal births at 2025-12-10 17:40:19.685000+00:00: kept=1
-  birth_state=(x=31.1, vx=0.00, y=42.5, vy=0.00)
+  birth_state=(0=31.1072, 1=0, 2=42.5194, 3=0)
 TRACK_LIFECYCLE mode=map_leaf score_threshold=-4.59512 miss_threshold=7 terminated=[24] reasons=miss:[24]
 
 Cluster rebuilds scan=155 t=2025-12-10 17:40:19.685000+00:00:
@@ -3702,7 +3702,7 @@ SCAN scan=155 t=2025-12-10 17:40:19.685000+00:00 det=7 trees=8 leaves=81 tentati
 SCAN_NSCAN_COMMITTED scan=155 t=2025-12-10 17:40:19.685000+00:00 boundary=149 15->node8995@s149, 22->node9027@s149, 23->node9062@s149, 24->node9077@s149, 25->node9091@s149, 29->node9123@s149, 33->node9131@s149
 
 Internal births at 2025-12-10 17:40:19.885000+00:00: kept=1
-  birth_state=(x=57.5, vx=0.00, y=13.5, vy=0.00)
+  birth_state=(0=57.4861, 1=0, 2=13.5235, 3=0)
 
 Cluster rebuilds scan=156 t=2025-12-10 17:40:19.885000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=21 comb_feas=20 disagree=0
@@ -3901,8 +3901,8 @@ SCAN scan=159 t=2025-12-10 17:40:20.485000+00:00 det=8 trees=8 leaves=99 tentati
 SCAN_NSCAN_COMMITTED scan=159 t=2025-12-10 17:40:20.485000+00:00 boundary=153 15->node9568@s153, 22->node9600@s153, 23->node9644@s153, 25->node9668@s153, 29->node9702@s153, 33->node9714@s153, 34->node9737@s153
 
 Internal births at 2025-12-10 17:40:20.685000+00:00: kept=2
-  birth_state=(x=39.0, vx=0.00, y=-36.1, vy=0.00)
-  birth_state=(x=39.6, vx=0.00, y=-8.0, vy=0.00)
+  birth_state=(0=38.9965, 1=0, 2=-36.0947, 3=0)
+  birth_state=(0=39.5765, 1=0, 2=-7.99738, 3=0)
 
 Cluster rebuilds scan=160 t=2025-12-10 17:40:20.685000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=21 comb_feas=20 disagree=7
@@ -3996,7 +3996,7 @@ SCAN scan=161 t=2025-12-10 17:40:20.885000+00:00 det=5 trees=10 leaves=87 tentat
 SCAN_NSCAN_COMMITTED scan=161 t=2025-12-10 17:40:20.885000+00:00 boundary=155 15->node9919@s155, 22->node9951@s155, 23->node9983@s155, 25->node10000@s155, 29->node10012@s155, 33->node10045@s155, 34->node10060@s155
 
 Internal births at 2025-12-10 17:40:21.085000+00:00: kept=1
-  birth_state=(x=40.5, vx=0.00, y=38.3, vy=0.00)
+  birth_state=(0=40.4718, 1=0, 2=38.2743, 3=0)
 
 Cluster rebuilds scan=162 t=2025-12-10 17:40:21.085000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=21 comb_feas=20 disagree=5
@@ -4075,8 +4075,8 @@ SCAN scan=163 t=2025-12-10 17:40:21.285000+00:00 det=6 trees=9 leaves=57 tentati
 SCAN_NSCAN_COMMITTED scan=163 t=2025-12-10 17:40:21.285000+00:00 boundary=157 15->node10227@s157, 22->node10267@s157, 23->node10284@s157, 25->node10308@s157, 29->node10348@s157, 33->node10376@s157, 34->node10408@s157, 36->node10421@s157
 
 Internal births at 2025-12-10 17:40:21.485000+00:00: kept=2
-  birth_state=(x=20.1, vx=0.00, y=-30.9, vy=0.00)
-  birth_state=(x=77.1, vx=0.00, y=110.2, vy=0.00)
+  birth_state=(0=20.1066, 1=0, 2=-30.8541, 3=0)
+  birth_state=(0=77.1216, 1=0, 2=110.154, 3=0)
 
 Cluster rebuilds scan=164 t=2025-12-10 17:40:21.485000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=21 comb_feas=20 disagree=2
@@ -4229,8 +4229,8 @@ SCAN scan=167 t=2025-12-10 17:40:22.086000+00:00 det=6 trees=8 leaves=64 tentati
 SCAN_NSCAN_COMMITTED scan=167 t=2025-12-10 17:40:22.086000+00:00 boundary=161 15->node11095@s161, 22->node11121@s161, 23->node11152@s161, 25->node11157@s161, 29->node11179@s161, 33->node11184@s161, 36->node11212@s161, 37->node11220@s161
 
 Internal births at 2025-12-10 17:40:22.286000+00:00: kept=2
-  birth_state=(x=112.3, vx=0.00, y=-28.5, vy=0.00)
-  birth_state=(x=113.9, vx=0.00, y=-24.6, vy=0.00)
+  birth_state=(0=112.289, 1=0, 2=-28.5324, 3=0)
+  birth_state=(0=113.868, 1=0, 2=-24.561, 3=0)
 
 Cluster rebuilds scan=168 t=2025-12-10 17:40:22.286000+00:00:
 cluster=0 tracks=[15, 22] globals=20 comb_eval=249 comb_feas=36 disagree=2
@@ -4274,8 +4274,8 @@ SCAN scan=168 t=2025-12-10 17:40:22.286000+00:00 det=8 trees=10 leaves=87 tentat
 SCAN_NSCAN_COMMITTED scan=168 t=2025-12-10 17:40:22.286000+00:00 boundary=162 15->node11223@s162, 22->node11257@s162, 23->node11291@s162, 25->node11301@s162, 29->node11318@s162, 33->node11323@s162, 36->node11351@s162
 
 Internal births at 2025-12-10 17:40:22.485000+00:00: kept=2
-  birth_state=(x=51.6, vx=0.00, y=10.8, vy=0.00)
-  birth_state=(x=57.9, vx=0.00, y=-6.0, vy=0.00)
+  birth_state=(0=51.5615, 1=0, 2=10.7933, 3=0)
+  birth_state=(0=57.8728, 1=0, 2=-5.9593, 3=0)
 
 Cluster rebuilds scan=169 t=2025-12-10 17:40:22.485000+00:00:
 cluster=0 tracks=[15, 22] globals=20 comb_eval=236 comb_feas=36 disagree=2
@@ -4317,7 +4317,7 @@ SCAN scan=169 t=2025-12-10 17:40:22.485000+00:00 det=8 trees=12 leaves=84 tentat
 SCAN_NSCAN_COMMITTED scan=169 t=2025-12-10 17:40:22.485000+00:00 boundary=163 15->node11365@s163, 22->node11395@s163, 23->node11427@s163, 25->node11432@s163, 29->node11479@s163, 33->node11489@s163, 36->node11497@s163
 
 Internal births at 2025-12-10 17:40:22.685000+00:00: kept=1
-  birth_state=(x=53.0, vx=0.00, y=1.1, vy=0.00)
+  birth_state=(0=52.9817, 1=0, 2=1.08338, 3=0)
 
 Cluster rebuilds scan=170 t=2025-12-10 17:40:22.685000+00:00:
 cluster=0 tracks=[15, 22] globals=20 comb_eval=216 comb_feas=35 disagree=1
@@ -4365,7 +4365,7 @@ SCAN scan=170 t=2025-12-10 17:40:22.685000+00:00 det=7 trees=13 leaves=92 tentat
 SCAN_NSCAN_COMMITTED scan=170 t=2025-12-10 17:40:22.685000+00:00 boundary=164 15->node11518@s164, 22->node11552@s164, 23->node11596@s164, 25->node11598@s164, 29->node11610@s164, 33->node11611@s164, 36->node11615@s164
 
 Internal births at 2025-12-10 17:40:22.886000+00:00: kept=1
-  birth_state=(x=6.1, vx=0.00, y=48.5, vy=0.00)
+  birth_state=(0=6.056, 1=0, 2=48.5168, 3=0)
 TRACK_LIFECYCLE mode=map_leaf score_threshold=-4.59512 miss_threshold=7 terminated=[36, 40] reasons=score:[36, 40];miss:[36]
 
 Cluster rebuilds scan=171 t=2025-12-10 17:40:22.886000+00:00:
@@ -5523,7 +5523,7 @@ SCAN scan=197 t=2025-12-10 17:40:28.086000+00:00 det=6 trees=6 leaves=79 tentati
 SCAN_NSCAN_COMMITTED scan=197 t=2025-12-10 17:40:28.086000+00:00 boundary=191 15->node25541@s191, 22->node25575@s191, 23->node25616@s191, 25->node25812@s191, 29->node25850@s191, 33->node25867@s191
 
 Internal births at 2025-12-10 17:40:28.286000+00:00: kept=1
-  birth_state=(x=56.5, vx=0.00, y=1.4, vy=0.00)
+  birth_state=(0=56.52, 1=0, 2=1.40314, 3=0)
 
 Cluster rebuilds scan=198 t=2025-12-10 17:40:28.286000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=21 comb_feas=20 disagree=3
@@ -5562,8 +5562,8 @@ SCAN scan=198 t=2025-12-10 17:40:28.286000+00:00 det=6 trees=7 leaves=78 tentati
 SCAN_NSCAN_COMMITTED scan=198 t=2025-12-10 17:40:28.286000+00:00 boundary=192 15->node26101@s192, 22->node26117@s192, 23->node26133@s192, 25->node26239@s192, 29->node26297@s192, 33->node26331@s192
 
 Internal births at 2025-12-10 17:40:28.485000+00:00: kept=2
-  birth_state=(x=30.8, vx=0.00, y=-28.0, vy=0.00)
-  birth_state=(x=32.0, vx=0.00, y=-30.3, vy=0.00)
+  birth_state=(0=30.7509, 1=0, 2=-27.9933, 3=0)
+  birth_state=(0=31.9795, 1=0, 2=-30.3028, 3=0)
 
 Cluster rebuilds scan=199 t=2025-12-10 17:40:28.485000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=21 comb_feas=20 disagree=4
@@ -5648,7 +5648,7 @@ SCAN scan=200 t=2025-12-10 17:40:28.686000+00:00 det=6 trees=9 leaves=88 tentati
 SCAN_NSCAN_COMMITTED scan=200 t=2025-12-10 17:40:28.686000+00:00 boundary=194 15->node26994@s194, 22->node27028@s194, 23->node27062@s194, 25->node27163@s194, 29->node27234@s194, 33->node27299@s194
 
 Internal births at 2025-12-10 17:40:28.886000+00:00: kept=1
-  birth_state=(x=4.7, vx=0.00, y=-45.1, vy=0.00)
+  birth_state=(0=4.67641, 1=0, 2=-45.0641, 3=0)
 
 Cluster rebuilds scan=201 t=2025-12-10 17:40:28.886000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=21 comb_feas=20 disagree=4
@@ -6047,8 +6047,8 @@ SCAN scan=211 t=2025-12-10 17:40:30.886000+00:00 det=6 trees=7 leaves=72 tentati
 SCAN_NSCAN_COMMITTED scan=211 t=2025-12-10 17:40:30.886000+00:00 boundary=205 15->node29508@s205, 22->node29566@s205, 23->node29599@s205, 25->node29627@s205, 29->node29683@s205, 33->node29693@s205, 48->node29714@s205
 
 Internal births at 2025-12-10 17:40:31.086000+00:00: kept=2
-  birth_state=(x=19.4, vx=0.00, y=-21.6, vy=0.00)
-  birth_state=(x=25.0, vx=0.00, y=-10.9, vy=0.00)
+  birth_state=(0=19.3916, 1=0, 2=-21.6371, 3=0)
+  birth_state=(0=24.9535, 1=0, 2=-10.9228, 3=0)
 
 Cluster rebuilds scan=212 t=2025-12-10 17:40:31.086000+00:00:
 cluster=0 tracks=[15] globals=12 comb_eval=12 comb_feas=12 disagree=0
@@ -6878,8 +6878,8 @@ SCAN scan=228 t=2025-12-10 17:40:34.286000+00:00 det=7 trees=7 leaves=99 tentati
 SCAN_NSCAN_COMMITTED scan=228 t=2025-12-10 17:40:34.286000+00:00 boundary=222 15->node34852@s222, 22->node34886@s222, 23->node34916@s222, 25->node34934@s222, 29->node34968@s222, 33->node34996@s222, 48->node35028@s222
 
 Internal births at 2025-12-10 17:40:34.486000+00:00: kept=2
-  birth_state=(x=12.1, vx=0.00, y=-18.8, vy=0.00)
-  birth_state=(x=17.2, vx=0.00, y=24.0, vy=0.00)
+  birth_state=(0=12.0521, 1=0, 2=-18.8016, 3=0)
+  birth_state=(0=17.1793, 1=0, 2=23.9708, 3=0)
 
 Cluster rebuilds scan=229 t=2025-12-10 17:40:34.486000+00:00:
 cluster=0 tracks=[15, 22] globals=20 comb_eval=194 comb_feas=30 disagree=2
@@ -6926,7 +6926,7 @@ SCAN scan=229 t=2025-12-10 17:40:34.486000+00:00 det=8 trees=9 leaves=92 tentati
 SCAN_NSCAN_COMMITTED scan=229 t=2025-12-10 17:40:34.486000+00:00 boundary=223 15->node35066@s223, 22->node35098@s223, 23->node35134@s223, 25->node35179@s223, 29->node35224@s223, 33->node35254@s223, 48->node35290@s223
 
 Internal births at 2025-12-10 17:40:34.686000+00:00: kept=1
-  birth_state=(x=26.7, vx=0.00, y=-25.8, vy=0.00)
+  birth_state=(0=26.6884, 1=0, 2=-25.8477, 3=0)
 
 Cluster rebuilds scan=230 t=2025-12-10 17:40:34.686000+00:00:
 cluster=0 tracks=[15, 22] globals=20 comb_eval=248 comb_feas=33 disagree=2
@@ -7210,7 +7210,7 @@ SCAN scan=235 t=2025-12-10 17:40:35.686000+00:00 det=10 trees=8 leaves=109 tenta
 SCAN_NSCAN_COMMITTED scan=235 t=2025-12-10 17:40:35.686000+00:00 boundary=229 15->node36526@s229, 22->node36543@s229, 23->node36557@s229, 25->node36597@s229, 29->node36623@s229, 33->node36659@s229, 48->node36697@s229
 
 Internal births at 2025-12-10 17:40:35.886000+00:00: kept=1
-  birth_state=(x=27.1, vx=0.00, y=27.9, vy=0.00)
+  birth_state=(0=27.112, 1=0, 2=27.8909, 3=0)
 TRACK_LIFECYCLE mode=map_leaf score_threshold=-4.59512 miss_threshold=7 terminated=[54] reasons=score:[54]
 
 Cluster rebuilds scan=236 t=2025-12-10 17:40:35.886000+00:00:
@@ -7268,8 +7268,8 @@ SCAN scan=236 t=2025-12-10 17:40:35.886000+00:00 det=6 trees=8 leaves=86 tentati
 SCAN_NSCAN_COMMITTED scan=236 t=2025-12-10 17:40:35.886000+00:00 boundary=230 15->node36727@s230, 22->node36748@s230, 23->node36767@s230, 25->node36799@s230, 29->node36821@s230, 33->node36857@s230, 48->node36889@s230, 54->node36919@s230
 
 Internal births at 2025-12-10 17:40:36.086000+00:00: kept=2
-  birth_state=(x=11.5, vx=0.00, y=18.4, vy=0.00)
-  birth_state=(x=20.2, vx=0.00, y=-21.9, vy=0.00)
+  birth_state=(0=11.4975, 1=0, 2=18.3836, 3=0)
+  birth_state=(0=20.2392, 1=0, 2=-21.8569, 3=0)
 
 Cluster rebuilds scan=237 t=2025-12-10 17:40:36.086000+00:00:
 cluster=0 tracks=[15] globals=12 comb_eval=12 comb_feas=12 disagree=2
@@ -7318,7 +7318,7 @@ SCAN scan=237 t=2025-12-10 17:40:36.086000+00:00 det=8 trees=10 leaves=84 tentat
 SCAN_NSCAN_COMMITTED scan=237 t=2025-12-10 17:40:36.086000+00:00 boundary=231 15->node36927@s231, 22->node36943@s231, 23->node36963@s231, 25->node36998@s231, 29->node37051@s231, 33->node37075@s231, 48->node37109@s231
 
 Internal births at 2025-12-10 17:40:36.286000+00:00: kept=1
-  birth_state=(x=10.0, vx=0.00, y=-17.4, vy=0.00)
+  birth_state=(0=10.0141, 1=0, 2=-17.4185, 3=0)
 
 Cluster rebuilds scan=238 t=2025-12-10 17:40:36.286000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=20 comb_feas=20 disagree=4
@@ -7425,7 +7425,7 @@ SCAN scan=239 t=2025-12-10 17:40:36.486000+00:00 det=7 trees=10 leaves=86 tentat
 SCAN_NSCAN_COMMITTED scan=239 t=2025-12-10 17:40:36.486000+00:00 boundary=233 15->node37337@s233, 22->node37349@s233, 23->node37375@s233, 25->node37405@s233, 29->node37435@s233, 33->node37469@s233, 48->node37503@s233
 
 Internal births at 2025-12-10 17:40:36.686000+00:00: kept=1
-  birth_state=(x=83.5, vx=0.00, y=53.2, vy=0.00)
+  birth_state=(0=83.5371, 1=0, 2=53.2182, 3=0)
 TRACK_LIFECYCLE mode=map_leaf score_threshold=-4.59512 miss_threshold=7 terminated=[58] reasons=score:[58]
 
 Cluster rebuilds scan=240 t=2025-12-10 17:40:36.686000+00:00:
@@ -7478,7 +7478,7 @@ SCAN scan=240 t=2025-12-10 17:40:36.686000+00:00 det=10 trees=10 leaves=86 tenta
 SCAN_NSCAN_COMMITTED scan=240 t=2025-12-10 17:40:36.686000+00:00 boundary=234 15->node37548@s234, 22->node37560@s234, 23->node37602@s234, 25->node37632@s234, 29->node37662@s234, 33->node37694@s234, 48->node37726@s234
 
 Internal births at 2025-12-10 17:40:36.886000+00:00: kept=1
-  birth_state=(x=16.3, vx=0.00, y=13.7, vy=0.00)
+  birth_state=(0=16.3359, 1=0, 2=13.6599, 3=0)
 
 Cluster rebuilds scan=241 t=2025-12-10 17:40:36.886000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=21 comb_feas=20 disagree=4
@@ -7538,7 +7538,7 @@ SCAN scan=241 t=2025-12-10 17:40:36.886000+00:00 det=12 trees=11 leaves=101 tent
 SCAN_NSCAN_COMMITTED scan=241 t=2025-12-10 17:40:36.886000+00:00 boundary=235 15->node37768@s235, 22->node37780@s235, 23->node37842@s235, 25->node37864@s235, 29->node37893@s235, 33->node37929@s235, 48->node37963@s235
 
 Internal births at 2025-12-10 17:40:37.086000+00:00: kept=1
-  birth_state=(x=24.1, vx=0.00, y=4.6, vy=0.00)
+  birth_state=(0=24.0989, 1=0, 2=4.61114, 3=0)
 
 Cluster rebuilds scan=242 t=2025-12-10 17:40:37.086000+00:00:
 cluster=0 tracks=[15] globals=20 comb_eval=21 comb_feas=20 disagree=0
@@ -7693,8 +7693,8 @@ SCAN scan=244 t=2025-12-10 17:40:37.486000+00:00 det=7 trees=10 leaves=73 tentat
 SCAN_NSCAN_COMMITTED scan=244 t=2025-12-10 17:40:37.486000+00:00 boundary=238 15->node38337@s238, 22->node38357@s238, 23->node38403@s238, 25->node38415@s238, 29->node38429@s238, 33->node38439@s238, 48->node38467@s238, 59->node38501@s238
 
 Internal births at 2025-12-10 17:40:37.686000+00:00: kept=2
-  birth_state=(x=5.2, vx=0.00, y=18.6, vy=0.00)
-  birth_state=(x=9.5, vx=0.00, y=-36.1, vy=0.00)
+  birth_state=(0=5.20118, 1=0, 2=18.5557, 3=0)
+  birth_state=(0=9.4716, 1=0, 2=-36.125, 3=0)
 
 Cluster rebuilds scan=245 t=2025-12-10 17:40:37.686000+00:00:
 cluster=0 tracks=[15, 22, 23, 29, 63] globals=20 comb_eval=15203 comb_feas=95 disagree=3
@@ -7728,8 +7728,8 @@ SCAN scan=245 t=2025-12-10 17:40:37.686000+00:00 det=13 trees=12 leaves=53 tenta
 SCAN_NSCAN_COMMITTED scan=245 t=2025-12-10 17:40:37.686000+00:00 boundary=239 15->node38503@s239, 22->node38536@s239, 23->node38588@s239, 25->node38608@s239, 29->node38632@s239, 33->node38648@s239, 48->node38680@s239, 59->node38697@s239
 
 Internal births at 2025-12-10 17:40:37.886000+00:00: kept=2
-  birth_state=(x=14.0, vx=0.00, y=-15.7, vy=0.00)
-  birth_state=(x=36.2, vx=0.00, y=8.2, vy=0.00)
+  birth_state=(0=14.0023, 1=0, 2=-15.6665, 3=0)
+  birth_state=(0=36.1655, 1=0, 2=8.22994, 3=0)
 
 Cluster rebuilds scan=246 t=2025-12-10 17:40:37.886000+00:00:
 cluster=0 tracks=[15, 22, 63] globals=20 comb_eval=256 comb_feas=31 disagree=0
@@ -7789,8 +7789,8 @@ SCAN scan=246 t=2025-12-10 17:40:37.886000+00:00 det=10 trees=14 leaves=74 tenta
 SCAN_NSCAN_COMMITTED scan=246 t=2025-12-10 17:40:37.886000+00:00 boundary=240 15->node38699@s240, 22->node38715@s240, 23->node38729@s240, 25->node38759@s240, 29->node38793@s240, 33->node38830@s240, 48->node38866@s240, 59->node38888@s240
 
 Internal births at 2025-12-10 17:40:38.086000+00:00: kept=2
-  birth_state=(x=17.9, vx=0.00, y=-20.1, vy=0.00)
-  birth_state=(x=20.7, vx=0.00, y=-25.4, vy=0.00)
+  birth_state=(0=17.9396, 1=0, 2=-20.1404, 3=0)
+  birth_state=(0=20.698, 1=0, 2=-25.3912, 3=0)
 
 Cluster rebuilds scan=247 t=2025-12-10 17:40:38.086000+00:00:
 cluster=0 tracks=[15, 22, 63] globals=20 comb_eval=1600 comb_feas=44 disagree=0
@@ -7996,8 +7996,8 @@ SCAN scan=250 t=2025-12-10 17:40:38.686000+00:00 det=13 trees=13 leaves=71 tenta
 SCAN_NSCAN_COMMITTED scan=250 t=2025-12-10 17:40:38.686000+00:00 boundary=244 15->node39541@s244, 22->node39554@s244, 23->node39570@s244, 25->node39612@s244, 29->node39648@s244, 33->node39683@s244, 48->node39717@s244, 61->node39761@s244, 63->node39765@s244
 
 Internal births at 2025-12-10 17:40:38.886000+00:00: kept=2
-  birth_state=(x=15.8, vx=0.00, y=22.4, vy=0.00)
-  birth_state=(x=53.6, vx=0.00, y=-1.4, vy=0.00)
+  birth_state=(0=15.7538, 1=0, 2=22.3684, 3=0)
+  birth_state=(0=53.6126, 1=0, 2=-1.39281, 3=0)
 
 Cluster rebuilds scan=251 t=2025-12-10 17:40:38.886000+00:00:
 cluster=0 tracks=[15, 22, 63, 68, 69] globals=20 comb_eval=3050 comb_feas=67 disagree=0
@@ -8136,7 +8136,7 @@ SCAN scan=253 t=2025-12-10 17:40:39.286000+00:00 det=10 trees=14 leaves=93 tenta
 SCAN_NSCAN_COMMITTED scan=253 t=2025-12-10 17:40:39.286000+00:00 boundary=247 15->node40024@s247, 22->node40028@s247, 23->node40047@s247, 25->node40055@s247, 29->node40073@s247, 33->node40075@s247, 48->node40099@s247, 61->node40135@s247, 63->node40162@s247, 67->node40166@s247
 
 Internal births at 2025-12-10 17:40:39.486000+00:00: kept=1
-  birth_state=(x=84.0, vx=0.00, y=104.7, vy=0.00)
+  birth_state=(0=83.9619, 1=0, 2=104.709, 3=0)
 TRACK_LIFECYCLE mode=map_leaf score_threshold=-4.59512 miss_threshold=7 terminated=[68, 69, 70] reasons=score:[68, 69, 70]
 
 Cluster rebuilds scan=254 t=2025-12-10 17:40:39.486000+00:00:
@@ -8947,8 +8947,8 @@ SCAN scan=269 t=2025-12-10 17:40:42.486000+00:00 det=5 trees=8 leaves=87 tentati
 SCAN_NSCAN_COMMITTED scan=269 t=2025-12-10 17:40:42.486000+00:00 boundary=263 15->node44402@s263, 22->node44508@s263, 23->node44624@s263, 25->node44772@s263, 29->node44900@s263, 33->node44936@s263, 48->node45064@s263, 61->node45080@s263
 
 Internal births at 2025-12-10 17:40:42.686000+00:00: kept=2
-  birth_state=(x=13.6, vx=0.00, y=-26.6, vy=0.00)
-  birth_state=(x=26.9, vx=0.00, y=-13.8, vy=0.00)
+  birth_state=(0=13.5899, 1=0, 2=-26.6427, 3=0)
+  birth_state=(0=26.85, 1=0, 2=-13.7735, 3=0)
 TRACK_LIFECYCLE mode=map_leaf score_threshold=-4.59512 miss_threshold=7 terminated=[15] reasons=miss:[15]
 
 Cluster rebuilds scan=270 t=2025-12-10 17:40:42.686000+00:00:
@@ -9182,8 +9182,8 @@ SCAN scan=275 t=2025-12-10 17:40:43.686000+00:00 det=2 trees=7 leaves=28 tentati
 SCAN_NSCAN_COMMITTED scan=275 t=2025-12-10 17:40:43.686000+00:00 boundary=269 22->node51053@s269, 25->node51096@s269, 29->node51224@s269, 33->node51228@s269, 48->node51260@s269, 61->node51268@s269
 
 Internal births at 2025-12-10 17:40:43.886000+00:00: kept=2
-  birth_state=(x=7.6, vx=0.00, y=-14.1, vy=0.00)
-  birth_state=(x=28.5, vx=0.00, y=6.9, vy=0.00)
+  birth_state=(0=7.60433, 1=0, 2=-14.1057, 3=0)
+  birth_state=(0=28.5354, 1=0, 2=6.91082, 3=0)
 TRACK_LIFECYCLE mode=map_leaf score_threshold=-4.59512 miss_threshold=7 terminated=[33, 61] reasons=miss:[33, 61]
 
 Cluster rebuilds scan=276 t=2025-12-10 17:40:43.886000+00:00:
@@ -9236,8 +9236,8 @@ SCAN scan=277 t=2025-12-10 17:40:44.086000+00:00 det=1 trees=5 leaves=16 tentati
 SCAN_NSCAN_COMMITTED scan=277 t=2025-12-10 17:40:44.086000+00:00 boundary=271 22->node51439@s271, 25->node51455@s271, 29->node51489@s271, 48->node51504@s271, 74->node51525@s271
 
 Internal births at 2025-12-10 17:40:44.286000+00:00: kept=2
-  birth_state=(x=23.7, vx=0.00, y=12.1, vy=0.00)
-  birth_state=(x=35.0, vx=0.00, y=-3.7, vy=0.00)
+  birth_state=(0=23.6795, 1=0, 2=12.1196, 3=0)
+  birth_state=(0=34.9603, 1=0, 2=-3.7411, 3=0)
 
 Cluster rebuilds scan=278 t=2025-12-10 17:40:44.286000+00:00:
 cluster=0 tracks=[22] globals=6 comb_eval=6 comb_feas=6 disagree=0
@@ -9271,8 +9271,8 @@ SCAN scan=278 t=2025-12-10 17:40:44.286000+00:00 det=7 trees=7 leaves=31 tentati
 SCAN_NSCAN_COMMITTED scan=278 t=2025-12-10 17:40:44.286000+00:00 boundary=272 22->node51526@s272, 25->node51537@s272, 48->node51570@s272
 
 Internal births at 2025-12-10 17:40:44.486000+00:00: kept=2
-  birth_state=(x=24.4, vx=0.00, y=-21.1, vy=0.00)
-  birth_state=(x=83.3, vx=0.00, y=47.3, vy=0.00)
+  birth_state=(0=24.4107, 1=0, 2=-21.1225, 3=0)
+  birth_state=(0=83.3146, 1=0, 2=47.2666, 3=0)
 TRACK_LIFECYCLE mode=map_leaf score_threshold=-4.59512 miss_threshold=7 terminated=[75] reasons=score:[75]
 
 Cluster rebuilds scan=279 t=2025-12-10 17:40:44.486000+00:00:
@@ -9346,7 +9346,7 @@ SCAN scan=280 t=2025-12-10 17:40:44.686000+00:00 det=2 trees=8 leaves=42 tentati
 SCAN_NSCAN_COMMITTED scan=280 t=2025-12-10 17:40:44.686000+00:00 boundary=274 22->node51660@s274, 25->node51665@s274, 48->node51694@s274
 
 Internal births at 2025-12-10 17:40:44.886000+00:00: kept=1
-  birth_state=(x=27.5, vx=0.00, y=-13.6, vy=0.00)
+  birth_state=(0=27.5115, 1=0, 2=-13.5668, 3=0)
 OVERLOAD_SPLIT scan=281 cluster=0 track_ids=[22, 25, 48, 76, 77, 78] projected_before=552960 threshold=500000 split_ops=1 stop=all_components_under_threshold removed_edges=[22-76:1] subclusters=[[22], [25, 48, 76, 77, 78]] projected_after=[12, 46080]
 
 Cluster rebuilds scan=281 t=2025-12-10 17:40:44.886000+00:00:
@@ -9400,7 +9400,7 @@ SCAN scan=282 t=2025-12-10 17:40:45.086000+00:00 det=2 trees=8 leaves=69 tentati
 SCAN_NSCAN_COMMITTED scan=282 t=2025-12-10 17:40:45.086000+00:00 boundary=276 22->node51750@s276, 25->node51756@s276, 48->node51781@s276
 
 Internal births at 2025-12-10 17:40:45.286000+00:00: kept=1
-  birth_state=(x=101.8, vx=0.00, y=-26.3, vy=0.00)
+  birth_state=(0=101.781, 1=0, 2=-26.2875, 3=0)
 OVERLOAD_SPLIT scan=283 cluster=0 track_ids=[22, 25, 48, 76, 77, 78] projected_before=811008 threshold=500000 split_ops=1 stop=all_components_under_threshold removed_edges=[22-76:1] subclusters=[[22], [25, 48, 76, 77, 78]] projected_after=[4, 202752]
 
 Cluster rebuilds scan=283 t=2025-12-10 17:40:45.286000+00:00:
@@ -9586,8 +9586,8 @@ SCAN scan=291 t=2025-12-10 17:40:46.886000+00:00 det=1 trees=1 leaves=16 tentati
 SCAN_NSCAN_COMMITTED scan=291 t=2025-12-10 17:40:46.886000+00:00 boundary=285 25->node52459@s285
 
 Internal births at 2025-12-10 17:40:47.086000+00:00: kept=2
-  birth_state=(x=74.1, vx=0.00, y=-31.2, vy=0.00)
-  birth_state=(x=74.8, vx=0.00, y=-40.7, vy=0.00)
+  birth_state=(0=74.0612, 1=0, 2=-31.1582, 3=0)
+  birth_state=(0=74.7995, 1=0, 2=-40.7038, 3=0)
 
 Cluster rebuilds scan=292 t=2025-12-10 17:40:47.086000+00:00:
 cluster=0 tracks=[25] globals=20 comb_eval=21 comb_feas=20 disagree=4
@@ -9604,7 +9604,7 @@ SCAN scan=292 t=2025-12-10 17:40:47.086000+00:00 det=3 trees=3 leaves=18 tentati
 SCAN_NSCAN_COMMITTED scan=292 t=2025-12-10 17:40:47.086000+00:00 boundary=286 25->node52682@s286
 
 Internal births at 2025-12-10 17:40:47.286000+00:00: kept=1
-  birth_state=(x=83.8, vx=0.00, y=43.2, vy=0.00)
+  birth_state=(0=83.7907, 1=0, 2=43.1805, 3=0)
 
 Cluster rebuilds scan=293 t=2025-12-10 17:40:47.286000+00:00:
 cluster=0 tracks=[25] globals=20 comb_eval=21 comb_feas=20 disagree=3
@@ -9687,7 +9687,7 @@ SCAN scan=296 t=2025-12-10 17:40:47.886000+00:00 det=4 trees=4 leaves=39 tentati
 SCAN_NSCAN_COMMITTED scan=296 t=2025-12-10 17:40:47.886000+00:00 boundary=290 25->node52960@s290
 
 Internal births at 2025-12-10 17:40:48.086000+00:00: kept=1
-  birth_state=(x=98.7, vx=0.00, y=-26.3, vy=0.00)
+  birth_state=(0=98.7427, 1=0, 2=-26.2686, 3=0)
 
 Cluster rebuilds scan=297 t=2025-12-10 17:40:48.086000+00:00:
 cluster=0 tracks=[25] globals=20 comb_eval=21 comb_feas=20 disagree=7
@@ -9714,7 +9714,7 @@ SCAN scan=297 t=2025-12-10 17:40:48.086000+00:00 det=3 trees=5 leaves=34 tentati
 SCAN_NSCAN_COMMITTED scan=297 t=2025-12-10 17:40:48.086000+00:00 boundary=291 25->node53000@s291
 
 Internal births at 2025-12-10 17:40:48.286000+00:00: kept=1
-  birth_state=(x=16.1, vx=0.00, y=-23.1, vy=0.00)
+  birth_state=(0=16.0615, 1=0, 2=-23.1375, 3=0)
 
 Cluster rebuilds scan=298 t=2025-12-10 17:40:48.286000+00:00:
 cluster=0 tracks=[25] globals=20 comb_eval=21 comb_feas=20 disagree=3

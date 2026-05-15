@@ -1,16 +1,16 @@
-SUMMARY_FROM_SCANS timing scan_wall_ms count=302 med=12.691 mean=22.468 p65=20.282 p80=27.754 p90=56.906 p95=96.045 max=220.250
-SUMMARY_FROM_SCANS timing_phase prep_ctx_ms count=302 med=0.014 p65=0.018 p80=0.021 p90=0.025 p95=0.027 max=0.043
-SUMMARY_FROM_SCANS timing_phase pre_expand_validate_ms count=302 med=0.002 p65=0.003 p80=0.004 p90=0.004 p95=0.004 max=0.012
-SUMMARY_FROM_SCANS timing_phase expand_ms count=302 med=11.395 p65=18.237 p80=25.022 p90=50.927 p95=86.922 max=188.480
-SUMMARY_FROM_SCANS timing_phase expand_hypothesise_ms count=302 med=8.823 p65=14.153 p80=19.261 p90=37.381 p95=67.056 max=150.127
-SUMMARY_FROM_SCANS timing_phase expand_update_ms count=302 med=1.012 p65=1.765 p80=2.614 p90=5.471 p95=8.350 max=28.781
-SUMMARY_FROM_SCANS timing_phase expand_other_ms count=302 med=1.464 p65=2.301 p80=3.184 p90=6.251 p95=10.934 max=23.310
-SUMMARY_FROM_SCANS timing_phase post_expand_prune_validate_ms count=302 med=0.003 p65=0.004 p80=0.006 p90=0.006 p95=0.007 max=0.016
-SUMMARY_FROM_SCANS timing_phase births_ms count=302 med=0.134 p65=0.237 p80=0.332 p90=0.491 p95=0.720 max=2.425
-SUMMARY_FROM_SCANS timing_phase cluster_build_solve_ms count=302 med=0.574 p65=1.076 p80=1.948 p90=4.890 p95=7.737 max=26.920
-SUMMARY_FROM_SCANS timing_phase post_solve_prune_ms count=302 med=0.011 p65=0.014 p80=0.021 p90=0.024 p95=0.025 max=0.034
-SUMMARY_FROM_SCANS timing_phase map_merge_ms count=302 med=0.002 p65=0.002 p80=0.002 p90=0.002 p95=0.003 max=0.003
-SUMMARY_FROM_SCANS timing_phase nscan_lifecycle_ms count=302 med=0.140 p65=0.227 p80=0.329 p90=0.416 p95=0.584 max=0.863
-SUMMARY_FROM_SCANS timing_phase cleanup_ms count=302 med=0.066 p65=0.101 p80=0.146 p90=0.248 p95=0.682 max=2.148
-SUMMARY_FROM_SCANS timing_phase other_ms count=302 med=0.001 p65=0.001 p80=0.001 p90=0.001 p95=0.001 max=0.004
-SUMMARY_FROM_SCANS memory nodes_count=302 nodes_med=191.0 nodes_max=1902 maxrss_count=302 maxrss_final=306.9 maxrss_peak=306.9
+SUMMARY_FROM_SCANS timing scan_wall_ms count=302 med=12.223 mean=21.851 p65=19.633 p80=26.755 p90=55.229 p95=94.146 max=216.912
+SUMMARY_FROM_SCANS timing_phase prep_ctx_ms count=302 med=0.014 p65=0.018 p80=0.021 p90=0.024 p95=0.025 max=0.035
+SUMMARY_FROM_SCANS timing_phase pre_expand_validate_ms count=302 med=0.002 p65=0.002 p80=0.002 p90=0.003 p95=0.003 max=0.008
+SUMMARY_FROM_SCANS timing_phase expand_ms count=302 med=11.075 p65=17.521 p80=24.622 p90=49.037 p95=85.329 max=186.687
+SUMMARY_FROM_SCANS timing_phase expand_hypothesise_ms count=302 med=8.628 p65=13.614 p80=18.855 p90=36.060 p95=64.676 max=148.477
+SUMMARY_FROM_SCANS timing_phase expand_update_ms count=302 med=0.980 p65=1.658 p80=2.535 p90=5.288 p95=8.116 max=26.150
+SUMMARY_FROM_SCANS timing_phase expand_other_ms count=302 med=1.470 p65=2.259 p80=3.229 p90=5.810 p95=10.583 max=23.187
+SUMMARY_FROM_SCANS timing_phase post_expand_prune_validate_ms count=302 med=0.002 p65=0.003 p80=0.003 p90=0.005 p95=0.005 max=0.028
+SUMMARY_FROM_SCANS timing_phase births_ms count=302 med=0.120 p65=0.225 p80=0.311 p90=0.451 p95=0.636 max=1.727
+SUMMARY_FROM_SCANS timing_phase cluster_build_solve_ms count=302 med=0.552 p65=1.059 p80=1.895 p90=4.388 p95=7.506 max=25.693
+SUMMARY_FROM_SCANS timing_phase post_solve_prune_ms count=302 med=0.010 p65=0.015 p80=0.020 p90=0.023 p95=0.025 max=0.076
+SUMMARY_FROM_SCANS timing_phase map_merge_ms count=302 med=0.001 p65=0.002 p80=0.002 p90=0.002 p95=0.002 max=0.004
+SUMMARY_FROM_SCANS timing_phase nscan_lifecycle_ms count=302 med=0.140 p65=0.200 p80=0.299 p90=0.386 p95=0.547 max=0.808
+SUMMARY_FROM_SCANS timing_phase cleanup_ms count=302 med=0.064 p65=0.094 p80=0.138 p90=0.278 p95=0.599 max=1.973
+SUMMARY_FROM_SCANS timing_phase other_ms count=302 med=0.002 p65=0.002 p80=0.002 p90=0.002 p95=0.002 max=0.004
+SUMMARY_FROM_SCANS memory nodes_count=302 nodes_med=191.0 nodes_max=1902 maxrss_count=302 maxrss_final=304.8 maxrss_peak=304.8
