@@ -2,263 +2,228 @@
 
 ## Next architectural subphase
 
-**Scoring, birth semantics, and confirmation gates**
+**Local expansion volume and frontier control**
 
-The previously planned phase was local expansion volume reduction / pre-expansion control. That remains an important downstream goal, but after returning to the project and reviewing score/probability-based pruning ideas, the immediate prerequisite has become clearer:
+The scoring/birth/lifecycle/API phase is now effectively complete. The tracker has coherent NLL/LLR scoring, explicit start priors, dynamic detection probability / clutter-density support through the DPM, sticky confirmation and publication, score-based whole-track deletion, and a much cleaner module structure.
 
-> before we use scores to prune, terminate, confirm, or selectively expand tracks, the score semantics themselves need to be coherent.
+The next phase returns to the earlier performance topic:
 
-The current focus is therefore to complete the scoring and birth/initiation migration so that later expansion-volume and pruning work can be based on interpretable scores/probabilities rather than legacy heuristics.
+> reduce local expansion volume and frontier growth, using the now-coherent scoring/lifecycle foundation.
 
----
-
-## Recent baseline changes
-
-The tracker is now in a better shape for this work because several pieces have already landed:
-
-- major `TOMHTTracker` substeps have been extracted into dedicated modules,
-- persistent tree/node bookkeeping now lives in `TrackTreeStore`,
-- local expansion, internal-birth handling, clustering, overload splitting, cluster rebuild, post-solve pruning, MAP-only N-scan pruning, scan instrumentation assembly, and TOMHT utilities are no longer monolithic tracker methods,
-- external starts now use an existence-prior probability mapped internally to log-odds,
-- external starts can optionally override that prior per track via valid `Track.metadata["existence_log_odds"]` or `Track.metadata["existence_probability"]`, with log-odds taking precedence,
-- output tracks now expose score-implied existence metadata,
-- legacy unused-detection scoring has been removed,
-- cluster solving now uses accumulated leaf scores directly rather than affine unused-detection pre-baking,
-- constructor `initiator=None` now cleanly disables internal starts while a configured initiator is the generic internal-start lane,
-- initiator-created starts now use an explicit initiator-start existence prior, with optional per-track metadata override,
-- the legacy fixed `birth_log_penalty` and `ScoringModel.score_birth(...)` hook have been removed,
-- `TOMHTParams.internal_birth_mode` has been removed,
-- the public `TOMHTTracker(scoring_model=...)` injection point and `make_default_scoring_model(...)` factory have been removed; the tracker directly constructs `NLLScoringModel`,
-- there is no tracker-core `birth_density` parameter; birth-density reasoning is guidance for choosing an initiator-start existence prior,
-- `TrackTree` now has sticky `tentative`/`confirmed` lifecycle state driven by max active-leaf score crossing `TOMHTParams.track_confirmation_existence_probability`,
-- output publication is now a separate sticky tree-level state (`unpublished`/`published`) with configurable emit gating; the default publishes confirmed tracks only,
-- sticky output-publication and MAP output reconstruction helpers now live in `mht/tomht_output.py`,
-- whole-track score deletion now removes trees whose max active-leaf score falls below `TOMHTParams.track_deletion_existence_probability`,
-- whole-track lifecycle implementation now lives in `mht/tomht_lifecycle.py`, with `TOMHTTracker` retaining thin gateway methods only.
-- `NLLScoringModel` now consumes a narrow `DetectionProbabilityModel`; the default `ConstantDetectionProbabilityModel` wraps the scalar `TOMHTParams.prob_detect` and `TOMHTParams.clutter_density`, while custom DPMs can vary `P_D` and clutter density by prediction, detection, and opaque caller scan context.
-- internal-birth candidate selection no longer applies tracker-owned state-layout sanity checks; sorting and debug output flatten arbitrary state vectors generically.
-
-These changes make the next scoring/birth steps easier to reason about.
+This phase should be exploratory. The goal is not to immediately add a large new pruning mechanism, but to understand where expansion volume comes from, which expanded hypotheses matter, and which conservative controls are safe.
 
 ---
 
-## Current scoring baseline
+## Current timing motivation
 
-Existing-track local scoring is now the cleanest part of the scoring model.
-
-The tracker-owned distance hypothesiser emits detection hypotheses whose distance is:
+The latest standard replay summary still shows local expansion as the dominant runtime component:
 
 ```text
-NLL = -log p(z | x)
+scan_wall_ms          median 12.297 ms   p95 94.690 ms   max 217.822 ms
+expand_ms             median 11.118 ms   p95 86.764 ms   max 187.001 ms
+expand_hypothesise_ms median  8.761 ms   p95 65.661 ms   max 148.591 ms
+expand_update_ms      median  1.000 ms   p95  8.121 ms   max  27.273 ms
+cluster_build_solve   median  0.550 ms   p95  7.500 ms   max  26.265 ms
 ```
 
-without detection-probability or clutter-density factors.
+This is substantially better than earlier phases, but the shape is unchanged: most replay time is still spent expanding local hypotheses, especially hypothesiser calls. The branch-and-bound cluster solver is no longer the main bottleneck on this workload.
 
-The tracker-owned `NLLScoringModel` then applies:
-
-```text
-hit  = log(P_D) - log(lambda) - NLL
-miss = log(1 - P_D)
-```
-
-where:
-
-- `P_D` is detection probability,
-- `lambda` is clutter density,
-- `lambda` must be expressed in the same measurement-space units as the hypothesiser NLL.
-- default scalar `P_D`/`lambda` come from `ConstantDetectionProbabilityModel`,
-- advanced callers can provide a DPM for finite-FOV, range-dependent, sensor-mode, or other scan/state-dependent scoring,
-- the opaque `caller_scan_context` passed to `update_tracker(...)` is distinct from TOMHT's internal scan bookkeeping and is available even when a scan has no detections,
-- one `update_tracker(...)` call should contain detections from one sensor / one measurement space; multi-sensor applications should call it separately for each sensor update,
-- DPM callbacks receive public track IDs only after publication; unpublished trees pass `track_id=None`,
-- hit clutter density callbacks receive both the prediction and concrete detection, and `P_D ~= 0` outside coverage makes misses nearly penalty-free.
-
-Legacy unused-detection scoring has been removed because the clutter-density contrast is already represented in the hit score. This was expected to change smoke/replay outputs because old scenarios were tuned against older heuristic scoring. That is acceptable: we are prioritizing a coherent scoring interpretation before retuning.
-
-The remaining weak area is birth/initiation semantics.
+The next improvement is therefore likely to come from reducing how much expansion work we ask the local association path to do, not only from making each individual association call faster.
 
 ---
 
-## Direction: explicit start lanes
+## Current baseline to preserve
 
-The tracker should keep two start lanes explicit.
+The following pieces should be treated as the current foundation, not reopened casually:
 
-### 1. External starts
+- track trees are the persistent frontier,
+- globals are rebuilt per cluster from current leaves every scan,
+- local association is distance-hypothesis based,
+- local detection-hypothesis distance is NLL only,
+- the NLL scorer applies `log(P_D) - log(lambda) - NLL` for hits and `log(1 - P_D)` for misses,
+- unused-detection scoring remains removed,
+- starts enter with explicit existence log-odds / probability priors,
+- confirmation, deletion, and publication are separate tree-level concepts,
+- standard output publishes confirmed tracks by default,
+- score-based whole-tree deletion is active,
+- DPM support is the caller-facing hook for dynamic `P_D` / clutter density,
+- the tracker is now mostly an orchestrator delegating pipeline phases to modules.
 
-External starts are already on the cleaner path.
-
-They represent caller-supplied starts that should be treated as externally confirmed or externally meaningful. They are initialized from an existence probability mapped to log-odds. The global default can be overridden by valid `Track.metadata["existence_log_odds"]` or `Track.metadata["existence_probability"]`, with log-odds taking precedence.
-
-This lane should remain the preferred integration path for systems that already have their own domain-specific initiation or confirmation process.
-
-### 2. Internal initiator starts
-
-Internal starts are generated by passing residual detections to a configured Stone Soup initiator and inserting the returned tracks. From the TO-MHT tracker’s perspective, a one-shot `SimpleMeasurementInitiator` and a more complex M/N or domain-aware initiator are the same abstraction:
-
-```text
-residual detections -> configured initiator -> candidate start tracks
-```
-
-Even a one-detection start needs a domain-specific state initializer and prior. The tracker therefore does not own generic single-detection birth initialization. It treats initiator output conceptually as:
-
-```text
-external-style starts generated inside the tracker for convenience
-```
-
-That means initiator-created roots should be scored with an explicit initial existence prior, analogous to external starts, but probably with a separate parameter and typically lower default confidence.
-
-This keeps the scoring story honest:
-
-- if an external caller produces a confirmed start, the tracker applies the external-start prior,
-- if a configured initiator produces an internal start, the tracker applies the initiator-start prior,
-- if the domain wants one-detection starts, it should configure an appropriate one-shot initiator.
+Expansion-volume work should build on this foundation rather than reintroduce older PDA/beta/unused-detection semantics.
 
 ---
 
-## Immediate implementation plan
+## Main questions for this phase
 
-### Step 1: Simplify internal-start switching
+### 1. Where does expansion volume come from?
 
-Implemented (2026-05-13): `TOMHTParams.internal_birth_mode` was removed. The internal-start switch is now constructor initiator presence: `initiator=None` creates no internal starts and leaves residual detections available; `initiator=<Initiator>` passes residual detections to that initiator.
+Characterize expansion pressure in replay and smoke scenarios:
 
-The earlier reserved `"single_detection"` stub was removed after the initialization-boundary decision: one-detection starts are represented by configuring an initiator, not by a tracker-owned mode.
+- active tree count per scan,
+- active leaf count per scan,
+- leaves expanded per scan,
+- hypothesiser calls per scan,
+- detections per scan,
+- children generated per expanded leaf,
+- children retained after local ranking/capping,
+- leaves later selected by cluster MAP or retained top-K globals,
+- leaves later pruned as unsupported.
 
-Important behavior expectations:
+The useful question is not just “how many leaves exist?” but:
 
-- `initiator=None` means no internal starts; external starts can still be used.
-- `initiator=<Initiator>` means pass residual detections to the configured initiator.
+> which expansion work contributes to retained global hypotheses, and which work is systematically wasted?
 
-This keeps the public control surface smaller while preserving the same active internal-start behavior.
+### 2. Which controls are semantic and which are tractability safety valves?
 
-### Step 2: Replace fixed initiator birth penalty
+Some controls affect tracking semantics directly. Others are safety valves to keep compute bounded.
 
-Implemented (2026-05-13): initiator-created starts now use `TOMHTParams.initiator_start_initial_existence_probability` (default `0.8`) mapped to log-odds for the root `log_delta`. Valid initiated-track `metadata["existence_log_odds"]` is used directly and takes precedence over valid `metadata["existence_probability"]`; missing or invalid metadata falls back to the parameter value.
+This phase should make that distinction explicit. Candidate controls include:
 
-The current fixed birth penalty is not a good scoring story for initiator output.
+- local association gate size,
+- `max_children_per_track`,
+- `max_leaves_per_track_tree`,
+- post-solve supported-leaf pruning,
+- N-scan pruning,
+- score-based whole-tree deletion,
+- publication gates,
+- birth caps / guardrails,
+- overload cluster splitting,
+- historical-conflict relaxation.
 
-For initiator-created starts, introduce something like:
+Avoid mixing semantic pruning and emergency tractability caps without documenting the distinction.
 
-```text
-initiator_start_initial_existence_probability
+### 3. Can scores safely reduce expansion work?
+
+Now that score semantics are cleaner, consider conservative score-aware expansion/frontier ideas:
+
+- avoid expanding very low-score tentative trees that are near deletion,
+- use tree lifecycle state to prioritize confirmed trees over tentative trees,
+- cap tentative-tree frontier more aggressively than confirmed-tree frontier,
+- prune or deprioritize leaves far below the best leaf in the same tree,
+- use max active-leaf score / tree score as a pre-expansion priority signal,
+- explore whether score deletion should happen earlier in the scan for hopeless trees.
+
+Do not jump straight to aggressive pruning. Start by measuring how often such rules would fire and whether they would have changed retained MAP/top-K leaves.
+
+### 4. How much of the cost is avoidable hypothesiser work?
+
+The latest timing shows `expand_hypothesise_ms` dominates `expand_ms`. Investigate:
+
+- repeated expansion of leaves that are later discarded,
+- whether all active leaves need a full hypothesiser call each scan,
+- whether some leaf groups share enough prediction/gating work to reuse more,
+- whether confirmed/tentative state can drive expansion budgets,
+- whether detection count or gate behavior explains high-tail scans.
+
+Parallelization is a future axis, but not the first tool for this phase. First understand and reduce unnecessary work.
+
+---
+
+## Specific investigation items
+
+### A. Expansion usefulness instrumentation
+
+Add or extend diagnostics to connect expansion work to later retained hypotheses.
+
+Possible metrics:
+
+- expanded leaves per scan,
+- generated children per scan,
+- retained local children per scan,
+- children that survive post-solve supported-leaf pruning,
+- children that appear in cluster MAP,
+- children that appear in any retained top-K cluster global,
+- per-tree expanded/retained ratios,
+- confirmed vs tentative expansion counts,
+- score distribution of expanded leaves.
+
+This can start as debug/stat output rather than permanent public API.
+
+### B. Frontier growth analysis
+
+Inspect how active-leaf counts grow and shrink through the scan pipeline:
+
+1. before local expansion,
+2. after local expansion,
+3. after local leaf cap,
+4. after cluster solve,
+5. after post-solve supported-leaf pruning,
+6. after N-scan pruning,
+7. after lifecycle deletion.
+
+This should clarify whether the main issue is local branching, weak pruning, overload-split behavior, births, or some combination.
+
+### C. Overload-split pruning policy
+
+There is a known caveat in `apply_post_solve_supported_leaf_pruning`:
+
+```python
+# Overload-decomposed clusters are approximate; keep their current
+# frontiers to avoid over-pruning branches that may be needed once
+# severed weak links reconnect in later scans.
+#
+# TODO: Revisit this policy when overload-split semantics are reviewed.
+if snapshot.overload_split_origin_cluster_id is not None:
+    continue
 ```
 
-and map it to log-odds for the root `log_delta`, just as external starts do.
+This may suppress supported-leaf pruning exactly when clusters are large and pruning pressure is most needed.
 
-This should replace the current fixed penalty for the internal initiator lane.
+This should be explicitly investigated in this phase:
 
-Suggested semantics:
+- how often overload splitting occurs,
+- how many leaves/trees are affected by the pruning skip,
+- whether skipped pruning materially increases future expansion volume,
+- whether a weaker but still safe pruning rule can be applied to overload-split subclusters,
+- whether overload-split approximation should carry different retention semantics.
 
-- valid per-track metadata may eventually override it,
-- missing metadata uses the parameter default,
-- invalid optional metadata should fall back rather than reject the start,
-- this parameter should be separate from `external_start_initial_existence_probability`.
+Do not change this policy blindly. First measure its impact.
 
-Potential default should probably be lower than external starts, because internally generated initiator starts may be tentative rather than externally confirmed.
+### D. Birth ranking and capping
 
-### Step 3: Tune/configure internal initiators and priors
+Internal-birth capping is not the main expansion bottleneck, but it remains a heuristic control.
 
-Do not add a tracker-owned single-detection birth mode. Even one-detection starts need a domain-specific initializer and prior, so they should be provided by a configured initiator.
+Keep on the review list:
 
-For a `SimpleMeasurementInitiator`-style one-detection initializer, one principled way to choose the default prior is:
+- how often `max_births_per_scan` fires,
+- whether initiator output quality/confidence metadata is available,
+- whether `existence_probability` / `existence_log_odds` should influence candidate ordering,
+- whether cap firing indicates the initiator should filter more aggressively upstream.
 
-```text
-logit(P_init) = log(P_D * beta_NT / lambda)
-```
+Do not let this distract from local expansion unless metrics show it matters.
 
-equivalently:
+### E. Candidate score/frontier pruning experiments
 
-```text
-P_init = sigmoid(log(P_D) + log(beta_NT) - log(lambda))
-```
+After instrumentation, try low-risk “what would happen if” analyses before changing behavior:
 
-where:
+- mark leaves below relative score thresholds but do not prune,
+- mark tentative trees that would be skipped or capped more aggressively,
+- mark leaves that never survive to retained globals,
+- compare these marks against MAP/top-K usage.
 
-- `beta_NT` is a new-target/birth density in measurement-space units,
-- `lambda` is clutter density in the same measurement-space units,
-- `P_D` is detection probability.
+Use these experiments to decide which pruning rule is actually safe.
 
-This remains guidance for choosing `initiator_start_initial_existence_probability`, not a new tracker-core `birth_density` parameter.
+---
 
-Do not introduce a tracker-owned two-point or M/N initiator in this step. If output noise becomes a problem, solve that with initiator configuration and output confirmation gates first.
+## Likely implementation direction
 
-### Step 4: Add first tree-level confirmation lifecycle state
+The first implementation branch should probably be instrumentation-heavy:
 
-Implemented (2026-05-14): `TrackTree.lifecycle_state` now starts as `"tentative"` for both internal initiator starts and external starts, and promotes stickily to `"confirmed"` when:
+1. add expansion/frontier usefulness metrics,
+2. run smoke and replay summaries,
+3. identify the highest-volume scans and trees,
+4. inspect whether wasted work is concentrated in tentative trees, low-score leaves, overload-split clusters, births, or broad gates,
+5. only then add a conservative control.
 
-```text
-max(active_leaf.accumulated_log_score) >= logit(track_confirmation_existence_probability)
-```
+The second branch can introduce one targeted control, for example:
 
-The new user-facing parameter is:
+- tentative-tree expansion cap,
+- relative per-tree leaf score pruning,
+- earlier score deletion for hopeless trees,
+- overload-split supported-leaf pruning variant,
+- or a confirmed/tentative frontier budget.
 
-```text
-track_confirmation_existence_probability = 0.9
-```
-
-with validation `0.0 < p < 1.0` and internal conversion to log-odds.
-
-Confirmation is applied after supported-leaf pruning and MAP-only N-scan pruning, before whole-track deletion lifecycle and output generation. It is intentionally conservative:
-
-- no un-confirming,
-- confirmation itself does not delete tracks or directly filter output,
-- MAP output tracks include `metadata["lifecycle_state"]`,
-- scan stats and summary output report tentative vs confirmed active-tree counts.
-
-This gives later publication and termination work a stable tree-level state to build on.
-
-### Step 5: Add output confirmation / emit gate
-
-Implemented (2026-05-14): `TrackTree.publication_state` now starts as `"unpublished"` and promotes stickily to `"published"` when a MAP-selected live tree satisfies the configured output-publication policy. Publication is separate from internal confirmation and does not alter MAP hypotheses, active leaves, N-scan pruning, or whole-track deletion.
-
-The user-facing publication parameters are:
-
-```text
-publish_lifecycle_states = ("confirmed",)
-publish_min_hits = 0
-publish_min_age = 0
-publish_min_existence_probability = 0.0
-```
-
-The default keeps tentative MAP tracks internal and publishes only confirmed tracks. Stricter settings can add hit, age, or score-implied existence requirements; permissive settings can opt back into tentative publication for experiments.
-
-Publication criteria are evaluated against the MAP-selected leaf for each live tree:
-
-- tree `lifecycle_state` is allowed by `publish_lifecycle_states`,
-- `leaf.hits >= publish_min_hits`,
-- `leaf.age >= publish_min_age`,
-- score-implied existence from `leaf.accumulated_log_score` meets `publish_min_existence_probability`.
-
-Once published, a tree remains published until it is deleted/recreated. Standard `get_map_output_tracks()`, `tracks`, and `update_tracker(...)` return only published MAP tracks. `get_map_hypothesis_snapshot()` remains the internal MAP inspection API, and `get_map_output_tracks(include_unpublished=True)` can reconstruct tentative/unpublished MAP tracks for inspection with `metadata["publication_state"]`. Scan stats and summary output now report MAP-published and MAP-unpublished counts so publication suppression is visible without changing internal MAP logging.
-
-Public output identity is now separate from internal tree identity. `TrackTree.track_id` remains the internal logical ID allocated when the tree is created, while `TrackTree.public_track_id` starts as `None` and is assigned exactly once when publication first flips to `"published"`. The default mapper assigns dense integer public IDs in first-publication order, so unpublished internal trees no longer force gaps in published `Track.id` values. Output metadata keeps `internal_track_id` as the explicit internal logical ID and adds `public_track_id`; the legacy `track_id` metadata field remains only as a deprecated compatibility alias. The old `get_tomht_track_id(track)` helper has been removed. Unpublished inspection tracks have `public_track_id=None` and do not consume a public ID.
-
-When simple one-detection initiators are used, the tracker may internally carry more tentative tracks. That is expected; the publication gate now controls only returned/emitted tracks, not whether the internal MHT state keeps tentative hypotheses.
-
-### Step 6: Add score-based whole-track deletion
-
-Implemented (2026-05-14): `TOMHTParams.track_deletion_existence_probability` now defaults to `0.01` and is validated as `0.0 < p < 1.0`. The tracker converts it to log-odds internally and applies it after sticky confirmation and MAP-only N-scan pruning:
-
-```text
-delete tree if max(active_leaf.accumulated_log_score) <= logit(track_deletion_existence_probability)
-```
-
-This deletes the whole `TrackTree` and filters the current MAP global to surviving live trees. Confirmation and deletion now form hysteresis-style score gates: confirmation is sticky at the high score threshold, while deletion is a low score threshold that removes the tree.
-
-Score deletion is the primary principled mechanism for killing low-score spurious starts. Existing miss-count deletion and optional Stone Soup deleters remain lifecycle backstops/domain hooks. Score deletion runs in both existing lifecycle lanes; with no custom deleter it OR-composes with node-native miss deletion, and with a custom deleter it still runs alongside deleter deletion. `TRACK_LIFECYCLE` logs now report terminated IDs by deterministic reason groups (`score`, `miss`, `deleter`).
-
-Published-tree deletion needs no separate unpublish step. Public IDs are not reused after deletion, and dense publication-time ID assignment remains unchanged.
-
-### Step 7: Revisit pruning and expansion-volume controls
-
-After scoring, births, confirmation, publication, and whole-track score deletion are coherent, return to:
-
-- broader score-based leaf pruning,
-- selective expansion,
-- expansion-volume characterization,
-- overload-split pruning behavior,
-- and frontier growth controls.
-
-This is the earlier expansion-volume phase, but with a stronger foundation.
+Which one comes first should be data-driven.
 
 ---
 
@@ -266,62 +231,40 @@ This is the earlier expansion-volume phase, but with a stronger foundation.
 
 Do not yet:
 
-- implement broad score-based pruning,
-- make aggressive expansion-volume changes,
-- retune all smoke scenarios,
-- redesign cluster solving,
-- introduce parallel local expansion,
-- remove black-box initiator support entirely,
-- add tracker-owned two-point or M/N initiation,
-- or treat output confirmation gating as internal hypothesis deletion.
+- redesign local scoring,
+- reintroduce unused-detection scoring,
+- redesign start priors,
+- remove the DPM API,
+- make large publication/lifecycle changes,
+- retune all scenarios by hand,
+- implement broad parallel local expansion,
+- rewrite cluster solving,
+- or collapse overload-split approximation without understanding its impact.
 
-The goal is to get the scoring and initiation semantics clean enough that later pruning/volume work has a meaningful score basis.
-
----
-
-## Important design notes
-
-### Scores and probabilities
-
-The tracker is moving toward score/probability-based decisions. Therefore, score offsets matter more than they used to.
-
-External starts and internal initiator starts now use existence probabilities mapped to log-odds rather than arbitrary penalties.
-
-### One-detection initiator starts may be noisy internally
-
-A one-detection measurement initiator can create tentative starts from clutter detections. This is not necessarily wrong.
-
-The right question is not whether every internal tentative track is real. The right question is whether:
-
-- scores evolve sensibly,
-- low-quality tracks die or are pruned,
-- and output consumers only see confirmed-enough tracks.
-
-### Output gating is not the same as internal pruning
-
-A confirmed-output gate should reduce visible clutter tracks without prematurely deleting internal hypotheses.
-
-Internal pruning can come later, once score behavior is better understood.
-
-### Initiators are convenience integration points
-
-A configured initiator can be simple, stateful, or domain-specific. But unless it provides a likelihood/existence model, the tracker should not pretend to know how to score it from first principles.
-
-Treat it as an internal convenience wrapper around external-style starts.
+Parallel expansion remains a plausible later path, but it should be opt-in and should come after we understand whether we can simply avoid a meaningful fraction of the work.
 
 ---
 
-## Acceptance criteria for this subphase
+## Acceptance criteria
 
-This subphase is successful when:
+This phase is successful when we have:
 
-- unused-detection scoring remains removed,
-- external starts continue to have configurable/per-track existence priors,
-- initiator-created starts no longer rely on a fixed arbitrary birth penalty,
-- one-detection starts are represented by configured initiators rather than a tracker-owned mode,
-- guidance exists for mapping `P_D`, new-target density, and clutter density into an initiator-start existence prior,
-- output confirmation/emit gating is implemented or clearly staged,
-- smoke/replay outputs remain operationally usable,
-- and the code/docs make the external-start and internal-initiator lanes clear.
+- clear metrics showing where expansion volume comes from,
+- clear metrics showing which expansion work is retained/useful,
+- an explicit decision on whether overload-split pruning skip is materially harmful,
+- at least one conservative expansion/frontier control identified or implemented,
+- smoke/replay baselines updated when behavior changes intentionally,
+- no regression in the coherent scoring/start/lifecycle/API model,
+- and a clearer basis for deciding whether later parallelization is worth pursuing.
 
-At that point, it should be reasonable to return to score/frontier/expansion-volume pruning work.
+---
+
+## Working notes
+
+The current performance situation is not bad compared with earlier phases, but the distribution still has a long tail. The goal is to reduce that tail without making the tracker harder to reason about.
+
+The most important principle for this phase:
+
+> measure usefulness before pruning.
+
+The tracker now has interpretable scores and lifecycle states. Use them to understand the frontier before using them to cut it.

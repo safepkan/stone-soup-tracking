@@ -2,772 +2,583 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, determinism fixes, output-history restoration, solver-seam extraction, exact-backend experiments, local-association ownership refactor, explicit NLL scoring cleanup, local-association optimization work, internal-start cleanup, scoring-constructor simplification, first tree-level confirmation lifecycle step, sticky output-publication gate, score-based whole-track deletion, and module-extraction cleanup completed through **2026-05-15**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, and module-extraction cleanup completed through **2026-05-15**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
-Update (2026-04-20): core TO-MHT modules now use package-relative intra-module imports (for example `.tomht_model`, `.tomht_cluster_solver`) so the tracker package can be relocated within the repo without hard-coding `mht` in internal dependencies.
-Update (2026-04-20): shared tracker/scoring context typing now starts in `mht/tomht_types.py` (`ScanContext`), reducing cross-module coupling and making room for additional shared type definitions.
-Update (2026-04-20): runtime utility helpers now live in `mht/utils.py` (`env_flag`, `env_float`, `ns_to_ms`, cross-platform `get_process_maxrss_mb`) and are reused by tracker and OR-Tools profiling paths.
-Update (2026-05-15): timer measurement helpers now live in `mht/utils.py` (`start_timer`, `elapsed_ns`, `elapsed_ms`) and are used by tracker scan timing, expansion callback timing, and OR-Tools profiling paths.
-Update (2026-04-20): TOMHT output `Track.id` became tracker-controlled instead of relying on Stone Soup auto-UUIDs.
-Update (2026-04-20): post-N-scan whole-track lifecycle has a default node-native miss-threshold lane (`max_missed`) and an optional injected Stone Soup `Deleter` lane (`deleter=` in tracker constructor). `track_miss_termination_mode` remains the leaf-selection mode for miss/deleter evaluation.
-Update (2026-04-20): expansion timing instrumentation now splits `expand_ms` into explicit hypothesiser and updater components (`expand_hypothesise_ms`, `expand_update_ms`) plus call counts, so replay timing can attribute expansion cost between `hypothesise()` and `update()` directly.
-Update (2026-05-11): `TOMHTParams` now lives in `mht/tomht_params.py` so extracted helper modules can depend on tracker configuration without importing `TOMHTTracker`; `tomht_tracker.py` still re-exports it for compatibility. Local expansion orchestration now lives in `mht/tomht_expansion.py`, internal-birth candidate helpers now live in `mht/tomht_births.py`, cluster work construction and overload cluster decomposition now live in `mht/tomht_clustering.py`, post-solve supported-leaf pruning now lives in `mht/tomht_pruning.py`, and TOMHT-specific scan/debug helpers now live in `mht/tomht_utils.py`. `TOMHTTracker` still orchestrates the same pipeline, but local expansion/candidate handling, internal-birth residual/candidate utilities, full-history cluster construction, overload-split transformation, retained-global leaf-support pruning, detection sorting, detection-key filtering, and detection-key debug formatting are now isolated behind narrow helper functions.
-Update (2026-05-12): persistent tree/node bookkeeping now lives in `mht/tomht_tree_store.py`. Stable ID allocation, node/root creation, single-root tree insertion, active-leaf bookkeeping, active count helpers, empty-tree removal, and unreachable-node cleanup are now owned by `TrackTreeStore`, while `TOMHTTracker` keeps compatibility properties for direct tree/node table inspection.
-Update (2026-05-13): N-scan commitment bookkeeping inside `TOMHTTracker` is now grouped in a single `_nscan_commitment_snapshot` field using the existing `NScanCommitmentSnapshot` model type. Snapshot contents, stats reporting, pruning semantics, and cleanup reachability seeds are unchanged.
-Update (2026-05-13): external-start root scoring is now configurable through `TOMHTParams.external_start_initial_existence_probability` (default `0.95`, log-odds about `+2.944`). The public value is validated as a probability and converted internally to log-odds for the external-start root `log_delta`. An input external-start track may optionally set `metadata["existence_log_odds"]` or `metadata["existence_probability"]` to override that initial prior; valid log-odds take precedence, invalid optional values fall back through probability metadata to the tracker default. TOMHT output metadata now also exposes score-implied `existence_log_odds` and `existence_probability` fields from each output leaf’s accumulated score; these are observability fields, not yet fully calibrated existence probabilities.
-Update (2026-05-13): legacy unused-detection scoring was removed from the default scoring contract and cluster rebuild path. The local hit score already carries the clutter-density contrast via `-log(lambda)`, so cluster solving now ranks combinations directly by accumulated leaf scores without a current-scan unused-detection offset.
-Update (2026-05-13): internal starts are controlled by constructor initiator presence: `initiator=None` creates no internal starts and leaves residual detections available, while a configured initiator receives residual detections and returns candidate start tracks. This covers both one-shot measurement initializers and more complex/stateful/domain-aware initiators. Initiator-created starts use `TOMHTParams.initiator_start_initial_existence_probability` (default `0.8`, log-odds about `+1.386`) for root `log_delta`, with optional per-track `metadata["existence_log_odds"]` or `metadata["existence_probability"]` override and fallback to the parameter value. Valid log-odds take precedence over valid probability metadata. The legacy `birth_log_penalty` parameter, `TOMHTParams.internal_birth_mode`, and `ScoringModel.score_birth(...)` hook were removed; no tracker-core `birth_density` parameter was added.
-Update (2026-05-13): `TOMHTTracker.__init__` no longer accepts a public `scoring_model` argument. The tracker now always constructs `NLLScoringModel` from `TOMHTParams.prob_detect`, `TOMHTParams.clutter_density`, and `TOMHTParams.log_epsilon`; `make_default_scoring_model(...)` was removed, while the narrow `ScoringModel` protocol remains only as an internal expansion-helper type boundary.
-Update (2026-05-14): `TrackTree` now carries sticky `lifecycle_state` (`tentative` or `confirmed`). New internal and external trees start tentative. After supported-leaf pruning and MAP-only N-scan pruning, tentative trees are promoted to confirmed when max active-leaf accumulated score crosses `TOMHTParams.track_confirmation_existence_probability` (default `0.9`, converted to log-odds internally). This does not change deletion behavior; MAP outputs include `metadata["lifecycle_state"]`. Scan stats and summary output include tentative/confirmed active-tree counts.
-Update (2026-05-14): output publication is now separate from internal confirmation. `TrackTree.publication_state` starts as `unpublished` and promotes stickily to `published` for MAP-selected live trees that pass `TOMHTParams.publish_lifecycle_states`, `publish_min_hits`, `publish_min_age`, and `publish_min_existence_probability`. The default publishes confirmed MAP tracks only, so tentative trees remain internal by default. Standard `update_tracker(...)`, `tracks`, and `get_map_output_tracks()` return published MAP tracks; `get_map_output_tracks(include_unpublished=True)` reconstructs all live MAP tracks for inspection. Output metadata now includes `publication_state` when tree context is available, and scan logs report MAP-published vs MAP-unpublished counts.
-Update (2026-05-14): sticky output-publication helpers now live in `mht/tomht_output.py` alongside output reconstruction and metadata projection. `TOMHTTracker` delegates publication policy evaluation, public-ID assignment/repair, and MAP output-track reconstruction through explicit `TrackTreeStore`/mapper dependencies. This was a behavior-preserving extraction.
-Update (2026-05-14): public output IDs are now assigned at the sticky publication transition. `TrackTree.track_id` remains the internal logical ID allocated at tree creation, while `TrackTree.public_track_id` starts as `None` and is assigned once when the tree first becomes published. The default `output_track_id_mapper` now assigns dense integer public IDs in first-publication order; custom mappers are still honored at publication time. Published output `Track.id` uses `public_track_id`; metadata keeps `track_id`/`internal_track_id` for internal debugging and `public_track_id` for the output identity. Unpublished inspection tracks do not consume public IDs.
-Update (2026-05-14): `get_tomht_track_id(track)` was removed from `mht/tomht_tracker.py`. New code should use `Track.id`/`metadata["public_track_id"]` for public output identity and `metadata["internal_track_id"]` for TOMHT's internal logical ID; the legacy `metadata["track_id"]` field is now a deprecated compatibility alias.
-Update (2026-05-14): whole-track score deletion now runs after sticky confirmation and MAP-only N-scan pruning. `TOMHTParams.track_deletion_existence_probability` defaults to `0.01` (log-odds about `-4.595`) and deletes a whole `TrackTree` when `max(active_leaf.accumulated_log_score)` is at or below the threshold. This is the primary principled mechanism for killing low-score spurious starts. Node-native miss deletion and optional Stone Soup deleters remain additional backstops/domain hooks, and `TRACK_LIFECYCLE` diagnostics report deletion reasons (`score`, `miss`, `deleter`).
-Update (2026-05-14): `NLLScoringModel` now uses a narrow `DetectionProbabilityModel` for dynamic per-hypothesis `P_D` and clutter density. The default tracker path wraps `TOMHTParams.prob_detect` and `TOMHTParams.clutter_density` in `ConstantDetectionProbabilityModel`, preserving scalar scoring behavior. `update_tracker(..., caller_scan_context=...)` threads opaque caller scan data to the DPM without exposing TOMHT's internal `ScanContext`; one update call is still expected to contain detections from one sensor / one measurement space. The DPM receives published public track IDs only, and unpublished trees pass `track_id=None`.
-Update (2026-05-14): whole-track lifecycle implementation now lives in `mht/tomht_lifecycle.py`. `TOMHTTracker` keeps thin gateway methods, while sticky confirmation, score deletion, miss/deleter evaluation, deterministic `TRACK_LIFECYCLE` diagnostics, and current-MAP live-tree filtering are delegated through explicit `TrackTreeStore`/parameter dependencies. This was a behavior-preserving extraction.
-Update (2026-05-14): MAP-only N-scan pruning implementation now lives in `mht/tomht_pruning.py` alongside post-solve supported-leaf pruning. `TOMHTTracker` keeps a thin gateway method, while root-promotion planning, disagreement annotation, tree mutation, and commitment-snapshot updates are delegated through explicit `TrackTreeStore`/snapshot/window dependencies. This was a behavior-preserving extraction.
-Update (2026-05-14): scan instrumentation assembly now lives in `mht/tomht_stats.py` alongside the passive stats dataclasses and scan/summary rendering helpers. `TOMHTTracker` keeps only the gateway that invokes debug display, builds the returned `ScanStats`, stores `last_scan_stats`, appends collected stats, and optionally prints the per-scan report. This was a behavior-preserving extraction.
-Update (2026-05-14): debug-only pruning feasibility validation is now isolated in a lower `TOMHTTracker` debug-validation section. Its pure cluster-combination feasibility predicate lives in `mht/tomht_cluster_rebuild.py` next to the cluster leaf-option/debug helpers. This was a behavior-preserving cleanup.
-Update (2026-05-15): full-scan MAP merge from per-cluster MAP snapshots now lives in `mht/tomht_cluster_rebuild.py` as `merge_cluster_map_globals(...)`, keeping `TOMHTTracker.update_tracker(...)` on module-level cluster-result helpers instead of a class-local static utility. This was a behavior-preserving extraction.
-Update (2026-05-15): configured cluster-solver backend construction now lives in `mht/tomht_cluster_solver_factory.py` as `make_cluster_solver(...)`. `TOMHTTracker` no longer imports concrete solver backend classes directly; it depends on the `ClusterSolver` protocol and the factory. This was a behavior-preserving extraction.
-Update (2026-05-15): external-start validation, root insertion, optional metadata existence-probability override handling, and same-scan MAP-view merge now live in `mht/tomht_external_starts.py`. `TOMHTTracker.add_external_starts(...)` remains the public API gateway and still owns the final tracker-state assignment plus output-publication update. This was a behavior-preserving extraction.
-Update (2026-05-15): constructor setup helpers now live with their owning modules: `apply_params_overrides(...)` in `mht/tomht_params.py` and `resolve_output_track_id_mapper(...)` in `mht/tomht_output.py`. `TOMHTTracker.__init__` delegates to those helpers instead of carrying class-local static utilities. This was a behavior-preserving extraction.
-Update (2026-05-15): `TOMHTTracker` class layout now keeps the core public API contiguous at the top of the class, with inspection/stat APIs, compatibility inspection views, and private constructor helpers in separate sections before the delegated pipeline gateways. Constructor wiring now avoids a duplicate `_updater` field and stores the optional deleter as `self.deleter`. This was a readability-only cleanup.
-Update (2026-05-14): internal-birth candidate handling no longer assumes a fixed state-vector layout. Initiator-returned tracks are not rejected by tracker-owned position/covariance sanity checks; retained candidates are still deterministically sorted and capped by `max_births_per_scan`. Birth tie-break sorting and debug output now flatten all state-vector components generically, with non-finite components sanitized deterministically.
+The long dated update stack from the previous version has been consolidated into the main text below. The main result of the most recent phase is that scoring, start priors, confirmation, publication, deletion, public IDs, and API documentation now have a coherent interpretation. This puts the tracker in a good position to return to expansion-volume work.
 
 ---
 
 ## Bottom line
 
-The tracker is now a **real track-oriented TO-MHT implementation** in the practical sense used in this codebase:
+The tracker is now a practical track-oriented TO-MHT implementation in the sense used in this codebase:
 
 - persistent scan-to-scan state is explicit `TrackTree` objects and their active leaves,
 - globals are rebuilt per cluster on every scan from current leaves,
-- the previous scan’s explicit global list is **not** the persistent search frontier,
+- the previous scan's explicit global list is not the persistent search frontier,
 - MAP-only N-scan pruning operates directly on explicit trees,
-- and public output tracks are reconstructed from **committed prefix history plus current unresolved lineage** for MAP tracks that have crossed the sticky publication gate.
+- output tracks are reconstructed from committed prefix history plus current unresolved lineage,
+- output publication is a sticky tree-level boundary separate from internal confirmation,
+- and scoring is now an additive NLL/LLR model with explicit detection-probability and clutter-density inputs.
 
-The code treats track trees as the primary persistent state, with rebuilt globals retained only as last-scan inspection/debug artifacts.
+The code treats track trees as the primary persistent state. Rebuilt globals, cluster snapshots, and scan stats are retained as last-scan inspection/debug artifacts rather than as long-lived frontier state.
 
-The current implementation is therefore:
+The implementation is currently:
 
-- structurally aligned with the intended track-oriented TO-MHT direction,
-- usable for replay-based experimentation and continued integration work,
-- reasonably robust on the main recorded replay through end-of-file,
-- on a materially better exact-solver footing than the earlier exhaustive baseline,
-- and now on a much clearer local-association/scoring baseline than the earlier PDA/beta-oriented transitional path.
+- structurally aligned with the intended track-oriented design,
+- usable for replay-based experimentation and integration work,
+- on a stronger exact-solver footing than the earlier exhaustive baseline,
+- on a clearer scoring/lifecycle/publication baseline than the earlier PDA/beta-oriented path,
+- and substantially less monolithic after the module extraction work.
 
-The main remaining practical weakness is no longer the exact cluster solver itself. With the default branch-and-bound backend in place and the recent local-association math cleanup completed, the main replay bottleneck remains **local expansion / hypothesis generation**, with the next likely leverage point being reduction of **expansion volume** rather than further inner-kernel cleanup alone.
+The main remaining practical runtime weakness is no longer exact cluster solving. With branch-and-bound as the default backend and the local-association math path cleaned up, the primary replay bottleneck remains **local expansion / hypothesis generation**, especially the number of active leaves that require full expansion.
 
 ---
 
 ## Public API and integration boundary
 
-The intended operational public surface remains:
+The intended operational public surface is:
 
-- `update_tracker(time, detections) -> (time, tracks)`
-- `tracks`
-- `add_external_starts(time, starts)`
-- `get_unused_detections()`
+- `update_tracker(time, detections, *, caller_scan_context=None) -> (time, tracks)`,
+- `tracks`,
+- `add_external_starts(time, starts)`,
+- `get_unused_detections()`.
 
-The tracker also exposes read-only inspection helpers such as:
+The tracker also exposes inspection helpers:
 
-- `get_map_hypothesis_snapshot()`
-- `get_map_output_tracks(include_unpublished=False)`
-- `get_n_scan_commitment_snapshot()`
-- `get_last_cluster_snapshots()`
-- `get_track_tree_snapshot()`
-- `print_summary_stats()`
+- `get_map_hypothesis_snapshot()`,
+- `get_map_output_tracks(include_unpublished=False)`,
+- `get_n_scan_commitment_snapshot()`,
+- `get_last_cluster_snapshots()`,
+- `get_track_tree_snapshot()`,
+- `print_summary_stats()`.
 
 The external interface remains Stone Soup-oriented:
 
-- detections are Stone Soup `Detection`,
+- input detections are Stone Soup `Detection`,
 - output tracks are Stone Soup `Track`,
-- constructor now accepts exactly one of:
-  - `predictor` (+ tracker-owned default distance hypothesiser), or
-  - `hypothesiser` (custom distance hypothesiser injection),
-- `updater` remains required in both constructor modes,
-- local expansion consumes distance hypotheses directly rather than PDA-normalized probabilities,
-- output `Track` metadata is an explicit TOMHT-owned projection from the current active leaf node rather than arbitrary propagated metadata.
+- `updater` is required,
+- constructor accepts exactly one of `predictor` or `hypothesiser`,
+- local expansion consumes distance hypotheses directly,
+- output `Track` metadata is a TOMHT-owned projection from the selected leaf/tree context.
+
+A dedicated API/integration guide now exists in `TO_MHT_API.md`. It is the best reference for integration assumptions such as one sensor / one measurement space per update, DPM semantics, start priors, public vs internal IDs, publication behavior, and stable metadata.
 
 ### Constructor and local-association boundary
 
-The tracker now has a narrow **distance-hypothesiser seam**:
+The tracker has a narrow distance-hypothesiser seam:
 
-- input: `(track, detections, timestamp)`
-- output: Stone Soup `MultipleHypothesis` containing exactly one missed
-  `SingleDistanceHypothesis` plus zero or more gated detection
-  `SingleDistanceHypothesis` entries
-- each detection hypothesis carries `distance = NLL = -log p(z|x)` in measurement
-  space, **without** detection-probability or clutter-density factors,
-- missed-detection distance is a sentinel and is ignored by local score
-  construction.
+- input: `(track, detections, timestamp)`,
+- output: Stone Soup `MultipleHypothesis`,
+- hypotheses are expected to be `SingleDistanceHypothesis` entries,
+- each expansion result must contain exactly one missed-detection hypothesis,
+- detection hypotheses must reference original detections from the current scan,
+- detection-hypothesis distance must be `NLL = -log p(z|x)` in measurement space, without detection-probability or clutter-density factors.
 
-Default local association is tracker-owned
-`TrackerOwnedNLLDistanceHypothesiser` and uses explicit non-squared
-Mahalanobis-threshold gating semantics via `mahalanobis_gate_threshold`.
+Default local association is tracker-owned `TrackerOwnedNLLDistanceHypothesiser`. It uses non-squared Mahalanobis-threshold gating via `mahalanobis_gate_threshold` and emits NLL distances. Custom hypothesisers are allowed but must satisfy the stricter contract above.
 
-This split is now explicit:
+The split is explicit:
 
-- **hypothesiser owns local distances and gating**
-- **the tracker-owned NLL scorer owns local NLL-to-LLR conversion**
-
-The internal scoring helper currently owns:
-
-- `score_track_hypotheses(...)`
+- the hypothesiser owns local distances and gating,
+- the `NLLScoringModel` owns NLL-to-LLR conversion using the DPM.
 
 ---
 
 ## Core architecture
 
+### Tracker as orchestrator
+
+`TOMHTTracker` is now primarily an orchestrator. Major substeps have been extracted into dedicated modules with explicit dependencies, generally passing `TrackTreeStore`, `TOMHTParams`, scan context, and specific per-phase inputs rather than reaching through broad tracker state.
+
+Important extracted modules include:
+
+- `tomht_params.py` for `TOMHTParams` and params overrides,
+- `tomht_tree_store.py` for persistent tree/node/ID bookkeeping,
+- `tomht_expansion.py` for local expansion orchestration,
+- `tomht_births.py` for internal-birth residual/candidate handling,
+- `tomht_external_starts.py` for external-start validation/insertion,
+- `tomht_clustering.py` for cluster construction and overload decomposition,
+- `tomht_cluster_rebuild.py` for cluster option materialization, exact solve orchestration, relaxation retry, and MAP merge,
+- `tomht_pruning.py` for post-solve supported-leaf pruning and MAP-only N-scan pruning,
+- `tomht_lifecycle.py` for confirmation, score deletion, miss/deleter lifecycle, and live-MAP filtering,
+- `tomht_output.py` for publication policy, public-ID assignment, and output reconstruction,
+- `tomht_stats.py` for scan stats, timing breakdowns, and reporting,
+- `tomht_utils.py` for TOMHT-specific deterministic utility helpers,
+- `utils.py` for generic runtime/environment/timer helpers.
+
+This organization is not final, but the broad shape is now healthy: the tracker class describes the per-scan pipeline while the phase-specific implementation lives close to its data and semantics.
+
 ### Persistent state
 
-Persistent scan-to-scan state now consists primarily of:
+Persistent scan-to-scan state consists primarily of:
 
-- explicit `TrackTree` objects keyed by logical `track_id`,
+- explicit `TrackTree` objects keyed by internal logical `track_id`,
 - persistent `TrackHypothesisNode` objects linked by same-track parent/child structure,
-- each tree’s current unresolved root and active leaf set,
-- each tree’s committed prefix history before the unresolved root,
+- each tree's current unresolved root and active leaf set,
+- each tree's committed prefix history before the unresolved root,
+- tree-level lifecycle/publication state,
+- public ID assignment state,
 - N-scan commitment bookkeeping,
-- and minimal long-lived stats/counters.
+- and stats/debug state.
 
-`TrackHypothesisNode` is the canonical per-step hypothesis unit. Nodes are mutable in this phase to support direct child-link maintenance through `child_node_ids`. Each node carries:
+`TrackTreeStore` owns:
 
-- stable `track_id`
-- stable `node_id`
-- same-track `parent`
-- `scan_index` / `timestamp`
-- state payload
-- used detection key / association label
-- local and accumulated score
-- cached age / hit / miss counters
-- provenance fields such as `root_source` and `birth_scan_index`
+- internal track ID allocation,
+- node ID allocation,
+- node table,
+- track-tree table,
+- root and child node creation,
+- single-root tree insertion,
+- active leaf/tree counts,
+- empty-tree removal,
+- unreachable-node cleanup.
 
-`TrackTree` is explicit and persistent, with:
+`TOMHTTracker` keeps compatibility views for `_nodes_by_id` and `track_trees_by_track_id`, but implementation code now uses `self._tree_store` directly.
 
-- `track_id`
-- `root_node_id`
-- `active_leaf_node_ids`
-- `root_source`
-- `committed_states`
+### `TrackHypothesisNode`
 
-### Per-scan transient / last-scan state
+`TrackHypothesisNode` is the canonical per-step hypothesis unit. It carries:
 
-Per scan, the tracker rebuilds:
+- internal `track_id`,
+- stable `node_id`,
+- same-track `parent`,
+- `scan_index` / `timestamp`,
+- Stone Soup state payload,
+- used detection key / association label,
+- local and accumulated score,
+- cached age / hit / miss counters,
+- provenance such as `root_source` and `birth_scan_index`.
 
-- clusters from current active-leaf history overlap,
-- cluster-local rebuilt globals,
-- cluster MAP selections,
-- overload-split summaries when triggered,
-- and scan statistics.
+Nodes are mutable in this phase so child-link bookkeeping can be maintained directly.
 
-These rebuilt artifacts are retained only as **last-scan inspection/debug snapshots**, not as the persistent search frontier. The compatibility slot `self.global_hypotheses` now contains only the latest merged MAP global for older inspection paths, not a scan-to-scan beam frontier.
+### `TrackTree`
 
-Cluster work construction is a helper-layer responsibility: it takes the
-`TrackTreeStore` and the scan index, then returns
-deterministically ordered cluster work items with full-history conflict links and
-current-scan detection-key metadata. Overload decomposition is also handled in
-that helper layer as an explicit transformation from one cluster work item plus
-per-track active leaf counts into subcluster work items and instrumentation. This
-preserves the existing full-history exclusivity and weak-edge split semantics
-while keeping the tracker class focused on orchestration.
+`TrackTree` is explicit and persistent, with at least:
 
-Local expansion is also a helper-layer responsibility: `mht/tomht_expansion.py`
-owns distance-hypothesis validation, local candidate scoring/ranking, mandatory
-miss preservation, updater calls, pre-solve leaf capping, and expansion timing
-counters. Persistent node ID allocation and node registration are owned by
-`mht/tomht_tree_store.py`; expansion receives the `TrackTreeStore` directly and
-uses it for persistent child-node creation.
+- internal `track_id`,
+- unresolved `root_node_id`,
+- active leaf node IDs,
+- `root_source`,
+- committed prefix states,
+- sticky `lifecycle_state` (`tentative` / `confirmed`),
+- sticky `publication_state` (`unpublished` / `published`),
+- optional `public_track_id` assigned at first publication.
 
-TOMHT-specific utility helpers are separated from generic runtime utilities:
-`mht/tomht_utils.py` owns deterministic detection sorting, current-scan
-detection-key filtering, and compact detection-key sample formatting, while
-`mht/utils.py` remains for generic environment/runtime helpers.
-
-Internal-birth handling is split out narrowly: `mht/tomht_births.py` owns birth
-used-key extraction, support/age/miss summaries, covariance-trace ranking,
-state-layout-agnostic deterministic candidate sorting/capping, residual detection-index
-calculation after expansion, guardrail reasoning, initiator invocation, birth
-debug printing, birth scoring calls, and root-field construction. `TOMHTTracker`
-calls the high-level post-expansion birth helper, assigns `_last_unused_detections`
-from the helper result, and keeps scan-level orchestration, while the store owns
-ID allocation, root-node creation, and tree insertion.
-
-Persistent tree/node bookkeeping is centralized in `mht/tomht_tree_store.py`:
-`TrackTreeStore` owns logical track IDs, node IDs, the node table, the track-tree
-table, root/child node construction, single-root tree insertion, active leaf/tree
-counts, empty-tree removal, and unreachable-node cleanup. Expansion, clustering,
-post-solve pruning, and MAP-only N-scan pruning now take the store as their
-persistent-state dependency.
-The store also provides a narrow new-track root insertion helper for internal
-births and external starts. `TOMHTTracker` keeps `track_trees_by_track_id` and
-`_nodes_by_id` as compatibility properties that forward to the store; tracker
-implementation code refers to `self._tree_store` directly.
+Internal track IDs may have gaps. Public output IDs are assigned only at publication.
 
 ---
 
 ## Current per-scan pipeline
 
-The tracker’s current runtime pipeline is:
+The current runtime pipeline is:
 
 1. sort detections deterministically,
 2. expand active leaves in every persistent tree,
-3. drop empty trees,
-4. optionally create internal birth trees from detections unused by the union of surviving active leaves,
-5. recompute clusters from current trees,
-6. rebuild feasible globals per cluster through the exact cluster-solver contract (default backend = branch-and-bound exact search), with optional overload splitting first and optional narrow historical-relaxation retry around the exact solve,
-7. post-solve prune each cluster tree frontier to leaves supported by retained rebuilt globals,
-8. merge cluster MAP selections into full-scan MAP,
+3. remove empty trees,
+4. optionally create internal birth trees from residual detections,
+5. build full-history conflict clusters,
+6. rebuild feasible globals per cluster through the exact cluster-solver contract, with overload splitting and historical-relaxation retry as explicit guardrails,
+7. post-solve prune each non-overload-split cluster tree frontier to leaves supported by retained rebuilt globals,
+8. merge cluster MAP selections into a full-scan MAP global,
 9. apply MAP-only N-scan pruning on explicit trees,
-10. apply whole-track lifecycle (sticky confirmation, then score deletion plus node-native miss-threshold by default or optional Stone Soup deleter),
+10. apply whole-track lifecycle: sticky confirmation, then score deletion plus either native miss lifecycle or optional Stone Soup deleter,
 11. update sticky output-publication state for MAP-selected live trees,
-12. reclaim unreachable node storage, keep last-scan debug snapshots, and return published MAP output tracks.
+12. reclaim unreachable node storage,
+13. build/store scan stats and return published MAP output tracks.
 
-This is the main runtime story the code now implements.
+Timing instrumentation still groups N-scan, lifecycle, and publication into the broader `nscan_lifecycle_ms` phase. That is acceptable for now because timing is not currently the bottleneck in those steps, and avoiding log-format churn has been useful.
 
 ---
 
-## Solver architecture and current exact backend status
+## Scoring, DPM, and score semantics
 
-A dedicated solver seam now exists:
+### Local scoring baseline
 
-- `mht/tomht_cluster_solver.py` defines the solver-facing exact cluster problem/result contract and shared helpers,
-- `mht/tomht_cluster_solver_exhaustive.py` contains the exhaustive reference backend,
-- `mht/tomht_cluster_solver_branch_and_bound.py` contains the current default exact backend,
-- `mht/tomht_cluster_solver_ortools.py` contains an experimental exact CP-SAT backend.
+Local scoring is now explicit NLL-to-LLR scoring:
 
-The exact cluster problem contract now explicitly carries:
+```text
+hit  = log(P_D) - log(lambda) - NLL
+miss = log(1 - P_D)
+```
+
+where:
+
+- `NLL = -log p(z|x)` comes from the distance hypothesiser,
+- `P_D` is detection probability,
+- `lambda` is clutter density in the same measurement-space units as the NLL,
+- unused detections carry no separate score term because they cancel against the all-clutter baseline.
+
+Legacy PDA/beta scoring, unused-detection scoring, `birth_log_penalty`, and `ScoringModel.score_birth(...)` have been removed. Cluster solving now ranks combinations directly by accumulated leaf scores.
+
+### DetectionProbabilityModel
+
+`NLLScoringModel` now consumes a narrow `DetectionProbabilityModel` rather than scalar `P_D`/`lambda` directly. The default `ConstantDetectionProbabilityModel` wraps `TOMHTParams.prob_detect` and `TOMHTParams.clutter_density`, preserving the simple scalar path.
+
+Custom DPMs can vary detection probability and clutter density by:
+
+- public track ID when available,
+- Stone Soup prediction,
+- concrete detection for hit clutter-density calls,
+- opaque `caller_scan_context` supplied to `update_tracker(...)`.
+
+Important semantics:
+
+- one `update_tracker(...)` call should contain detections from one sensor / one measurement space,
+- `caller_scan_context` is distinct from TOMHT's internal `ScanContext`,
+- empty scans can still carry caller context,
+- DPM callbacks receive public track IDs only after publication,
+- unpublished trees pass `track_id=None`,
+- DPM is not currently used for initiator-root or external-start root scoring.
+
+### User-facing probabilities vs internal log-odds
+
+Human-facing params remain probabilities, e.g.:
+
+- `external_start_initial_existence_probability`,
+- `initiator_start_initial_existence_probability`,
+- `track_confirmation_existence_probability`,
+- `track_deletion_existence_probability`,
+- `publish_min_existence_probability`.
+
+They are converted internally to log-odds where needed. Metadata inputs for starts may provide either:
+
+- `metadata["existence_log_odds"]`, or
+- `metadata["existence_probability"]`.
+
+Precedence is:
+
+```text
+valid existence_log_odds > valid existence_probability > configured default
+```
+
+Output metadata exposes both `existence_log_odds` and `existence_probability` for inspection/calibration.
+
+---
+
+## Starts and birth semantics
+
+### External starts
+
+External starts are the clean integration path for systems that already own initiation/confirmation.
+
+`add_external_starts(time, starts)` inserts starts after an `update_tracker(...)` call at the same timestamp. The preceding update establishes scan timestamp/bookkeeping; it can be an empty update when appropriate.
+
+External-start roots use `TOMHTParams.external_start_initial_existence_probability` by default, with optional per-track metadata override via `existence_log_odds` or `existence_probability`.
+
+### Internal initiator starts
+
+Internal starts are controlled by constructor initiator presence:
+
+- `initiator=None`: no internal starts; residual detections remain available via `get_unused_detections()` for external workflows,
+- `initiator=<Initiator>`: residual detections are passed to the configured Stone Soup initiator and returned tracks are treated as candidate starts.
+
+The tracker does not own generic single-detection state initialization. Even one-detection starts require domain-specific state/covariance assumptions, so they belong in a caller-supplied initiator.
+
+Internal-start roots use `TOMHTParams.initiator_start_initial_existence_probability` by default, again with optional metadata override using log-odds or probability.
+
+Internal-birth candidate validity is now initiator-owned. The tracker no longer applies state-layout-specific position/covariance sanity checks. Remaining internal-start controls are capping, deterministic ordering, and load guardrails. Deterministic ranking is a safety valve; if `max_births_per_scan` routinely fires, the better fix is usually initiator-side filtering or candidate confidence metadata rather than relying on TOMHT's fallback ordering.
+
+### Residual detections
+
+`get_unused_detections()` is mainly intended for `initiator=None` external-start workflows. If an internal initiator is configured, residual detections passed to that initiator should generally be considered consumed by the internal-start path, even if no retained starts result after capping/guardrails.
+
+---
+
+## Lifecycle, publication, and identity
+
+### Confirmation
+
+`TrackTree.lifecycle_state` starts as `tentative` and promotes stickily to `confirmed` when:
+
+```text
+max(active_leaf.accumulated_log_score) >= logit(track_confirmation_existence_probability)
+```
+
+Default confirmation probability is `0.9`.
+
+Confirmation is an internal tree state. It does not by itself delete tracks.
+
+### Whole-track deletion
+
+Score-based deletion is enabled by default and runs after N-scan pruning:
+
+```text
+delete tree if max(active_leaf.accumulated_log_score) <= logit(track_deletion_existence_probability)
+```
+
+Default deletion probability is `0.01`.
+
+Score deletion always runs. In addition, TOMHT uses one non-score deletion lane:
+
+- without a custom deleter: native miss-count lifecycle,
+- with a custom Stone Soup deleter: deleter lane replaces the native miss lane.
+
+The native miss threshold uses an N-scan-aware floor:
+
+```text
+effective_miss_threshold = max(max_missed, ns_scan_window + 1)
+```
+
+`TRACK_LIFECYCLE` diagnostics report deletion reason groups (`score`, `miss`, `deleter`).
+
+### Publication
+
+Publication is separate from confirmation and deletion. `TrackTree.publication_state` starts `unpublished` and promotes stickily to `published` when a MAP-selected live tree satisfies publication policy.
+
+Default publication is confirmed-only:
+
+```text
+publish_lifecycle_states = ("confirmed",)
+```
+
+Additional gates include `publish_min_hits`, `publish_min_age`, and `publish_min_existence_probability`.
+
+Standard `update_tracker(...)`, `tracks`, and `get_map_output_tracks()` return published MAP tracks only. `get_map_output_tracks(include_unpublished=True)` reconstructs live MAP-selected unpublished tracks for inspection.
+
+### Public and internal IDs
+
+`TrackTree.track_id` is the internal logical ID assigned at tree creation. `TrackTree.public_track_id` is assigned once, at first publication.
+
+Default public IDs are dense integers in first-publication order. A custom `output_track_id_mapper` can map internal logical IDs into caller-specific public IDs, but custom mappers are responsible for uniqueness and non-reuse.
+
+Stable output metadata should use:
+
+- `internal_track_id`,
+- `public_track_id`,
+- `existence_log_odds`,
+- `existence_probability`,
+- `lifecycle_state`,
+- `publication_state`,
+- `age`, `hits`, `missed_count`.
+
+Legacy `metadata["track_id"]` is a deprecated compatibility alias for the internal ID. The old `get_tomht_track_id(track)` helper has been removed.
+
+---
+
+## Solver architecture and exact backend status
+
+A dedicated solver seam exists:
+
+- `tomht_cluster_solver.py`: solver-facing problem/result/diagnostics contract,
+- `tomht_cluster_solver_exhaustive.py`: exhaustive reference backend,
+- `tomht_cluster_solver_branch_and_bound.py`: current default exact backend,
+- `tomht_cluster_solver_ortools.py`: experimental exact CP-SAT backend,
+- `tomht_cluster_solver_factory.py`: backend construction.
+
+The exact cluster problem contract carries:
 
 - one leaf option per track choice,
 - full-history conflict keys for feasibility,
-- and pre-scored leaf accumulated scores.
+- pre-scored accumulated leaf scores,
+- retain up to K best feasible combinations.
 
-Tracker-side problem preparation passes accumulated leaf scores directly to the exact solver.
+Tracker-side approximation/policy remains outside the solver:
 
-Approximation/policy placement is explicit:
+- overload splitting is a pre-solve cluster transformation,
+- historical-conflict relaxation is an around-solver retry policy.
 
-- overload splitting remains a tracker-side pre-solve policy,
-- historical-conflict relaxation remains a tracker-side around-solver retry policy.
+### Branch-and-bound default
 
-### Current default exact backend: branch-and-bound
+`TOMHTParams.cluster_solver_backend` defaults to `"branch_and_bound"` with aliases `"branch-and-bound"` and `"bnb"`.
 
-The tracker default backend is now `TOMHTParams.cluster_solver_backend="branch_and_bound"` (aliases `"branch-and-bound"` / `"bnb"`).
-
-This backend:
+The backend:
 
 - performs deterministic depth-first exact search over ordered tracks,
-- uses an exact 1-track fast path,
-- uses full-history conflict-key exclusivity exactly,
-- uses deterministic ordering:
-  - tracks ordered by fewer leaves first, then stronger conflict burden, then `track_id`,
-  - leaves ordered per track by descending score,
-- uses a simple optimistic suffix-score upper bound for pruning,
-- retains exact K-best solutions through the shared deterministic `TopKSolutionHeap`.
+- uses a 1-track fast path,
+- enforces full-history conflict-key exclusivity exactly,
+- orders tracks/leaves deterministically,
+- uses suffix-score optimistic bounds for pruning,
+- retains exact K-best solutions through the shared deterministic heap.
 
-During this phase, branch state was tightened from Python `set`-based conflict tracking to compact integer conflict masks for shared keys, and selected-leaf branch state was reduced from per-branch dict churn to depth-indexed arrays before materializing final solutions.
+It replaced exhaustive as the default after parity and replay/timing work.
 
-Branch-and-bound diagnostics now include counters such as:
-
-- `search_nodes_visited`
-- `branches_pruned_conflict`
-- `branches_pruned_bound`
-- `complete_feasible_solutions`
-
-`ClusterSolverDiagnostics` is intentionally a union-style schema:
-
-- required across backends: `combinations_evaluated`, `feasible_combinations`,
-- common fields: backend/termination/result summary fields,
-- backend-specific optional fields for solver-local instrumentation.
-
-In particular, `solves_attempted` is treated as backend-specific and is primarily meaningful for repeated-solve backends (currently OR-Tools CP-SAT), rather than being forced to `1` by single-pass backends.
-
-### Exhaustive backend status
+### Exhaustive backend
 
 The exhaustive backend remains available as:
 
-- exact reference implementation,
-- parity oracle for tests and solver experiments,
-- fallback backend when needed.
+- reference implementation,
+- parity oracle,
+- fallback backend.
 
-It is no longer the default.
+### OR-Tools backend
 
-### OR-Tools backend status
-
-An experimental exact CP-SAT backend also exists behind the same solver contract.
-
-It uses:
-
-- one Boolean variable per leaf,
-- exactly-one selection per track,
-- per-history-key exclusion constraints,
-- scaled integer objective coefficients,
-- repeated optimal solve calls plus no-good cuts for K-best extraction.
-
-This backend is **exact under the current solver contract**, but in the current repeated-solve K-best form it is **not** a runtime win on the primary replay workload used during this phase. Profiling showed:
-
-- solve time dominated by repeated CP-SAT solve calls rather than Python-side setup,
-- small-cluster overhead exists but is not the main cost driver,
-- large clusters plus repeated K-best solves dominate elapsed time.
-
-Current positioning:
-
-- keep OR-Tools as an **experimental exact backend**,
-- useful for comparison, fallback, and future hybrid/K-best experiments,
-- not recommended as the default runtime path in the current configuration.
+The OR-Tools CP-SAT backend remains experimental. It is exact under the current solver contract but was not a runtime win on the primary replay workload in its current repeated-solve K-best form. It is useful for comparison and future experiments, not recommended as the default runtime path.
 
 ---
 
-## Current rebuild / pruning / commitment behavior
+## Rebuild, pruning, and approximation behavior
 
 ### Local expansion
 
-Local expansion is now explicitly **distance-hypothesis driven**:
+Local expansion is distance-hypothesis driven:
 
-- for each active leaf, reconstruct a compatibility `Track`,
-- call the configured distance hypothesiser,
-- require one missed-detection hypothesis plus zero or more gated detection hypotheses,
-- derive local score via the tracker-owned NLL scorer,
-- create child nodes for kept hypotheses,
-- always retain a miss hypothesis,
-- then apply an optional per-tree local leaf cap.
+- reconstruct a compatibility `Track` for each active leaf,
+- call the configured hypothesiser,
+- validate the returned hypotheses,
+- score hit/miss alternatives through `NLLScoringModel`,
+- create child nodes,
+- always preserve a miss alternative,
+- apply optional per-tree local leaf cap.
 
-### Current local-association math kernel
+`max_leaves_per_track_tree` remains a pre-solve safety valve rather than the main pruning semantics.
 
-The tracker-owned default local hypothesiser currently includes several conservative optimizations:
+### Local-association math kernel
 
-- rectangular pre-gating before full Mahalanobis/NLL work,
-- one-entry exact-equality covariance-preparation reuse per `hypothesise(...)` call,
-- scan-time prediction reuse when `detection_timestamp == timestamp`,
-- one-entry measurement-prediction reuse when both `prediction` and `measurement_model` match by object identity,
-- Cholesky-based Mahalanobis/NLL evaluation:
-  - prepared covariance payload includes SPD covariance, diagonal, Cholesky factor `L`, and `logdet`,
-  - `logdet = 2 * sum(log(diag(L)))`,
-  - full Mahalanobis distance uses triangular solve on `L`.
+The tracker-owned default hypothesiser includes conservative optimizations:
 
-Regression status for this math path remained exact on the normalized smoke/replay compare helpers during the phase, and timing helpers showed reduced `expand_ms` in both smoke scenarios and the standard replay baseline.
+- rectangular pre-gating,
+- covariance-preparation reuse per call,
+- scan-time prediction reuse,
+- measurement-prediction reuse by object identity,
+- Cholesky-based Mahalanobis/NLL evaluation.
 
-### Local leaf cap
-
-`max_leaves_per_track_tree` is explicitly treated as a **pre-solve safety valve**, not the main pruning semantics. Its default is intentionally high enough that it should act as tractability protection rather than the primary meaning of pruning.
+These changes improved expansion timing, but the next likely leverage is expansion volume rather than further inner-kernel cleanup alone.
 
 ### Clustering
 
-Clusters are built from **full active-leaf historical detection-key overlap**, not current-scan-only overlap. This is an important correctness property: clustering and solver feasibility now use consistent full-history exclusivity semantics. Detection keys use the format `(scan_index, det_index)`.
+Clusters are built from full active-leaf historical detection-key overlap, not only current-scan overlap. This keeps clustering and solver feasibility aligned around full-history exclusivity.
 
 ### Global rebuild
 
-For each cluster, the tracker now solves the exact cluster K-best problem through the solver interface described above. The solver contract itself assumes:
-
-- one selected leaf per track,
-- no overlapping full-history conflict keys,
-- score = sum of selected leaf scores + cluster constant,
-- retain up to `max_results` best feasible combinations.
-
-Implementation note (2026-05-12): cluster rebuild orchestration now lives in `mht/tomht_cluster_rebuild.py`. `TOMHTTracker` still owns the scan pipeline, but delegates this phase through `rebuild_cluster_globals(...)`; rebuild, solve, overload-split, and historical-relaxation semantics are unchanged.
+For each cluster, TOMHT builds leaf options and solves the exact cluster K-best problem through the solver seam. Scores are accumulated leaf scores; there is no current-scan unused-detection affine offset.
 
 ### Post-solve supported-leaf pruning
 
-After each cluster rebuild, each non-overload-split cluster tree keeps only leaves that appear in at least one retained rebuilt global for that cluster. This remains the main pruning mechanism that keeps active leaf frontiers globally informed.
+For each non-overload-split cluster, active leaves are pruned to those appearing in at least one retained rebuilt top-K global for that cluster.
+
+Overload-decomposed clusters skip this supported-leaf pruning to avoid over-pruning under approximation.
 
 ### MAP-only N-scan pruning
 
-N-scan pruning remains MAP-only:
+N-scan pruning is MAP-only:
 
-- boundary is `b = scan_index - ns_scan_window`,
-- the child of the current root on the MAP path is promoted to be the new root,
-- siblings are removed structurally,
-- disagreement statistics are computed against alternative rebuilt globals,
-- and the newly committed pre-promotion root state is appended to the tree’s committed prefix history.
+- boundary `b = scan_index - ns_scan_window`,
+- promote the child of the current root on the MAP path,
+- remove siblings structurally,
+- append committed states to the tree's committed prefix,
+- update commitment snapshot and disagreement stats.
 
-The default N-scan window is currently `6`.
+Default `ns_scan_window` remains `6`.
 
-### Whole-track score/miss lifecycle
+### Approximation / safety-net mechanisms
 
-Per-branch miss-based pruning during local expansion has been removed.
+The explicit approximation/safety mechanisms are:
 
-Whole-track termination happens after sticky confirmation and MAP-only N-scan pruning.
+1. overload cluster splitting,
+2. narrow historical-conflict relaxation retry,
+3. internal birth load guards,
+4. pre-solve local leaf caps.
 
-Score deletion uses the same tree-level aggregate convention as confirmation:
-
-```text
-tree_score = max(active_leaf.accumulated_log_score)
-```
-
-over active leaves. If `tree_score <= logit(track_deletion_existence_probability)`, the whole `TrackTree` is removed and the current MAP global is filtered to live trees. The default deletion probability is `0.01`, which is intentionally conservative. Confirmation and deletion are therefore hysteresis-style score gates: confirmation is sticky at the high threshold, while deletion removes the tree at the low threshold.
-
-Score deletion is the primary principled mechanism for killing low-score spurious starts. Miss-count and Stone Soup deleter paths are additional lifecycle backstops/domain hooks.
-
-Miss handling is still available as whole-track termination, using:
-
-- configurable `track_miss_termination_mode`
-  - `all_active_leaves`
-  - `map_leaf` (default)
-  - `global_k_leaves`
-- threshold `max(max_missed, ns_scan_window + 1)`
-
-When no custom deleter is configured, score and miss deletion are OR-composed. When a custom Stone Soup deleter is configured, score deletion still runs and the deleter lane replaces the node-native miss lane. `TRACK_LIFECYCLE` logs summarize terminated track IDs by reason (`score`, `miss`, `deleter`) so replay output can show which lifecycle criterion is doing the work.
+These are pragmatic robustness/tractability mechanisms and remain conceptually provisional. They should be revisited as expansion-volume and frontier-control work proceeds.
 
 ---
 
-## Current approximation / safety-net mechanisms
-
-The tracker currently contains several explicit approximation/safety-net mechanisms that are part of its operational semantics.
-
-### 1. Overload cluster splitting
-
-When a cluster’s projected Cartesian combinations exceed `overload_split_projected_combination_threshold`, the tracker can approximately decompose that cluster by:
-
-- building the exact conflict graph first,
-- iteratively severing the weakest conflict edge,
-- recomputing connected components,
-- and solving resulting subclusters independently.
-
-Weakest-edge criterion is the pure count of shared **full-history** detection keys, with deterministic tie-break.
-
-### 2. Historical-conflict relaxation
-
-If a cluster is still exact-infeasible, the tracker may apply a **narrow historical-conflict relaxation**:
-
-- only keys forced in every active leaf of a track,
-- only keys also present in that track’s root history,
-- only keys at or older than the current N-scan boundary,
-- and only when shared by more than one track in the cluster.
-
-Feasibility is then retried while ignoring overlaps on those specific historical keys only. All other exclusivity remains strict.
-
-### 3. Internal birth load guards
-
-Internal births remain intentionally simple and secondary. They are still based on the constructor-supplied initiator and Step-2 residual detections, but births can be skipped once active tree or leaf counts exceed configured thresholds.
-
-These mechanisms are pragmatic, not final. They should be understood as explicit robustness/tractability measures for current replay use, not a final principled solution to large-cluster or extended-target behavior.
-
----
-
-## Scoring state
-
-Local scoring uses an explicit tracker-owned NLL-to-LLR additive model in `tomht_scoring.py`. By default it is configured through `TOMHTParams.prob_detect`, `TOMHTParams.clutter_density`, and `TOMHTParams.log_epsilon`; the scalar probability/density values are wrapped in `ConstantDetectionProbabilityModel`. Advanced callers can provide a `DetectionProbabilityModel` to `TOMHTTracker` for sensor-, state-, or scan-dependent `P_D` and clutter density without reintroducing arbitrary public scoring-model injection. `TOMHTParams.scoring_mode` has been removed.
-
-Current behavior:
-
-- local hit score: `log(P_D) - log(lambda) - NLL`
-- local miss score: `log(1 - P_D)`
-- no separate unused-detection score term; the clutter-density contrast is already in the local hit score,
-- external-start roots use `logit(external_start_initial_existence_probability)`,
-- initiator-created roots use `logit(initiator_start_initial_existence_probability)`,
-- start-root existence-prior scoring is handled outside `NLLScoringModel`,
-- hit clutter density can use both the hypothesis prediction and the concrete detection,
-- `P_D ~= 0` outside coverage makes a miss score approximately zero,
-- DPM callbacks receive only published public track IDs; unpublished trees pass `track_id=None`,
-- `caller_scan_context` is opaque caller data, available even for empty-detection scans, and is distinct from TOMHT's internal `ScanContext`,
-- one `update_tracker(...)` call should contain detections from one sensor / one measurement space; multi-sensor applications should call the tracker separately for each sensor update with the matching caller context,
-- scoring diagnostics are logged at tracker construction time.
-
-### Unit / scale contract
-
-The unit contract is now explicit:
-
-- hypothesiser detection distance must be `NLL = -log p(z|x)` in a particular measurement space,
-- `clutter_density` (`lambda`) must be expressed in the **same measurement-space units**,
-- dynamic DPM-provided clutter density follows the same unit contract,
-- with that contract, linear coordinate rescaling cancels between `-log(lambda)` and the Gaussian normalization term inside `NLL`.
-
-Miss-hypothesis distance from the hypothesiser is intentionally ignored by `NLLScoringModel`; the miss score is computed explicitly.
-
-This scoring split should still be understood as **pragmatic and serviceable**, not final.
-
----
-
-## Output / observability
+## Output and observability
 
 ### Output tracks
 
-Public output tracks are now reconstructed from:
+Published output tracks are reconstructed from:
 
-- the tree’s committed prefix history,
-- plus the current unresolved leaf-node lineage,
-- only when the MAP-selected tree is in sticky `published` publication state.
+- committed prefix history,
+- current unresolved MAP leaf lineage,
+- tree context for lifecycle/publication/public ID metadata.
 
-Published output `Track.id` is the tree’s sticky `public_track_id`, assigned
-once at first publication. Internal tree IDs remain available as
-`metadata["internal_track_id"]`; these are TOMHT logical IDs and may have gaps
-in the public output sequence when tentative trees never publish. The legacy
-`metadata["track_id"]` field remains only as a deprecated compatibility alias.
-
-This restores full logical output history across N-scan pruning while preserving the intended meaning of the explicit unresolved tree structure.
-
-`get_map_output_tracks(include_unpublished=True)` is available for inspection and reconstructs unpublished/tentative MAP-selected tracks without changing tree state or allocating public IDs. Unpublished inspection tracks use the internal ID as their inspection-only `Track.id` and carry `metadata["public_track_id"] = None`. Publication remains sticky once a tree first reaches `published`.
-
-Returned `Track` metadata remains an explicit projection from the current leaf node, including:
-
-- deprecated compatibility alias `track_id`
-- `internal_track_id` (same value as `track_id`, explicit for consumers)
-- `public_track_id` (`Track.id` for published tracks, `None` for unpublished inspection tracks)
-- `node_id`
-- `age`
-- `hits`
-- `missed_count`
-- `last_det_key`
-- `last_det_hit`
-- `root_source`
-- `birth_scan_index`
-- `existence_log_odds`
-- `existence_probability` (currently score-implied from accumulated log-odds, not yet a fully calibrated existence probability)
-- `lifecycle_state`
-- `publication_state`
+This preserves logical output history across N-scan pruning while keeping unresolved tree structure explicit.
 
 ### Instrumentation
 
-Per-scan and summary instrumentation reports:
+Per-scan and summary instrumentation reports include:
 
-- active trees / leaves
-- cluster counts
-- evaluated / feasible combinations
-- rebuilt globals stored
-- overload split counters
-- historical relaxation counters
-- N-scan commitment counts
-- birth statistics
-- MAP track usage and MAP-published / MAP-unpublished counts
-- explicit scan index in `SCAN ...` lines
-- scan wall time
-- memory / node counts
+- active trees/leaves,
+- tentative/confirmed counts,
+- MAP-published / MAP-unpublished counts,
+- clusters and rebuild stats,
+- evaluated/feasible combinations,
+- solver diagnostics,
+- overload split and historical-relaxation counters,
+- N-scan commitment counts,
+- birth statistics,
+- lifecycle deletion reasons,
+- scan wall time,
+- memory/node counts,
+- phase timing breakdown.
 
-Instrumentation also reports **per-scan timing-phase breakdowns**:
+Expansion timing is split into hypothesiser and updater call counts/times, which has been useful for identifying local expansion as the remaining bottleneck.
 
-- prep/context
-- pre-expand validation
-- local expansion
-- expansion hypothesiser/update split and call counts
-- post-expand prune/validation
-- births
-- cluster build + solve
-- post-solve prune
-- map merge
-- N-scan / lifecycle
-- cleanup
-- residual `other_ms`
+### Regression status
 
-This has been important for locating the new dominant replay bottleneck after the solver change.
-
-### Determinism
-
-The tracker now has deterministic behavior in the investigated birth-capping path:
-
-- initiator outputs are converted from unordered set-like candidate pools into a deterministic heuristic ranking before `max_births_per_scan` is applied,
-- the ranking restores the previous support/miss/age/covariance-oriented quality heuristic before deterministic tie-break fields,
-- this removes process-level nondeterminism that had been introduced by slicing directly from initiator outputs.
-
-The broader tracker is intended to be deterministic, and this remains an important operational expectation.
-
----
-
-## Replay/runtime status
-
-The current code can complete the main recorded replay to end-of-file, which was the immediate robustness goal after the transition.
-
-A key outcome of this phase is that the previous exact-solver bottleneck has been reduced enough that the main replay bottleneck has shifted.
-
-### Exact-solver outcome
-
-On the 400-CPI replay window used during the solver phase:
-
-- earlier exhaustive baseline timing was approximately:
-  - median ~33 ms
-  - p95 ~715 ms
-  - max ~2019 ms
-- branch-and-bound timing on the same window was approximately:
-  - median ~27–29 ms
-  - p95 ~407–423 ms
-  - max ~929–965 ms
-
-This was sufficient to justify switching the default exact backend from exhaustive to branch-and-bound.
-
-### Local-association optimization outcome
-
-On the standard replay timing helpers used during the current phase, recent local-association passes reduced `expand_ms` materially, including both median and upper-tail timings. The Cholesky-based math pass in particular produced a visible additional reduction after the earlier reuse / rectangular-gating pass.
-
-### Current dominant bottleneck
-
-With branch-and-bound enabled and the recent hypothesiser/scoring cleanup in place, the slow scans are still dominated primarily by **local expansion / hypothesis generation**, not cluster solving.
-
-So the current runtime picture is:
-
-- exact cluster solving is no longer the main immediate blocker on the primary replay,
-- local-association inner-kernel cleanup has already yielded worthwhile wins,
-- the next likely leverage point is **reducing how many leaves require full expansion**,
-- while large merged clusters and approximation semantics still matter for tail behavior.
-
----
-
-## Current output-quality note
-
-The current baseline is operationally usable, but output quality is not yet where it should ultimately be.
-
-Known current notes:
-
-- smoke/scenario behavior remains somewhat noisy, with false track starts still higher than desired,
-- recorded-data replay remains broadly reasonable after the latest local association and scoring changes,
-- but some segments appear to show somewhat more target swapping / track jumping than before.
-
-These are treated as **known baseline-quality concerns**, not as immediate blockers for the current runtime-focused next step. They likely deserve a dedicated follow-up quality pass rather than being mixed into the next expansion-volume phase.
-
----
-
-## Internal births: current interpretation
-
-Internal births should currently be understood as:
-
-- simple,
-- heuristic,
-- secondary relative to the external-start integration path,
-- and not yet the final word on birth/existence semantics.
-
-Constructor initiator presence selects the internal-start lane:
-
-- `initiator=None` creates no internal starts and leaves residual detections available through `get_unused_detections()`,
-- `initiator=<Initiator>` passes residual detections to that initiator.
-
-The tracker does not distinguish a one-shot `SimpleMeasurementInitiator`-style initializer from a more complex M/N or domain-aware initiator. Both are the same internal-start abstraction:
-
-```text
-residual detections -> configured initiator -> candidate start tracks
-```
-
-Returned tracks are scored from `TOMHTParams.initiator_start_initial_existence_probability` via log-odds. Valid `Track.metadata["existence_log_odds"]` on the initiated track overrides that default directly; otherwise a valid `Track.metadata["existence_probability"]` is converted to log-odds; missing or invalid optional metadata falls back to the parameter value. Probability metadata may also be used as a quality hint when internal-start capping/ordering is needed; exact internal-start ordering remains an implementation detail.
-
-For a one-detection measurement initiator, one principled way to choose the default prior is:
-
-```text
-logit(P_init) = log(P_D * beta_NT / lambda)
-```
-
-equivalently:
-
-```text
-P_init = sigmoid(log(P_D) + log(beta_NT) - log(lambda))
-```
-
-where `beta_NT` is new-target/birth density in the same measurement-space units as clutter density `lambda`, and `P_D` is detection probability. This remains guidance for choosing `initiator_start_initial_existence_probability`, not a tracker-core `birth_density` parameter.
-
-### What is solid in the current birth path
-
-The current residual policy uses detections unused by the **union of all active leaves** after local expansion. This is conservative, but it preserves a strong no-conflict invariant for internal births and for residual-based external starts.
-
-Birth capping is deterministic and quality-ranked rather than arbitrary.
-The tracker does not interpret specific state-vector components as positions or
-velocities in this path; any layout-specific validity policy belongs in the
-configured initiator.
-
-### What looks weak or provisional
-
-A few observations now look important:
-
-- once a birth candidate survives capping, it is inserted directly as a persistent `TrackTree`,
-- after insertion there is no old-style “track absent” alternative,
-- false starts therefore appear easier to preserve, not just easier to create,
-- score-based whole-track deletion is now the intended primary cleanup path for low-score spurious starts,
-- miss-count deletion remains a slower lifecycle backstop,
-- and the default `track_miss_termination_mode="map_leaf"` is conservative in ambiguous periods.
-
-Taken together, the current false-start behavior is most plausibly explained by the combination of:
-
-- direct birth insertion,
-- effectively mandatory post-birth existence,
-- and score/miss lifecycle tuning.
-
-Scoring and score-threshold calibration are now central to false-start cleanup rather than only secondary review items.
-
-### Operational note
-
-For the external-start-only ISAC integration path, this is not necessarily an immediate blocker. But for the general internal-birth tracker path, birth/existence semantics remain a fairly high-priority quality topic.
-
-A practical short-term lever is **initiator conservatism**: a stricter initiator can reduce candidate births without changing tracker semantics and can help separate “too many births created” from “births survive too long.”
-
-### Carry-over observations from the pre-transition implementation
-
-A few pre-transition birth-handling ideas still look relevant enough to retain as notes:
-
-- the current residual policy is more conservative than the older top-k/global-supported notion,
-- current birth insertion is more direct and less uncertain than the older birth-alternative flow,
-- birth candidate observability/debugging could use richer pre/post-cap reporting,
-- and birth impact statistics likely need TO-MHT-native definitions if revisited later.
-
-These observations should be treated as design notes, not as decisions already made.
+Smoke and replay regression harnesses are now in place for both output and timing comparisons. Baselines have been updated for the scoring/lifecycle/publication and birth-cleanup changes.
 
 ---
 
 ## What is solid now
 
-The following now look solid enough to treat as the current base architecture:
+The following are solid enough to treat as the current base architecture:
 
-- explicit `TrackTree` + `TrackHypothesisNode` persistent state,
+- explicit `TrackTree` + `TrackHypothesisNode` persistence,
 - scan-to-scan persistence through trees rather than globals,
-- full-history `(scan_index, det_index)` detection-key semantics,
+- full-history detection-key exclusivity semantics,
 - per-scan rebuilt cluster globals,
-- post-solve supported-leaf pruning,
-- MAP-only N-scan pruning directly on trees,
-- committed-prefix output reconstruction across pruning,
-- whole-track post-N-scan miss lifecycle,
-- predictor/updater public integration boundary,
-- exact-one-of `predictor` or `hypothesiser` constructor semantics,
-- explicit distance-hypothesiser seam for local association,
-- explicit NLL-to-LLR scoring baseline,
-- deterministic birth capping,
-- explicit solver seam with solver-facing exact cluster problem contract,
-- branch-and-bound as the default exact backend,
-- exhaustive retained as exact reference/fallback,
-- OR-Tools retained as experimental exact backend,
-- replay integration with end-to-end recorded replay completion,
-- smoke/replay golden-regression harnesses for output/timing comparison,
-- and per-scan timing-phase instrumentation.
+- exact cluster-solver seam,
+- branch-and-bound as default exact backend,
+- exhaustive retained as reference/fallback,
+- OR-Tools retained as experimental,
+- distance-hypothesiser seam,
+- NLL/DPM scoring baseline,
+- external/internal start lanes with existence priors,
+- metadata log-odds/probability input support for starts,
+- sticky confirmation,
+- score-based deletion,
+- sticky output publication,
+- public vs internal ID split,
+- committed-prefix output reconstruction,
+- module-extracted tracker orchestration,
+- API guide for integration assumptions,
+- replay/smoke regression harnesses.
 
 ---
 
 ## What remains provisional / future-work territory
 
-The following are still provisional or explicitly not the final word:
-
 ### 1. Local expansion volume
-This now looks like the most immediate runtime bottleneck on the primary replay used during this phase. The next likely win is not more math-kernel cleanup alone, but reducing how many leaves need full expansion.
 
-### 2. Approximation semantics
-Overload splitting and historical-conflict relaxation are useful and explicit, but still not conceptually final.
+This is the main near-term runtime target. The likely win is reducing how many active leaves require full expansion, not only optimizing the cost of one `hypothesise()` call.
 
-### 3. Scoring design
-The current NLL-based scoring split is much clearer than the old beta/PDA path, but still pragmatic rather than fully settled.
+### 2. Frontier and score-based pruning
 
-### 4. Parallelization / orchestration
-Parallel local expansion is a plausible future axis, but should likely be opt-in and architecturally separated from the current tracker-owned sequential default. This is a later concern.
+Now that scores are coherent, broader score/frontier pruning can be reconsidered. It should be approached carefully to avoid deleting useful hypotheses prematurely.
 
-### 5. Internal birth / existence semantics
-Internal births remain simple, heuristic, and secondary. Their current semantics appear more permissive with respect to false-start persistence than the pre-transition behavior.
+### 3. Internal birth ranking and capping
 
-### 6. Tracking quality / false-start tuning
-Replay output is now usable enough that false starts and target-swapping issues can be revisited meaningfully, but they are not the single main blocker at the current checkpoint.
+Internal birth candidate selection is now state-layout agnostic, but its ranking/capping remains heuristic. Covariance trace is only a weak fallback quality proxy. If caps fire often, initiator-side filtering or candidate confidence metadata is likely more important than improving the fallback metric.
 
-### 7. Internal organization around cluster build/rebuild and expansion paths
-The exact cluster-solver seam is now cleaner, and the local-association seam is much clearer than before, but some tracker internals still carry a lot of closely related logic. Further organization work is likely warranted, but should preferably happen as a sub-goal of deeper work rather than as a standalone cleanup-only phase.
+### 4. Approximation semantics
+
+Overload splitting and historical-conflict relaxation are explicit but not conceptually final. Their interaction with future pruning/volume controls should be reviewed.
+
+### 5. Tracking quality / false-start / target-jump review
+
+The tracker is now stable enough to support a more meaningful output-quality review, but the next runtime bottleneck still points first toward expansion volume.
+
+### 6. Parallelization / orchestration
+
+Parallel local expansion remains a plausible future axis, but should be opt-in and architecturally explicit. It should not be mixed into the next expansion-volume phase by default.
+
+### 7. API feedback
+
+`TO_MHT_API.md` is good enough to share for review. Integration feedback may drive small API or documentation adjustments.
 
 ---
 
-## Recommended interpretation of the current checkpoint
+## Recommended interpretation of the checkpoint
 
 This checkpoint should be understood as:
 
-- a **real track-oriented TO-MHT implementation**
-- with a coherent persistent-tree / rebuilt-global architecture
-- that survives the target recorded replay end-to-end
-- and is suitable for continued replay-based evaluation, integration work, and next-phase planning
+- a real track-oriented TO-MHT implementation,
+- with coherent scoring/start/lifecycle/publication semantics,
+- with a clean enough API story for integration discussion,
+- with a thin tracker orchestrator and extracted phase modules,
+- and with remaining replay runtime pressure concentrated mainly in local expansion volume.
 
-It should also be understood as:
-
-- now on a better exact-solver footing than the earlier exhaustive baseline,
-- with branch-and-bound validated enough to become the default exact backend,
-- with OR-Tools retained as an experimental comparison path,
-- with a much clearer local-association and scoring baseline than before,
-- and with the main replay bottleneck now centered on **local expansion volume** rather than exact cluster solving.
-
-This is a good place to refresh the docs, consolidate what was learned in this phase, and then deliberately choose the next deeper branch of work.
+The scoring/birth/confirmation/publication phase can be treated as complete. The next technical phase should return to local expansion volume and frontier-control work from this stronger baseline.
