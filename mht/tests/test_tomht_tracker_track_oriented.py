@@ -21,7 +21,11 @@ from stonesoup.types.state import GaussianState
 from stonesoup.types.track import Track
 from stonesoup.types.update import Update
 
-from mht.tomht_model import GlobalHypothesis, TrackHypothesisNode
+from mht.tomht_model import (
+    ClusterRebuildSnapshot,
+    GlobalHypothesis,
+    TrackHypothesisNode,
+)
 from mht.tomht_scoring import (
     ConstantDetectionProbabilityModel,
     DetectionProbabilityModel,
@@ -390,6 +394,60 @@ def _replace_active_leaves_with_scores(
         leaves.append(leaf)
     tree.active_leaf_node_ids = {leaf.node_id for leaf in leaves}
     return leaves
+
+
+def _single_track_rebuild_snapshot(
+    *,
+    track_id: int,
+    supported_leaves: list[TrackHypothesisNode],
+    overload_split_origin_cluster_id: int | None,
+) -> ClusterRebuildSnapshot:
+    rebuilt_globals = tuple(
+        GlobalHypothesis(
+            leaf_nodes_by_track_id={track_id: leaf},
+            log_weight=float(leaf.accumulated_log_score),
+        )
+        for leaf in supported_leaves
+    )
+    map_global = rebuilt_globals[0] if rebuilt_globals else None
+    return ClusterRebuildSnapshot(
+        cluster_id=101,
+        track_ids=(track_id,),
+        current_scan_conflict_det_keys=frozenset(),
+        conflict_links=(),
+        rebuilt_globals=rebuilt_globals,
+        map_global=map_global,
+        feasible_combinations=len(rebuilt_globals),
+        evaluated_combinations=len(rebuilt_globals),
+        overload_split_origin_cluster_id=overload_split_origin_cluster_id,
+    )
+
+
+def _tracker_with_manual_frontier(
+    *,
+    pruning_policy: str = "skip",
+) -> tuple[TOMHTTracker, list[TrackHypothesisNode]]:
+    timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+    tracker = _build_tracker(
+        hypothesiser=_ScriptedHypothesiser(),
+        updater=_ScriptedUpdater(),
+        params=TOMHTParams(
+            overload_split_supported_pruning_policy=pruning_policy,
+            debug_display_scan_stats=False,
+            debug_display_hypotheses=False,
+            debug_display_births=False,
+            collect_stats=False,
+        ),
+    )
+    tracker.update_tracker(timestamp, [])
+    tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+    leaves = _replace_active_leaves_with_scores(
+        tracker,
+        track_id=0,
+        scores=[10.0, 5.0, 1.0],
+        timestamp=timestamp,
+    )
+    return tracker, leaves
 
 
 class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
@@ -1719,6 +1777,101 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertEqual(0, frontier.overload_split_clusters_skipped_supported_pruning)
         self.assertEqual(0, frontier.overload_split_trees_skipped_supported_pruning)
         self.assertEqual(0, frontier.overload_split_leaves_skipped_supported_pruning)
+        self.assertEqual(0, frontier.overload_split_unsupported_leaf_count_pruned)
+
+    def test_overload_split_supported_pruning_default_skip_preserves_frontier(
+        self,
+    ) -> None:
+        tracker, leaves = _tracker_with_manual_frontier()
+        snapshot = _single_track_rebuild_snapshot(
+            track_id=0,
+            supported_leaves=[leaves[0]],
+            overload_split_origin_cluster_id=10,
+        )
+
+        stats = tracker._apply_post_solve_supported_leaf_pruning([snapshot])
+
+        active_leaf_ids = tracker.track_trees_by_track_id[0].active_leaf_node_ids
+        self.assertEqual({leaf.node_id for leaf in leaves}, active_leaf_ids)
+        self.assertEqual(0, stats.unsupported_leaf_count_pruned)
+        self.assertEqual(0, stats.overload_split_unsupported_leaf_count_pruned)
+        self.assertEqual(1, stats.overload_split_clusters_skipped_supported_pruning)
+        self.assertEqual(1, stats.overload_split_trees_skipped_supported_pruning)
+        self.assertEqual(3, stats.overload_split_leaves_skipped_supported_pruning)
+        for stat_field in fields(stats):
+            self.assertGreaterEqual(getattr(stats, stat_field.name), 0)
+
+    def test_overload_split_supported_pruning_apply_prunes_to_supported_leaves(
+        self,
+    ) -> None:
+        tracker, leaves = _tracker_with_manual_frontier(pruning_policy="apply")
+        snapshot = _single_track_rebuild_snapshot(
+            track_id=0,
+            supported_leaves=[leaves[0], leaves[2]],
+            overload_split_origin_cluster_id=10,
+        )
+
+        first_stats = tracker._apply_post_solve_supported_leaf_pruning([snapshot])
+        active_leaf_ids = tracker.track_trees_by_track_id[0].active_leaf_node_ids
+
+        self.assertEqual({leaves[0].node_id, leaves[2].node_id}, active_leaf_ids)
+        self.assertEqual(1, first_stats.unsupported_leaf_count_pruned)
+        self.assertEqual(1, first_stats.overload_split_unsupported_leaf_count_pruned)
+        self.assertEqual(
+            0, first_stats.overload_split_clusters_skipped_supported_pruning
+        )
+        self.assertEqual(0, first_stats.overload_split_trees_skipped_supported_pruning)
+        self.assertEqual(0, first_stats.overload_split_leaves_skipped_supported_pruning)
+        for stat_field in fields(first_stats):
+            self.assertGreaterEqual(getattr(first_stats, stat_field.name), 0)
+
+        tracker_again, leaves_again = _tracker_with_manual_frontier(
+            pruning_policy="apply"
+        )
+        snapshot_again = _single_track_rebuild_snapshot(
+            track_id=0,
+            supported_leaves=[leaves_again[0], leaves_again[2]],
+            overload_split_origin_cluster_id=10,
+        )
+        second_stats = tracker_again._apply_post_solve_supported_leaf_pruning(
+            [snapshot_again]
+        )
+        self.assertEqual(first_stats, second_stats)
+
+    def test_non_overload_supported_pruning_unaffected_by_policy(self) -> None:
+        tracker_skip, leaves_skip = _tracker_with_manual_frontier(pruning_policy="skip")
+        tracker_apply, leaves_apply = _tracker_with_manual_frontier(
+            pruning_policy="apply"
+        )
+        snapshot_skip = _single_track_rebuild_snapshot(
+            track_id=0,
+            supported_leaves=[leaves_skip[1]],
+            overload_split_origin_cluster_id=None,
+        )
+        snapshot_apply = _single_track_rebuild_snapshot(
+            track_id=0,
+            supported_leaves=[leaves_apply[1]],
+            overload_split_origin_cluster_id=None,
+        )
+
+        stats_skip = tracker_skip._apply_post_solve_supported_leaf_pruning(
+            [snapshot_skip]
+        )
+        stats_apply = tracker_apply._apply_post_solve_supported_leaf_pruning(
+            [snapshot_apply]
+        )
+
+        self.assertEqual(stats_skip, stats_apply)
+        self.assertEqual(
+            {leaves_skip[1].node_id},
+            tracker_skip.track_trees_by_track_id[0].active_leaf_node_ids,
+        )
+        self.assertEqual(
+            {leaves_apply[1].node_id},
+            tracker_apply.track_trees_by_track_id[0].active_leaf_node_ids,
+        )
+        self.assertEqual(2, stats_apply.unsupported_leaf_count_pruned)
+        self.assertEqual(0, stats_apply.overload_split_unsupported_leaf_count_pruned)
 
     def test_expansion_frontier_debug_flag_does_not_change_behavior(self) -> None:
         def run_case(
@@ -1798,6 +1951,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
             "expanded_confirmed=0 child_candidates=3 children_created=3 "
             "children_retained=3 miss_children=1 detection_children=2 "
             "topk_supported=3 map_selected=1 unsupported_pruned=0 "
+            "overload_unsupported_pruned=0 "
             "overload_prune_skipped_clusters=0 "
             "overload_prune_skipped_trees=0 overload_prune_skipped_leaves=0",
             debug_lines[-1],

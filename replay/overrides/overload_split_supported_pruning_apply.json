@@ -1,0 +1,5 @@
+{
+  "tomht_params": {
+    "overload_split_supported_pruning_policy": "apply"
+  }
+}

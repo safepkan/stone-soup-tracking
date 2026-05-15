@@ -60,6 +60,12 @@ class TOMHTParams:
     overload_split_enabled: bool = True
     overload_split_projected_combination_threshold: int | None = 500_000
     overload_split_max_edge_removals_per_cluster: int | None = None
+    # Experimental retained-global supported-leaf pruning policy for overload
+    # split subclusters. "skip" preserves the historical conservative behavior;
+    # "apply" prunes overload subcluster leaves like normal clusters, but is
+    # known to be unsafe on standard replay because split-local support can
+    # remove leaves needed for a later globally feasible recombination.
+    overload_split_supported_pruning_policy: str = "skip"
     # Narrow safety-net: if an exact cluster is infeasible, allow relaxation only
     # for forced historical keys that are already shared across tracks.
     historical_conflict_relaxation_enabled: bool = True
@@ -143,7 +149,21 @@ class TOMHTParams:
             self.initiator_start_initial_existence_probability,
             parameter_name="initiator_start_initial_existence_probability",
         )
+        self._validate_overload_split_supported_pruning_policy()
         self._validate_publication_params()
+
+    def _validate_overload_split_supported_pruning_policy(self) -> None:
+        """Validate overload-split supported-leaf pruning experiment policy."""
+        valid_policies = {"skip", "apply"}
+        if self.overload_split_supported_pruning_policy not in valid_policies:
+            valid_policies_str = ", ".join(
+                repr(policy) for policy in sorted(valid_policies)
+            )
+            raise ValueError(
+                "overload_split_supported_pruning_policy must be one of "
+                f"{valid_policies_str}; got "
+                f"{self.overload_split_supported_pruning_policy!r}."
+            )
 
     def _validate_publication_params(self) -> None:
         """Validate sticky output-publication gate controls."""

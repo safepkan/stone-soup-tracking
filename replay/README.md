@@ -58,6 +58,10 @@ Available backend override templates:
 - `replay/overrides/tracker_backend_exhaustive.json`
 - `replay/overrides/tracker_backend_ortools.json`
 
+Experimental policy override templates:
+
+- `replay/overrides/overload_split_supported_pruning_apply.json`
+
 Legacy `hypothesis_backend` override templates were removed as that parameter is
 no longer part of `TOMHTParams`.
 

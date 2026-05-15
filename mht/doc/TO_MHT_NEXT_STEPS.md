@@ -169,8 +169,16 @@ This should clarify whether the main issue is local branching, weak pruning, ove
 
 ### C. Overload-split pruning policy
 
-Instrumentation added (2026-05-15): the existing overload-split skip policy is
-still unchanged, but supported-leaf pruning now reports skipped overload
+Implemented (2026-05-15): added experimental
+`TOMHTParams.overload_split_supported_pruning_policy` with default `"skip"` and
+alternate `"apply"`. The default preserves the historical overload-split
+supported-pruning skip. `"apply"` uses the same retained-global supported-leaf
+pruning on overload-split subclusters and reports overload-specific unsupported
+leaf pruning in expansion/frontier stats. Replay/smoke baselines are not updated
+by this experiment.
+
+Instrumentation added (2026-05-15): the existing default overload-split skip
+policy is still unchanged, but supported-leaf pruning now reports skipped overload
 subclusters, trees, and active leaves.
 
 There is a known caveat in `apply_post_solve_supported_leaf_pruning`:

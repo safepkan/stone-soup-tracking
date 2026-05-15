@@ -236,6 +236,15 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     TOMHTParams(**overrides)
 
+    def test_overload_split_supported_pruning_policy_validate_domain(self) -> None:
+        self.assertEqual("skip", TOMHTParams().overload_split_supported_pruning_policy)
+        TOMHTParams(overload_split_supported_pruning_policy="apply")
+
+        with self.assertRaisesRegex(
+            ValueError, "overload_split_supported_pruning_policy"
+        ):
+            TOMHTParams(overload_split_supported_pruning_policy="invalid")
+
     def test_constructor_applies_params_overrides(self) -> None:
         tracker = _build_tracker_with_overrides(
             {

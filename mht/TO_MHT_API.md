@@ -992,7 +992,7 @@ to collect by default:
 - MAP-selected leaf count,
 - unique leaves supported by retained top-K rebuilt globals,
 - unsupported leaves removed by post-solve supported-leaf pruning,
-- overload-split supported-pruning skip counts.
+- overload-split supported-pruning skip counts and apply-policy prune counts.
 
 Default `SCAN ...` and `SUMMARY ...` lines are kept stable. To emit compact
 expansion/frontier diagnostics, set either:
@@ -1061,6 +1061,9 @@ These controls are implementation safety valves and are subject to revision:
 - `max_global_hypotheses`
 - `max_projected_cluster_combinations`
 - overload-splitting parameters
+- `overload_split_supported_pruning_policy`: experimental overload-split
+  supported-leaf pruning policy, default `"skip"`; set `"apply"` to prune
+  overload subclusters like normal clusters.
 - historical conflict relaxation
 - `ns_scan_window`
 

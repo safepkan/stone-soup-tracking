@@ -28,7 +28,7 @@ Scan stats now include expansion/frontier usefulness counters: active tree/leaf
 counts at the main scan-pipeline boundaries, expanded leaves and local child
 volume, retained top-K supported leaves, MAP-selected leaves, supported-leaf
 pruning removals, lifecycle-state expansion split, and overload-split
-supported-pruning skip impact. These counters are collected by default in
+supported-pruning skip/apply impact. These counters are collected by default in
 `ScanStats`; compact per-scan and summary lines are opt-in via
 `TOMHTParams.debug_display_expansion_frontier` or
 `TOMHT_DEBUG_EXPANSION_FRONTIER=1`.
@@ -456,10 +456,13 @@ For each cluster, TOMHT builds leaf options and solves the exact cluster K-best 
 
 For each non-overload-split cluster, active leaves are pruned to those appearing in at least one retained rebuilt top-K global for that cluster.
 
-Overload-decomposed clusters skip this supported-leaf pruning to avoid
-over-pruning under approximation. The skip policy is unchanged, but scan stats
-now count skipped overload subclusters, affected trees, and affected leaves so
-the impact can be measured during expansion-volume work.
+Overload-decomposed clusters default to skipping this supported-leaf pruning to
+avoid over-pruning under approximation. The experimental
+`TOMHTParams.overload_split_supported_pruning_policy` parameter preserves that
+behavior with `"skip"` (default) or applies the same retained-global pruning to
+overload subclusters with `"apply"`. Scan stats count skipped overload
+subclusters, affected trees/leaves, and overload-specific unsupported leaves
+removed by the `"apply"` policy.
 
 ### MAP-only N-scan pruning
 
