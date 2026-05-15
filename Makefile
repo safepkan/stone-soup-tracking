@@ -23,6 +23,14 @@ smoke:
 smoke_compare:
 	$(PYTHON) replay/smoke_output_regression.py compare
 
+.PHONY: smoke_run
+smoke_run:
+	$(PYTHON) replay/smoke_output_regression.py run
+
+.PHONY: smoke_expansion_frontier
+smoke_expansion_frontier:
+	$(PYTHON) replay/smoke_output_regression.py run --expansion-frontier
+
 .PHONY: smoke_compare_timing
 smoke_compare_timing:
 	$(PYTHON) replay/smoke_output_regression.py compare --timing-report
@@ -42,6 +50,14 @@ smoke_update_baseline:
 .PHONY: replay_compare
 replay_compare:
 	$(PYTHON) replay/standard_replay_regression.py compare
+
+.PHONY: replay_run
+replay_run:
+	$(PYTHON) replay/standard_replay_regression.py run
+
+.PHONY: replay_expansion_frontier
+replay_expansion_frontier:
+	$(PYTHON) replay/standard_replay_regression.py run --expansion-frontier
 
 .PHONY: replay_compare_timing
 replay_compare_timing:

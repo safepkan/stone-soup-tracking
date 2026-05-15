@@ -70,9 +70,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "mode",
         nargs="?",
-        choices=("compare", "update"),
+        choices=("compare", "run", "update"),
         default="compare",
-        help="`compare` (default) or `update` baseline artifacts.",
+        help=(
+            "`compare` (default): fail on baseline mismatch, "
+            "`run`: write latest artifacts and skip comparison, "
+            "`update`: rewrite baselines."
+        ),
     )
     parser.add_argument(
         "--replay-repo",
@@ -133,6 +137,15 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "Print raw-log timing summary comparison against baseline "
             "(compare mode only)."
+        ),
+    )
+    parser.add_argument(
+        "--expansion-frontier",
+        action="store_true",
+        help=(
+            "Enable opt-in expansion/frontier diagnostics for the replay run. "
+            "Usually combined with `run` mode so diagnostic output does not "
+            "fail baseline comparison."
         ),
     )
     return parser.parse_args()
@@ -207,6 +220,7 @@ def _run_standard_replay(
     tracker_override: Path | None,
     keep_output_artifacts: bool,
     output_root: Path | None,
+    expansion_frontier: bool,
 ) -> tuple[str, list[str], Path, Path]:
     if keep_output_artifacts:
         replay_output_root = (
@@ -244,7 +258,10 @@ def _run_standard_replay(
             ]
         )
 
-    env = ensure_mpl_cache_env(os.environ.copy())
+    env = os.environ.copy()
+    if expansion_frontier:
+        env["TOMHT_DEBUG_EXPANSION_FRONTIER"] = "1"
+    env = ensure_mpl_cache_env(env)
     completed = subprocess.run(
         cmd,
         cwd=replay_repo,
@@ -403,6 +420,7 @@ def main() -> int:
             tracker_override=tracker_override,
             keep_output_artifacts=bool(args.keep_output_artifacts),
             output_root=args.output_root,
+            expansion_frontier=bool(args.expansion_frontier),
         )
     )
     latest_timing_summary_lines, latest_mcap_size_bytes = _save_latest(
@@ -427,7 +445,10 @@ def main() -> int:
         f"({latest_mcap_size_bytes} bytes)"
     )
 
-    if args.mode == "update":
+    if args.mode == "run":
+        print("[done] latest outputs written (comparison skipped)")
+        status = 0
+    elif args.mode == "update":
         _update_baseline(
             raw_output,
             normalized_lines,

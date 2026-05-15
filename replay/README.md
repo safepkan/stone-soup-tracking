@@ -78,6 +78,22 @@ inspection under:
 - `replay/outputs/standard_replay_regression_latest/latest.timing_summary.log`
 - `replay/outputs/standard_replay_regression_latest/latest.replayed.mcap`
 
+To run the same replay and write latest artifacts without comparing against the
+baseline, use `run` mode:
+
+```bash
+source venv/bin/activate
+python replay/standard_replay_regression.py run
+```
+
+This is useful when current code is expected to change core outputs, or when
+capturing opt-in diagnostics. For expansion/frontier diagnostics:
+
+```bash
+source venv/bin/activate
+python replay/standard_replay_regression.py run --expansion-frontier
+```
+
 Versioned golden baseline artifacts are stored in:
 
 - `replay/replay_baselines/standard_replay_default.raw.log`
@@ -146,6 +162,21 @@ Only normalized output is used for pass/fail comparison.
 
 The harness pins scenario start times so `SCAN t=...` timestamps remain stable
 and diffable.
+
+To run smoke scenarios and write latest artifacts without comparing against the
+baseline, use `run` mode:
+
+```bash
+source venv/bin/activate
+python replay/smoke_output_regression.py run
+```
+
+For expansion/frontier diagnostics:
+
+```bash
+source venv/bin/activate
+python replay/smoke_output_regression.py run --expansion-frontier
+```
 
 For performance-oriented checks, include timing-summary comparison from the raw
 logs:

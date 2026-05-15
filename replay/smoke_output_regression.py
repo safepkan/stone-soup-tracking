@@ -99,10 +99,16 @@ def _normalize_output(raw_output: str) -> list[str]:
     return normalized_lines
 
 
-def _run_one_scenario(spec: ScenarioSpec) -> ScenarioOutput:
+def _run_one_scenario(
+    spec: ScenarioSpec,
+    *,
+    expansion_frontier: bool,
+) -> ScenarioOutput:
     env = os.environ.copy()
     env["MPLBACKEND"] = "Agg"
     env["TOMHT_NO_SHOW"] = "1"
+    if expansion_frontier:
+        env["TOMHT_DEBUG_EXPANSION_FRONTIER"] = "1"
     env = ensure_mpl_cache_env(env)
     cmd = [
         sys.executable,
@@ -137,14 +143,21 @@ def _run_one_scenario(spec: ScenarioSpec) -> ScenarioOutput:
     )
 
 
-def _run_selected_scenarios(selected_names: set[str]) -> dict[str, ScenarioOutput]:
+def _run_selected_scenarios(
+    selected_names: set[str],
+    *,
+    expansion_frontier: bool,
+) -> dict[str, ScenarioOutput]:
     selected_specs = [
         scenario for scenario in SCENARIOS if scenario.name in selected_names
     ]
     outputs: dict[str, ScenarioOutput] = {}
     for spec in selected_specs:
         print(f"[run] {spec.name}")
-        outputs[spec.name] = _run_one_scenario(spec)
+        outputs[spec.name] = _run_one_scenario(
+            spec,
+            expansion_frontier=expansion_frontier,
+        )
     return outputs
 
 
@@ -270,9 +283,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "mode",
         nargs="?",
-        choices=("compare", "update"),
+        choices=("compare", "run", "update"),
         default="compare",
-        help="`compare` (default): fail on baseline mismatch, `update`: rewrite baselines.",
+        help=(
+            "`compare` (default): fail on baseline mismatch, "
+            "`run`: write latest artifacts and skip comparison, "
+            "`update`: rewrite baselines."
+        ),
     )
     parser.add_argument(
         "--scenario",
@@ -295,6 +312,15 @@ def _parse_args() -> argparse.Namespace:
             "(compare mode only)."
         ),
     )
+    parser.add_argument(
+        "--expansion-frontier",
+        action="store_true",
+        help=(
+            "Enable opt-in expansion/frontier diagnostics for the scenario run. "
+            "Usually combined with `run` mode so diagnostic output does not "
+            "fail baseline comparison."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -305,8 +331,14 @@ def main() -> int:
         if args.scenario is None
         else set(args.scenario)
     )
-    outputs_by_name = _run_selected_scenarios(selected_names)
+    outputs_by_name = _run_selected_scenarios(
+        selected_names,
+        expansion_frontier=bool(args.expansion_frontier),
+    )
     _write_latest_outputs(outputs_by_name)
+    if args.mode == "run":
+        print("[done] latest outputs written (comparison skipped)")
+        return 0
     if args.mode == "update":
         _write_baselines(outputs_by_name)
         print("[done] baselines updated")

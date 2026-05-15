@@ -39,11 +39,24 @@
   - If it reports differences, treat that as a review point: assess whether the
     delta is expected from the change.
   - Do **not** update smoke baselines unless explicitly requested by the user.
+- Capture-only smoke runs are available when differences are expected or when
+  optional diagnostics are enabled:
+  - `make smoke_run`
+  - `make smoke_expansion_frontier`
+  These write latest artifacts under `replay/outputs/smoke_regression_latest/`
+  and skip baseline comparison.
 - Optional heavyweight replay regression (not part of routine validation):
   `make replay_compare`.
   - Use when replay-level behavior checks are useful.
   - Treat differences as a review point against expected change impact.
   - Do **not** update replay baselines unless explicitly requested by the user.
+- Capture-only replay runs are available for expected output changes or optional
+  diagnostics:
+  - `make replay_run`
+  - `make replay_expansion_frontier`
+  These write latest artifacts under
+  `replay/outputs/standard_replay_regression_latest/` and skip baseline
+  comparison.
 - For performance-focused investigations, optional timing-summary comparisons are
   available from raw baseline vs latest raw run output:
   - `make smoke_compare_timing`
