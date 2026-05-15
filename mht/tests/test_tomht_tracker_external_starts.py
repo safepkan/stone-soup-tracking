@@ -98,6 +98,26 @@ def _single_map_leaf(tracker: TOMHTTracker) -> TrackHypothesisNode:
     return next(iter(map_snapshot.leaf_nodes_by_track_id.values()))
 
 
+def _external_start_leaf_for_metadata(
+    metadata: dict[str, object],
+    *,
+    default_probability: float = 0.8,
+) -> TrackHypothesisNode:
+    tracker = _build_tracker(
+        params=_quiet_params(
+            external_start_initial_existence_probability=default_probability,
+        )
+    )
+    timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+    tracker.update_tracker(timestamp, [])
+    start = _external_start(timestamp)
+    start.metadata.update(metadata)
+
+    tracker.add_external_starts(timestamp, [start])
+
+    return _single_map_leaf(tracker)
+
+
 class TOMHTTrackerExternalStartsTest(unittest.TestCase):
     def test_add_external_starts_rejects_call_before_update_tracker(self) -> None:
         tracker = _build_tracker()
@@ -262,6 +282,79 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         expected_log_delta = _logit(0.6)
         self.assertAlmostEqual(expected_log_delta, leaf.log_delta)
         self.assertAlmostEqual(expected_log_delta, leaf.accumulated_log_score)
+
+    def test_add_external_starts_uses_metadata_existence_log_odds_directly(
+        self,
+    ) -> None:
+        for value in (-2.5, 1000.0):
+            with self.subTest(value=value):
+                leaf = _external_start_leaf_for_metadata(
+                    {"existence_log_odds": value},
+                )
+
+                self.assertAlmostEqual(value, leaf.log_delta)
+                self.assertAlmostEqual(value, leaf.accumulated_log_score)
+
+    def test_add_external_starts_log_odds_metadata_precedes_probability(
+        self,
+    ) -> None:
+        leaf = _external_start_leaf_for_metadata(
+            {
+                "existence_log_odds": 1.25,
+                "existence_probability": 0.6,
+            },
+        )
+
+        self.assertAlmostEqual(1.25, leaf.log_delta)
+        self.assertAlmostEqual(1.25, leaf.accumulated_log_score)
+
+    def test_add_external_starts_invalid_log_odds_metadata_falls_back_to_probability(
+        self,
+    ) -> None:
+        invalid_values: list[Any] = [
+            "not-a-number",
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+            None,
+        ]
+        for value in invalid_values:
+            with self.subTest(value=value):
+                leaf = _external_start_leaf_for_metadata(
+                    {
+                        "existence_log_odds": value,
+                        "existence_probability": 0.6,
+                    },
+                )
+
+                expected_log_delta = _logit(0.6)
+                self.assertAlmostEqual(expected_log_delta, leaf.log_delta)
+                self.assertAlmostEqual(expected_log_delta, leaf.accumulated_log_score)
+
+    def test_add_external_starts_invalid_existence_metadata_falls_back(
+        self,
+    ) -> None:
+        invalid_metadata: list[dict[str, object]] = [
+            {
+                "existence_log_odds": "not-a-number",
+                "existence_probability": "also-not-a-number",
+            },
+            {
+                "existence_log_odds": float("nan"),
+                "existence_probability": 0.0,
+            },
+            {
+                "existence_log_odds": float("inf"),
+                "existence_probability": 1.0,
+            },
+        ]
+        for metadata in invalid_metadata:
+            with self.subTest(metadata=metadata):
+                leaf = _external_start_leaf_for_metadata(metadata)
+
+                expected_log_delta = _logit(0.8)
+                self.assertAlmostEqual(expected_log_delta, leaf.log_delta)
+                self.assertAlmostEqual(expected_log_delta, leaf.accumulated_log_score)
 
     def test_add_external_starts_invalid_metadata_existence_probability_falls_back(
         self,

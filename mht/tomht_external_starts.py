@@ -8,7 +8,7 @@ import datetime
 from stonesoup.types.track import Track
 
 from .tomht_model import GlobalHypothesis, TrackHypothesisNode
-from .tomht_scoring import _existence_probability_to_log_odds
+from .tomht_scoring import existence_metadata_to_log_odds
 from .tomht_tree_store import TrackTreeStore
 
 
@@ -49,16 +49,11 @@ def external_start_initial_log_delta(
     default_log_delta: float,
 ) -> float:
     """Return the initial log-odds score for one externally confirmed start."""
-    metadata_existence_probability = start.metadata.get("existence_probability")
-    if metadata_existence_probability is None:
-        return default_log_delta
-    try:
-        return _existence_probability_to_log_odds(
-            metadata_existence_probability,
-            parameter_name="external start metadata['existence_probability']",
-        )
-    except ValueError:
-        return default_log_delta
+    return existence_metadata_to_log_odds(
+        start.metadata,
+        default_log_odds=default_log_delta,
+        source_name="external start",
+    )
 
 
 def make_external_start_root(

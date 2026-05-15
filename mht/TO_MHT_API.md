@@ -548,18 +548,29 @@ converted internally to log-odds.
 If the returned Stone Soup track has valid metadata:
 
 ```python
+track.metadata["existence_log_odds"]
 track.metadata["existence_probability"]
 ```
 
-that value overrides the configured default for that start.
+that value overrides the configured default for that start. The precedence is:
 
-Invalid metadata falls back to the configured default.
+```text
+valid metadata["existence_log_odds"]
+    > valid metadata["existence_probability"]
+    > configured default probability converted to log-odds
+```
+
+Invalid metadata at one level falls through to the next level. Log-odds metadata
+is accepted as any finite float and is not clamped. Probability metadata must
+satisfy `0.0 < p < 1.0`.
 
 `metadata["existence_probability"]` is the preferred way for an initiator to
-communicate candidate confidence. TOMHT uses valid values for initial root
-scoring and may also use them as a candidate-quality hint when internal-start
-capping/ordering is needed. Exact internal-start ordering remains an
-implementation detail.
+communicate manually calibrated candidate confidence. `metadata["existence_log_odds"]`
+is preferred for upstream systems that already compute additive LLR/evidence,
+because TOMHT can use it directly without converting through probability.
+TOMHT may also use valid probability metadata as a candidate-quality hint when
+internal-start capping/ordering is needed. Exact internal-start ordering remains
+an implementation detail.
 
 ### Residual detections and `get_unused_detections()`
 
@@ -639,7 +650,18 @@ params.external_start_initial_existence_probability
 ```
 
 converted to log-odds, unless valid per-track metadata
-`"existence_probability"` overrides it.
+`"existence_log_odds"` or `"existence_probability"` overrides it. The same
+precedence is used as for initiator-created starts:
+
+```text
+valid metadata["existence_log_odds"]
+    > valid metadata["existence_probability"]
+    > configured default probability converted to log-odds
+```
+
+Use probabilities for convenient human-facing defaults. Use log-odds when an
+external start generator already computes additive LLR/evidence; TOMHT accepts
+any finite log-odds value directly and does not clamp it.
 
 External starts may also provide `"age"` and `"hits"` metadata.
 
@@ -892,10 +914,12 @@ prior than a domain-specific M/N or externally validated start generator.
 If the initiator can estimate confidence per start, set:
 
 ```python
+track.metadata["existence_log_odds"] = llr
 track.metadata["existence_probability"] = p
 ```
 
-on returned tracks.
+on returned tracks. Valid log-odds take precedence; probability remains a
+convenient fallback for human-calibrated priors.
 
 ---
 
@@ -936,6 +960,16 @@ Non-score safety valves include:
 - and N-scan window.
 
 These are tractability controls, not replacements for a coherent scoring model.
+
+Calibration scale example:
+
+```text
+With P_D = 0.9, a miss contributes log(1 - 0.9) ≈ -2.3.
+Confirmation at P = 0.9 is logit(0.9) ≈ +2.2.
+Deletion at P = 0.01 is logit(0.01) ≈ -4.6.
+A track at the confirmation threshold therefore needs to lose about 6.8
+log-odds, or roughly three consecutive high-P_D misses, to reach deletion.
+```
 
 ---
 

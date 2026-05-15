@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import isfinite, log, log1p
-from typing import Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 
 from stonesoup.types.detection import Detection, MissedDetection
 from stonesoup.types.hypothesis import SingleDistanceHypothesis
@@ -33,6 +33,35 @@ def _existence_probability_to_log_odds(
     if not isfinite(p) or not 0.0 < p < 1.0:
         raise ValueError(invalid_message)
     return log(p) - log1p(-p)
+
+
+def existence_metadata_to_log_odds(
+    metadata: Mapping[str, object],
+    *,
+    default_log_odds: float,
+    source_name: str,
+) -> float:
+    """Resolve optional start-confidence metadata to an initial log-odds score."""
+    metadata_log_odds: Any = metadata.get("existence_log_odds")
+    if metadata_log_odds is not None:
+        try:
+            log_odds = float(metadata_log_odds)
+        except (TypeError, ValueError, OverflowError):
+            pass
+        else:
+            if isfinite(log_odds):
+                return log_odds
+
+    metadata_probability: Any = metadata.get("existence_probability")
+    if metadata_probability is None:
+        return default_log_odds
+    try:
+        return _existence_probability_to_log_odds(
+            metadata_probability,
+            parameter_name=f"{source_name} metadata['existence_probability']",
+        )
+    except ValueError:
+        return default_log_odds
 
 
 class ScoringModel(Protocol):

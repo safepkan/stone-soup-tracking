@@ -20,7 +20,7 @@ The tracker is now in a better shape for this work because several pieces have a
 - persistent tree/node bookkeeping now lives in `TrackTreeStore`,
 - local expansion, internal-birth handling, clustering, overload splitting, cluster rebuild, post-solve pruning, MAP-only N-scan pruning, scan instrumentation assembly, and TOMHT utilities are no longer monolithic tracker methods,
 - external starts now use an existence-prior probability mapped internally to log-odds,
-- external starts can optionally override that prior per track via `Track.metadata["existence_probability"]`,
+- external starts can optionally override that prior per track via valid `Track.metadata["existence_log_odds"]` or `Track.metadata["existence_probability"]`, with log-odds taking precedence,
 - output tracks now expose score-implied existence metadata,
 - legacy unused-detection scoring has been removed,
 - cluster solving now uses accumulated leaf scores directly rather than affine unused-detection pre-baking,
@@ -87,7 +87,7 @@ The tracker should keep two start lanes explicit.
 
 External starts are already on the cleaner path.
 
-They represent caller-supplied starts that should be treated as externally confirmed or externally meaningful. They are initialized from an existence probability mapped to log-odds. The global default can be overridden by `Track.metadata["existence_probability"]`.
+They represent caller-supplied starts that should be treated as externally confirmed or externally meaningful. They are initialized from an existence probability mapped to log-odds. The global default can be overridden by valid `Track.metadata["existence_log_odds"]` or `Track.metadata["existence_probability"]`, with log-odds taking precedence.
 
 This lane should remain the preferred integration path for systems that already have their own domain-specific initiation or confirmation process.
 
@@ -132,7 +132,7 @@ This keeps the public control surface smaller while preserving the same active i
 
 ### Step 2: Replace fixed initiator birth penalty
 
-Implemented (2026-05-13): initiator-created starts now use `TOMHTParams.initiator_start_initial_existence_probability` (default `0.8`) mapped to log-odds for the root `log_delta`. Valid initiated-track `metadata["existence_probability"]` overrides the default; missing or invalid metadata falls back to the parameter value.
+Implemented (2026-05-13): initiator-created starts now use `TOMHTParams.initiator_start_initial_existence_probability` (default `0.8`) mapped to log-odds for the root `log_delta`. Valid initiated-track `metadata["existence_log_odds"]` is used directly and takes precedence over valid `metadata["existence_probability"]`; missing or invalid metadata falls back to the parameter value.
 
 The current fixed birth penalty is not a good scoring story for initiator output.
 

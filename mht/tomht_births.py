@@ -17,7 +17,10 @@ from stonesoup.types.update import Update
 
 from .tomht_model import DetectionKey, TrackHypothesisNode
 from .tomht_params import TOMHTParams
-from .tomht_scoring import _existence_probability_to_log_odds
+from .tomht_scoring import (
+    _existence_probability_to_log_odds,
+    existence_metadata_to_log_odds,
+)
 from .tomht_stats import BirthStats
 from .tomht_tree_store import TrackTreeStore
 from .tomht_types import ScanContext
@@ -223,16 +226,11 @@ def initiator_start_initial_log_delta(
         params.initiator_start_initial_existence_probability,
         parameter_name="initiator_start_initial_existence_probability",
     )
-    metadata_existence_probability = birth_track.metadata.get("existence_probability")
-    if metadata_existence_probability is None:
-        return default_log_delta
-    try:
-        return _existence_probability_to_log_odds(
-            metadata_existence_probability,
-            parameter_name="initiator start metadata['existence_probability']",
-        )
-    except ValueError:
-        return default_log_delta
+    return existence_metadata_to_log_odds(
+        birth_track.metadata,
+        default_log_odds=default_log_delta,
+        source_name="initiator start",
+    )
 
 
 def run_internal_births_from_residuals(
