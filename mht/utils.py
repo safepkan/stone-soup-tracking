@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import resource
 import sys
+import time as wall_clock
 
 
 def env_flag(name: str, *, default: bool) -> bool:
@@ -29,6 +30,18 @@ def env_float(name: str, *, default: float) -> float:
 
 def ns_to_ms(ns: int) -> float:
     return float(ns) / 1_000_000.0
+
+
+def start_timer() -> int:
+    return wall_clock.perf_counter_ns()
+
+
+def elapsed_ns(start_ns: int) -> int:
+    return wall_clock.perf_counter_ns() - int(start_ns)
+
+
+def elapsed_ms(start_ns: int) -> float:
+    return ns_to_ms(elapsed_ns(start_ns))
 
 
 def get_process_maxrss_mb() -> float:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import time as wall_clock
 from typing import Mapping
 
 import numpy as np
@@ -20,6 +19,7 @@ from .tomht_params import TOMHTParams
 from .tomht_scoring import ScoringModel
 from .tomht_tree_store import TrackTreeStore
 from .tomht_types import ScanContext
+from .utils import elapsed_ns, start_timer
 
 
 @dataclass(frozen=True)
@@ -87,12 +87,10 @@ def candidate_from_distance_hypothesis(
                 "input detection objects for this scan."
             )
         det_index = int(det_index_raw)
-        update_start_ns = wall_clock.perf_counter_ns()
+        update_start_ns = start_timer()
         state = updater.update(hypothesis)
         expansion_call_stats.update_calls += 1
-        expansion_call_stats.update_wall_ns += (
-            wall_clock.perf_counter_ns() - update_start_ns
-        )
+        expansion_call_stats.update_wall_ns += elapsed_ns(update_start_ns)
         used_det_key = (ctx.scan_index, det_index)
         assoc_label = det_index
         state_kind = "update"
@@ -140,12 +138,10 @@ def candidates_for_track_leaf(
 ) -> list[LocalChildCandidate]:
     """Build retained local continuation candidates for one active leaf."""
     track = reconstruct_track_from_leaf_node(leaf_node)
-    hypothesise_start_ns = wall_clock.perf_counter_ns()
+    hypothesise_start_ns = start_timer()
     raw_hypotheses = hypothesiser.hypothesise(track, ctx.detections, ctx.timestamp)
     expansion_call_stats.hypothesise_calls += 1
-    expansion_call_stats.hypothesise_wall_ns += (
-        wall_clock.perf_counter_ns() - hypothesise_start_ns
-    )
+    expansion_call_stats.hypothesise_wall_ns += elapsed_ns(hypothesise_start_ns)
     if not isinstance(raw_hypotheses, MultipleHypothesis):
         raise TypeError(
             "Distance hypothesiser must return stonesoup MultipleHypothesis."

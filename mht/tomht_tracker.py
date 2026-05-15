@@ -31,7 +31,6 @@ from dataclasses import fields, replace
 import datetime
 import os
 import sys
-import time as wall_clock
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
@@ -116,7 +115,7 @@ from .tomht_utils import (
     sorted_detections,
 )
 from .tomht_tree_store import TrackTreeStore
-from .utils import get_process_maxrss_mb
+from .utils import elapsed_ms, get_process_maxrss_mb, ns_to_ms, start_timer
 
 # ============================================================================
 # Tracker Implementation
@@ -384,7 +383,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         That caller context is threaded to the DetectionProbabilityModel and is
         distinct from TOMHT's internal ``ScanContext`` bookkeeping.
         """
-        scan_wall_start_ns = wall_clock.perf_counter_ns()
+        scan_wall_start_ns = start_timer()
         phase_start_ns = scan_wall_start_ns
 
         scan_index = (
@@ -399,21 +398,21 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             det_index_by_obj=det_index_by_obj,
             caller_scan_context=caller_scan_context,
         )
-        prep_ctx_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
-        phase_start_ns = wall_clock.perf_counter_ns()
+        prep_ctx_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
 
         self._maybe_validate_pruning_feasibility(
             stage="pre_local_expansion",
             ctx=ctx,
         )
-        pre_expand_validate_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
-        phase_start_ns = wall_clock.perf_counter_ns()
+        pre_expand_validate_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
 
         # 1) Expand every tree locally.
         expansion_call_stats = _ExpansionCallStats()
         self._expand_all_track_trees(ctx, expansion_call_stats=expansion_call_stats)
-        expand_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
-        phase_start_ns = wall_clock.perf_counter_ns()
+        expand_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
 
         # 2) Simple lifecycle handling.
         self._tree_store.remove_empty_trees()
@@ -421,25 +420,21 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             stage="post_local_pruning",
             ctx=ctx,
         )
-        post_expand_prune_validate_ms = (
-            wall_clock.perf_counter_ns() - phase_start_ns
-        ) / 1e6
-        phase_start_ns = wall_clock.perf_counter_ns()
+        post_expand_prune_validate_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
 
         # 3) Internal births from Step-2 residual detections.
         birth_stats = self._run_internal_births(ctx)
-        births_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
-        phase_start_ns = wall_clock.perf_counter_ns()
+        births_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
 
         # 4) Build clusters and rebuild globals per cluster (fresh each scan).
         cluster_work = self._build_track_clusters(ctx)
         cluster_snapshots, rebuild_stats = self._rebuild_cluster_globals(
             cluster_work, ctx
         )
-        cluster_build_and_solve_ms = (
-            wall_clock.perf_counter_ns() - phase_start_ns
-        ) / 1e6
-        phase_start_ns = wall_clock.perf_counter_ns()
+        cluster_build_and_solve_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
 
         # 5) Post-solve cluster-local supported-leaf pruning from rebuilt top-K.
         self._apply_post_solve_supported_leaf_pruning(cluster_snapshots)
@@ -447,12 +442,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             stage="post_supported_leaf_pruning",
             ctx=ctx,
         )
-        post_solve_prune_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
-        phase_start_ns = wall_clock.perf_counter_ns()
+        post_solve_prune_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
 
         map_global = merge_cluster_map_globals(cluster_snapshots)
-        map_merge_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
-        phase_start_ns = wall_clock.perf_counter_ns()
+        map_merge_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
 
         # 6) MAP-only N-scan pruning on explicit trees + disagreement stats.
         (
@@ -493,8 +488,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         # Keep one full-scan MAP global in compatibility slot for old inspection paths.
         self._last_map_global = map_global
         self.global_hypotheses = [map_global]
-        nscan_lifecycle_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
-        phase_start_ns = wall_clock.perf_counter_ns()
+        nscan_lifecycle_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
 
         # 9) Reclaim node storage not reachable from surviving roots/leaves/commitments.
         nscan_snapshot = self._nscan_commitment_snapshot
@@ -507,10 +502,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._tree_store.cleanup_unreachable_nodes(
             extra_seed_nodes=cleanup_seed_nodes,
         )
-        cleanup_ms = (wall_clock.perf_counter_ns() - phase_start_ns) / 1e6
+        cleanup_ms = elapsed_ms(phase_start_ns)
 
         # 10) Post-scan instrumentation.
-        scan_wall_ms = (wall_clock.perf_counter_ns() - scan_wall_start_ns) / 1e6
+        scan_wall_ms = elapsed_ms(scan_wall_start_ns)
         maxrss_mb = get_process_maxrss_mb()
         node_count_total = len(self._tree_store.nodes_by_id)
         active_leaves = self._tree_store.active_leaf_count()
@@ -520,9 +515,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             pre_expand_validate_ms=float(pre_expand_validate_ms),
             expand_ms=float(expand_ms),
             expand_hypothesise_calls=int(expansion_call_stats.hypothesise_calls),
-            expand_hypothesise_ms=float(expansion_call_stats.hypothesise_wall_ns / 1e6),
+            expand_hypothesise_ms=ns_to_ms(expansion_call_stats.hypothesise_wall_ns),
             expand_update_calls=int(expansion_call_stats.update_calls),
-            expand_update_ms=float(expansion_call_stats.update_wall_ns / 1e6),
+            expand_update_ms=ns_to_ms(expansion_call_stats.update_wall_ns),
             post_expand_prune_validate_ms=float(post_expand_prune_validate_ms),
             births_ms=float(births_ms),
             cluster_build_and_solve_ms=float(cluster_build_and_solve_ms),

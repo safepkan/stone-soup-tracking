@@ -20,7 +20,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import math
-import time as wall_clock
 from typing import Any
 
 from ortools.sat.python import cp_model
@@ -36,10 +35,13 @@ from .tomht_cluster_solver import (
     validate_cluster_solver_problem,
 )
 from .utils import (
+    elapsed_ms as _elapsed_ms,
+    elapsed_ns as _elapsed_ns,
     env_flag as _env_flag,
     env_float as _env_float,
     get_process_maxrss_mb as _get_process_maxrss_mb,
     ns_to_ms as _ns_to_ms,
+    start_timer as _start_timer,
 )
 
 
@@ -114,7 +116,7 @@ class ORToolsClusterSolver:
         validate_cluster_solver_problem(problem)
         self._last_profile = None
         profiling_enabled = self._profiling_enabled
-        solve_start_ns = wall_clock.perf_counter_ns() if profiling_enabled else 0
+        solve_start_ns = _start_timer() if profiling_enabled else 0
         maxrss_before_mb = _get_process_maxrss_mb() if profiling_enabled else 0.0
 
         model_vars_and_keys_ns = 0
@@ -150,7 +152,7 @@ class ORToolsClusterSolver:
         for track in problem.track_options:
             per_track_vars: list[cp_model.IntVar] = []
             if profiling_enabled:
-                t_vars_ns = wall_clock.perf_counter_ns()
+                t_vars_ns = _start_timer()
             for leaf in track.leaf_options:
                 leaf_id = int(leaf.leaf_id)
                 if leaf_id in leaf_option_by_leaf_id:
@@ -167,31 +169,29 @@ class ORToolsClusterSolver:
                 for key in leaf.full_history_conflict_keys:
                     conflict_vars_by_key.setdefault(key, []).append(var)
             if profiling_enabled:
-                model_vars_and_keys_ns += wall_clock.perf_counter_ns() - t_vars_ns
+                model_vars_and_keys_ns += _elapsed_ns(t_vars_ns)
 
             if profiling_enabled:
-                t_exactly_one_ns = wall_clock.perf_counter_ns()
+                t_exactly_one_ns = _start_timer()
             model.Add(sum(per_track_vars) == 1)
             if profiling_enabled:
-                model_exactly_one_ns += wall_clock.perf_counter_ns() - t_exactly_one_ns
+                model_exactly_one_ns += _elapsed_ns(t_exactly_one_ns)
 
         # Conflict constraint by history key:
         # for each key, at most one selected leaf may contain it.
         if profiling_enabled:
-            t_conflict_constraints_ns = wall_clock.perf_counter_ns()
+            t_conflict_constraints_ns = _start_timer()
         for vars_for_key in conflict_vars_by_key.values():
             if len(vars_for_key) > 1:
                 model.Add(sum(vars_for_key) <= 1)
                 conflict_constraints += 1
         if profiling_enabled:
-            model_conflict_constraints_ns += (
-                wall_clock.perf_counter_ns() - t_conflict_constraints_ns
-            )
+            model_conflict_constraints_ns += _elapsed_ns(t_conflict_constraints_ns)
 
         # CP-SAT objective coefficients must be integers, so leaf scores are
         # scaled and rounded. We later recompute exact float scores for ranking.
         if profiling_enabled:
-            t_objective_ns = wall_clock.perf_counter_ns()
+            t_objective_ns = _start_timer()
         scaled_objective_terms = []
         for leaf_var in leaf_vars:
             scaled_score = self._scale_score(float(leaf_var.leaf_option.score))
@@ -200,7 +200,7 @@ class ORToolsClusterSolver:
             scaled_objective_terms.append(scaled_score * leaf_var.variable)
         model.Maximize(sum(scaled_objective_terms))
         if profiling_enabled:
-            model_objective_ns += wall_clock.perf_counter_ns() - t_objective_ns
+            model_objective_ns += _elapsed_ns(t_objective_ns)
 
         solver = cp_model.CpSolver()
         solver.parameters.num_search_workers = 1
@@ -228,14 +228,14 @@ class ORToolsClusterSolver:
         # 3) recompute exact float score under shared contract helper,
         # 4) add a no-good cut to exclude this exact selected set.
         if profiling_enabled:
-            t_solve_loop_ns = wall_clock.perf_counter_ns()
+            t_solve_loop_ns = _start_timer()
         for _ in range(solve_budget):
             solves_attempted += 1
             if profiling_enabled:
-                t_solve_call_ns = wall_clock.perf_counter_ns()
+                t_solve_call_ns = _start_timer()
             status = solver.Solve(raw_model)
             if profiling_enabled:
-                solve_call_ns = wall_clock.perf_counter_ns() - t_solve_call_ns
+                solve_call_ns = _elapsed_ns(t_solve_call_ns)
                 solve_calls_total_ns += solve_call_ns
                 solve_call_max_ns = max(solve_call_max_ns, solve_call_ns)
                 status_key = _cp_sat_status_name(status)
@@ -250,26 +250,24 @@ class ORToolsClusterSolver:
             selected_solution_vars: list[cp_model.IntVar] = []
 
             if profiling_enabled:
-                t_decode_selected_ns = wall_clock.perf_counter_ns()
+                t_decode_selected_ns = _start_timer()
             for leaf_var in leaf_vars:
                 if solver.Value(leaf_var.variable) == 1:
                     selected_solution_vars.append(leaf_var.variable)
                     leaf = leaf_var.leaf_option
                     selected_leaf_id_by_track_id[int(leaf.track_id)] = int(leaf.leaf_id)
             if profiling_enabled:
-                decode_selected_ns += (
-                    wall_clock.perf_counter_ns() - t_decode_selected_ns
-                )
+                decode_selected_ns += _elapsed_ns(t_decode_selected_ns)
 
             if profiling_enabled:
-                t_exact_rescore_ns = wall_clock.perf_counter_ns()
+                t_exact_rescore_ns = _start_timer()
             exact_score = score_selected_leaf_ids_if_exact_feasible(
                 problem=problem,
                 selected_leaf_id_by_track_id=selected_leaf_id_by_track_id,
                 leaf_option_by_leaf_id=leaf_option_by_leaf_id,
             )
             if profiling_enabled:
-                exact_rescore_ns += wall_clock.perf_counter_ns() - t_exact_rescore_ns
+                exact_rescore_ns += _elapsed_ns(t_exact_rescore_ns)
             if exact_score is None:
                 raise RuntimeError(
                     "ORToolsClusterSolver produced an infeasible exact selection. "
@@ -278,7 +276,7 @@ class ORToolsClusterSolver:
 
             feasible_solutions_found += 1
             if profiling_enabled:
-                t_topk_push_ns = wall_clock.perf_counter_ns()
+                t_topk_push_ns = _start_timer()
             top_k.push(
                 candidate=ClusterSolverSolution(
                     selected_leaf_id_by_track_id=selected_leaf_id_by_track_id,
@@ -287,27 +285,27 @@ class ORToolsClusterSolver:
                 insertion_order=feasible_solutions_found,
             )
             if profiling_enabled:
-                topk_push_ns += wall_clock.perf_counter_ns() - t_topk_push_ns
+                topk_push_ns += _elapsed_ns(t_topk_push_ns)
 
             # Standard no-good cut: exclude this exact selected variable set.
             if not selected_solution_vars:
                 early_stop_reason = "single_empty_solution"
                 break
             if profiling_enabled:
-                t_nogood_add_ns = wall_clock.perf_counter_ns()
+                t_nogood_add_ns = _start_timer()
             model.Add(sum(selected_solution_vars) <= len(selected_solution_vars) - 1)
             if profiling_enabled:
-                nogood_add_ns += wall_clock.perf_counter_ns() - t_nogood_add_ns
+                nogood_add_ns += _elapsed_ns(t_nogood_add_ns)
         if profiling_enabled:
-            solve_loop_total_ns += wall_clock.perf_counter_ns() - t_solve_loop_ns
+            solve_loop_total_ns += _elapsed_ns(t_solve_loop_ns)
 
         # Finalize top-K ordering by exact float score (with deterministic
         # insertion-order tie break) and summarize termination reason.
         if profiling_enabled:
-            t_finalize_ns = wall_clock.perf_counter_ns()
+            t_finalize_ns = _start_timer()
         solutions_tuple = top_k.finalize()
         if profiling_enabled:
-            finalize_ns += wall_clock.perf_counter_ns() - t_finalize_ns
+            finalize_ns += _elapsed_ns(t_finalize_ns)
         if not solutions_tuple and max_results > 0:
             early_stop_reason = "infeasible_or_exhausted"
         elif len(solutions_tuple) < max_results:
@@ -326,8 +324,7 @@ class ORToolsClusterSolver:
             early_stop_reason=early_stop_reason,
         )
         if profiling_enabled:
-            total_ns = wall_clock.perf_counter_ns() - solve_start_ns
-            total_ms = _ns_to_ms(total_ns)
+            total_ms = _elapsed_ms(solve_start_ns)
             model_total_ns = (
                 model_vars_and_keys_ns
                 + model_exactly_one_ns
