@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import datetime
 from statistics import median
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 import numpy as np
 
@@ -16,6 +16,10 @@ from .tomht_model import (
 )
 from .tomht_tree_store import TrackTreeStore
 from .tomht_types import ScanContext
+
+if TYPE_CHECKING:
+    from .tomht_expansion import ExpansionCallStats
+    from .tomht_pruning import SupportedLeafPruningStats
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,48 @@ class RebuildStats:
     historical_relaxation_attempts: int = 0
     historical_relaxation_successes: int = 0
     historical_relaxed_keys_total: int = 0
+
+
+@dataclass(frozen=True)
+class FrontierStageCounts:
+    """Active tree/leaf counts sampled at one scan-pipeline boundary."""
+
+    active_trees: int = 0
+    active_leaves: int = 0
+
+
+@dataclass(frozen=True)
+class ExpansionFrontierStats:
+    """Per-scan aggregate expansion volume and retained-frontier counters."""
+
+    leaves_before_expansion: int = 0
+    leaves_after_expansion: int = 0
+    leaves_after_empty_tree_removal: int = 0
+    leaves_after_births: int = 0
+    leaves_after_post_solve_supported_pruning: int = 0
+    leaves_after_n_scan_pruning: int = 0
+    leaves_after_lifecycle: int = 0
+    trees_before_expansion: int = 0
+    trees_after_expansion: int = 0
+    trees_after_empty_tree_removal: int = 0
+    trees_after_births: int = 0
+    trees_after_post_solve_supported_pruning: int = 0
+    trees_after_n_scan_pruning: int = 0
+    trees_after_lifecycle: int = 0
+    expanded_leaf_count: int = 0
+    expanded_leaves_tentative: int = 0
+    expanded_leaves_confirmed: int = 0
+    local_child_candidates_total: int = 0
+    local_children_created_total: int = 0
+    local_children_retained_total: int = 0
+    local_miss_children_created: int = 0
+    local_detection_children_created: int = 0
+    map_selected_leaf_count: int = 0
+    retained_topk_supported_leaf_count: int = 0
+    unsupported_leaf_count_pruned: int = 0
+    overload_split_clusters_skipped_supported_pruning: int = 0
+    overload_split_trees_skipped_supported_pruning: int = 0
+    overload_split_leaves_skipped_supported_pruning: int = 0
 
 
 @dataclass(frozen=True)
@@ -95,6 +141,117 @@ class ScanStats:
     map_miss_hist: dict[int, int]
     map_mean_hit_rate: float
     timing_breakdown: ScanTimingBreakdown = field(default_factory=ScanTimingBreakdown)
+    expansion_frontier: ExpansionFrontierStats = field(
+        default_factory=ExpansionFrontierStats
+    )
+
+
+def frontier_stage_counts_for_store(
+    *,
+    tree_store: TrackTreeStore,
+) -> FrontierStageCounts:
+    """Sample cheap active tree/leaf counts from the persistent tree store."""
+    return FrontierStageCounts(
+        active_trees=tree_store.active_tree_count(),
+        active_leaves=tree_store.active_leaf_count(),
+    )
+
+
+def _map_selected_leaf_ids(
+    cluster_snapshots: list[ClusterRebuildSnapshot],
+) -> set[int]:
+    out: set[int] = set()
+    for snapshot in cluster_snapshots:
+        if snapshot.map_global is None:
+            continue
+        out.update(
+            int(leaf.node_id)
+            for leaf in snapshot.map_global.leaf_nodes_by_track_id.values()
+        )
+    return out
+
+
+def _retained_topk_supported_leaf_ids(
+    cluster_snapshots: list[ClusterRebuildSnapshot],
+) -> set[int]:
+    out: set[int] = set()
+    for snapshot in cluster_snapshots:
+        for rebuilt_global in snapshot.rebuilt_globals:
+            out.update(
+                int(leaf.node_id)
+                for leaf in rebuilt_global.leaf_nodes_by_track_id.values()
+            )
+    return out
+
+
+def build_expansion_frontier_stats(
+    *,
+    before_expansion: FrontierStageCounts,
+    after_expansion: FrontierStageCounts,
+    after_empty_tree_removal: FrontierStageCounts,
+    after_births: FrontierStageCounts,
+    after_post_solve_supported_pruning: FrontierStageCounts,
+    after_n_scan_pruning: FrontierStageCounts,
+    after_lifecycle: FrontierStageCounts,
+    expansion_call_stats: ExpansionCallStats,
+    supported_pruning_stats: SupportedLeafPruningStats,
+    cluster_snapshots: list[ClusterRebuildSnapshot],
+) -> ExpansionFrontierStats:
+    """Assemble expansion/frontier counters from phase-local instrumentation."""
+    return ExpansionFrontierStats(
+        leaves_before_expansion=before_expansion.active_leaves,
+        leaves_after_expansion=after_expansion.active_leaves,
+        leaves_after_empty_tree_removal=after_empty_tree_removal.active_leaves,
+        leaves_after_births=after_births.active_leaves,
+        leaves_after_post_solve_supported_pruning=(
+            after_post_solve_supported_pruning.active_leaves
+        ),
+        leaves_after_n_scan_pruning=after_n_scan_pruning.active_leaves,
+        leaves_after_lifecycle=after_lifecycle.active_leaves,
+        trees_before_expansion=before_expansion.active_trees,
+        trees_after_expansion=after_expansion.active_trees,
+        trees_after_empty_tree_removal=after_empty_tree_removal.active_trees,
+        trees_after_births=after_births.active_trees,
+        trees_after_post_solve_supported_pruning=(
+            after_post_solve_supported_pruning.active_trees
+        ),
+        trees_after_n_scan_pruning=after_n_scan_pruning.active_trees,
+        trees_after_lifecycle=after_lifecycle.active_trees,
+        expanded_leaf_count=int(expansion_call_stats.expanded_leaf_count),
+        expanded_leaves_tentative=int(expansion_call_stats.expanded_leaves_tentative),
+        expanded_leaves_confirmed=int(expansion_call_stats.expanded_leaves_confirmed),
+        local_child_candidates_total=int(
+            expansion_call_stats.local_child_candidates_total
+        ),
+        local_children_created_total=int(
+            expansion_call_stats.local_children_created_total
+        ),
+        local_children_retained_total=int(
+            expansion_call_stats.local_children_retained_total
+        ),
+        local_miss_children_created=int(
+            expansion_call_stats.local_miss_children_created
+        ),
+        local_detection_children_created=int(
+            expansion_call_stats.local_detection_children_created
+        ),
+        map_selected_leaf_count=len(_map_selected_leaf_ids(cluster_snapshots)),
+        retained_topk_supported_leaf_count=len(
+            _retained_topk_supported_leaf_ids(cluster_snapshots)
+        ),
+        unsupported_leaf_count_pruned=int(
+            supported_pruning_stats.unsupported_leaf_count_pruned
+        ),
+        overload_split_clusters_skipped_supported_pruning=int(
+            supported_pruning_stats.overload_split_clusters_skipped_supported_pruning
+        ),
+        overload_split_trees_skipped_supported_pruning=int(
+            supported_pruning_stats.overload_split_trees_skipped_supported_pruning
+        ),
+        overload_split_leaves_skipped_supported_pruning=int(
+            supported_pruning_stats.overload_split_leaves_skipped_supported_pruning
+        ),
+    )
 
 
 def display_cluster_rebuilds(
@@ -235,6 +392,7 @@ def build_scan_stats(
     nscan_tracks_committed: int,
     birth_stats: BirthStats,
     timing_breakdown: ScanTimingBreakdown,
+    expansion_frontier_stats: ExpansionFrontierStats | None = None,
 ) -> ScanStats:
     """Assemble one immutable per-scan ScanStats record."""
     (
@@ -289,6 +447,11 @@ def build_scan_stats(
         map_miss_hist=map_miss_hist,
         map_mean_hit_rate=map_mean_hit_rate,
         timing_breakdown=timing_breakdown,
+        expansion_frontier=(
+            ExpansionFrontierStats()
+            if expansion_frontier_stats is None
+            else expansion_frontier_stats
+        ),
     )
 
 
@@ -393,12 +556,52 @@ def print_scan_stats(
         print(f"SCAN_MAP_MISS_HIST t={timestamp} miss_hist={scan_stats.map_miss_hist}")
 
 
+def print_expansion_frontier_stats(
+    *,
+    timestamp: datetime.datetime,
+    scan_stats: ScanStats,
+) -> None:
+    """Print compact opt-in expansion/frontier usefulness diagnostics."""
+    stats = scan_stats.expansion_frontier
+    print(
+        f"EXPANSION_FRONTIER scan={scan_stats.scan_index} t={timestamp} "
+        f"leaves_before={stats.leaves_before_expansion} "
+        f"leaves_after_expansion={stats.leaves_after_expansion} "
+        f"leaves_after_empty={stats.leaves_after_empty_tree_removal} "
+        f"leaves_after_births={stats.leaves_after_births} "
+        "leaves_after_supported_prune="
+        f"{stats.leaves_after_post_solve_supported_pruning} "
+        f"leaves_after_nscan={stats.leaves_after_n_scan_pruning} "
+        f"leaves_after_lifecycle={stats.leaves_after_lifecycle} "
+        f"trees_before={stats.trees_before_expansion} "
+        f"trees_after_lifecycle={stats.trees_after_lifecycle} "
+        f"expanded={stats.expanded_leaf_count} "
+        f"expanded_tentative={stats.expanded_leaves_tentative} "
+        f"expanded_confirmed={stats.expanded_leaves_confirmed} "
+        f"child_candidates={stats.local_child_candidates_total} "
+        f"children_created={stats.local_children_created_total} "
+        f"children_retained={stats.local_children_retained_total} "
+        f"miss_children={stats.local_miss_children_created} "
+        f"detection_children={stats.local_detection_children_created} "
+        f"topk_supported={stats.retained_topk_supported_leaf_count} "
+        f"map_selected={stats.map_selected_leaf_count} "
+        f"unsupported_pruned={stats.unsupported_leaf_count_pruned} "
+        "overload_prune_skipped_clusters="
+        f"{stats.overload_split_clusters_skipped_supported_pruning} "
+        "overload_prune_skipped_trees="
+        f"{stats.overload_split_trees_skipped_supported_pruning} "
+        "overload_prune_skipped_leaves="
+        f"{stats.overload_split_leaves_skipped_supported_pruning}"
+    )
+
+
 def print_summary_stats(
     *,
     stats: list[ScanStats],
     max_global_hypotheses: int,
     last_nscan_boundary_scan_index: int | None,
     committed_boundary_by_track_id: Mapping[int, int],
+    debug_display_expansion_frontier: bool = False,
 ) -> None:
     """Print aggregate instrumentation summaries from collected ScanStats."""
     del max_global_hypotheses
@@ -525,6 +728,54 @@ def print_summary_stats(
         f"confirmed med={median(confirmed_trees):.1f} max={max(confirmed_trees)} "
         f"leaves med={median(leaves):.1f} max={max(leaves)}"
     )
+    if debug_display_expansion_frontier:
+        expansion_stats = [s.expansion_frontier for s in stats]
+        leaves_before = [s.leaves_before_expansion for s in expansion_stats]
+        leaves_after_expansion = [s.leaves_after_expansion for s in expansion_stats]
+        leaves_after_supported = [
+            s.leaves_after_post_solve_supported_pruning for s in expansion_stats
+        ]
+        leaves_after_lifecycle = [s.leaves_after_lifecycle for s in expansion_stats]
+        expanded = [s.expanded_leaf_count for s in expansion_stats]
+        expanded_tentative = [s.expanded_leaves_tentative for s in expansion_stats]
+        expanded_confirmed = [s.expanded_leaves_confirmed for s in expansion_stats]
+        child_candidates = [s.local_child_candidates_total for s in expansion_stats]
+        children_created = [s.local_children_created_total for s in expansion_stats]
+        children_retained = [s.local_children_retained_total for s in expansion_stats]
+        topk_supported = [s.retained_topk_supported_leaf_count for s in expansion_stats]
+        map_selected = [s.map_selected_leaf_count for s in expansion_stats]
+        unsupported_pruned = [s.unsupported_leaf_count_pruned for s in expansion_stats]
+        overload_skip_clusters = [
+            s.overload_split_clusters_skipped_supported_pruning for s in expansion_stats
+        ]
+        overload_skip_trees = [
+            s.overload_split_trees_skipped_supported_pruning for s in expansion_stats
+        ]
+        overload_skip_leaves = [
+            s.overload_split_leaves_skipped_supported_pruning for s in expansion_stats
+        ]
+        print(
+            "SUMMARY expansion_frontier "
+            f"leaves_before med={median(leaves_before):.1f} max={max(leaves_before)} "
+            "leaves_after_expansion "
+            f"med={median(leaves_after_expansion):.1f} max={max(leaves_after_expansion)} "
+            "leaves_after_supported_prune "
+            f"med={median(leaves_after_supported):.1f} max={max(leaves_after_supported)} "
+            "leaves_after_lifecycle "
+            f"med={median(leaves_after_lifecycle):.1f} max={max(leaves_after_lifecycle)} "
+            f"expanded sum={sum(expanded)} mean={_mean(expanded):.2f} "
+            f"expanded_tentative sum={sum(expanded_tentative)} "
+            f"expanded_confirmed sum={sum(expanded_confirmed)} "
+            f"child_candidates sum={sum(child_candidates)} mean={_mean(child_candidates):.2f} "
+            f"children_created sum={sum(children_created)} mean={_mean(children_created):.2f} "
+            f"children_retained sum={sum(children_retained)} mean={_mean(children_retained):.2f} "
+            f"topk_supported sum={sum(topk_supported)} mean={_mean(topk_supported):.2f} "
+            f"map_selected sum={sum(map_selected)} mean={_mean(map_selected):.2f} "
+            f"unsupported_pruned sum={sum(unsupported_pruned)} "
+            f"overload_skip_clusters sum={sum(overload_skip_clusters)} "
+            f"overload_skip_trees sum={sum(overload_skip_trees)} "
+            f"overload_skip_leaves sum={sum(overload_skip_leaves)}"
+        )
     print(
         "SUMMARY clusters "
         f"count med={median(clusters):.1f} max={max(clusters)} "

@@ -89,6 +89,7 @@ from .tomht_output import (
 )
 from .tomht_params import TOMHTParams, apply_params_overrides
 from .tomht_pruning import (
+    SupportedLeafPruningStats,
     apply_map_n_scan_pruning,
     apply_post_solve_supported_leaf_pruning,
 )
@@ -103,11 +104,15 @@ from .tomht_scoring import (
 )
 from .tomht_stats import (
     BirthStats,
+    ExpansionFrontierStats,
     RebuildStats,
     ScanStats,
     ScanTimingBreakdown,
+    build_expansion_frontier_stats,
     build_scan_stats,
+    frontier_stage_counts_for_store,
     maybe_display_scan_debug_output,
+    print_expansion_frontier_stats,
     print_scan_stats as print_scan_stats_report,
     print_summary_stats as print_summary_stats_report,
 )
@@ -409,13 +414,22 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         phase_start_ns = start_timer()
 
         # 1) Expand every tree locally.
+        frontier_before_expansion = frontier_stage_counts_for_store(
+            tree_store=self._tree_store
+        )
         expansion_call_stats = _ExpansionCallStats()
         self._expand_all_track_trees(ctx, expansion_call_stats=expansion_call_stats)
+        frontier_after_expansion = frontier_stage_counts_for_store(
+            tree_store=self._tree_store
+        )
         expand_ms = elapsed_ms(phase_start_ns)
         phase_start_ns = start_timer()
 
         # 2) Simple lifecycle handling.
         self._tree_store.remove_empty_trees()
+        frontier_after_empty_tree_removal = frontier_stage_counts_for_store(
+            tree_store=self._tree_store
+        )
         self._maybe_validate_pruning_feasibility(
             stage="post_local_pruning",
             ctx=ctx,
@@ -425,6 +439,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         # 3) Internal births from Step-2 residual detections.
         birth_stats = self._run_internal_births(ctx)
+        frontier_after_births = frontier_stage_counts_for_store(
+            tree_store=self._tree_store
+        )
         births_ms = elapsed_ms(phase_start_ns)
         phase_start_ns = start_timer()
 
@@ -437,7 +454,12 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         phase_start_ns = start_timer()
 
         # 5) Post-solve cluster-local supported-leaf pruning from rebuilt top-K.
-        self._apply_post_solve_supported_leaf_pruning(cluster_snapshots)
+        supported_pruning_stats = self._apply_post_solve_supported_leaf_pruning(
+            cluster_snapshots
+        )
+        frontier_after_post_solve_supported_pruning = frontier_stage_counts_for_store(
+            tree_store=self._tree_store
+        )
         self._maybe_validate_pruning_feasibility(
             stage="post_supported_leaf_pruning",
             ctx=ctx,
@@ -461,6 +483,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
         )
+        frontier_after_n_scan_pruning = frontier_stage_counts_for_store(
+            tree_store=self._tree_store
+        )
 
         # 7) Whole-track lifecycle: sticky score-based confirmation,
         # then post-N-scan termination policy.
@@ -474,6 +499,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._maybe_validate_pruning_feasibility(
             stage="post_n_scan_pruning",
             ctx=ctx,
+        )
+        frontier_after_lifecycle = frontier_stage_counts_for_store(
+            tree_store=self._tree_store
         )
 
         # 8) Sticky output publication state for MAP-selected live trees.
@@ -509,6 +537,20 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         maxrss_mb = get_process_maxrss_mb()
         node_count_total = len(self._tree_store.nodes_by_id)
         active_leaves = self._tree_store.active_leaf_count()
+        expansion_frontier_stats = build_expansion_frontier_stats(
+            before_expansion=frontier_before_expansion,
+            after_expansion=frontier_after_expansion,
+            after_empty_tree_removal=frontier_after_empty_tree_removal,
+            after_births=frontier_after_births,
+            after_post_solve_supported_pruning=(
+                frontier_after_post_solve_supported_pruning
+            ),
+            after_n_scan_pruning=frontier_after_n_scan_pruning,
+            after_lifecycle=frontier_after_lifecycle,
+            expansion_call_stats=expansion_call_stats,
+            supported_pruning_stats=supported_pruning_stats,
+            cluster_snapshots=cluster_snapshots,
+        )
 
         timing_breakdown = ScanTimingBreakdown(
             prep_ctx_ms=float(prep_ctx_ms),
@@ -540,6 +582,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             nscan_tracks_committed=nscan_tracks_committed,
             birth_stats=birth_stats,
             timing_breakdown=timing_breakdown,
+            expansion_frontier_stats=expansion_frontier_stats,
         )
 
         self._last_update_timestamp = time
@@ -664,6 +707,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             max_global_hypotheses=self.params.max_global_hypotheses,
             last_nscan_boundary_scan_index=nscan_snapshot.boundary_scan_index,
             committed_boundary_by_track_id=nscan_snapshot.committed_boundary_by_track_id,
+            debug_display_expansion_frontier=(self._expansion_frontier_debug_enabled()),
         )
 
     # =========================================================================
@@ -806,9 +850,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     def _apply_post_solve_supported_leaf_pruning(
         self,
         cluster_snapshots: list[ClusterRebuildSnapshot],
-    ) -> None:
+    ) -> SupportedLeafPruningStats:
         """Prune each cluster tree to leaves supported by retained rebuilt globals."""
-        apply_post_solve_supported_leaf_pruning(
+        return apply_post_solve_supported_leaf_pruning(
             cluster_snapshots=cluster_snapshots,
             tree_store=self._tree_store,
         )
@@ -915,6 +959,15 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             return False
         return raw.strip().lower() in {"1", "true", "yes", "on"}
 
+    def _expansion_frontier_debug_enabled(self) -> bool:
+        """Return whether opt-in expansion/frontier diagnostics are enabled."""
+        if self.params.debug_display_expansion_frontier:
+            return True
+        raw = os.getenv("TOMHT_DEBUG_EXPANSION_FRONTIER")
+        if raw is None:
+            return False
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+
     def _maybe_validate_pruning_feasibility(
         self,
         *,
@@ -963,6 +1016,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         nscan_tracks_committed: int,
         birth_stats: BirthStats,
         timing_breakdown: ScanTimingBreakdown,
+        expansion_frontier_stats: ExpansionFrontierStats,
     ) -> None:
         """Build/store per-scan stats and emit optional debug displays."""
         maybe_display_scan_debug_output(
@@ -987,11 +1041,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             nscan_tracks_committed=nscan_tracks_committed,
             birth_stats=birth_stats,
             timing_breakdown=timing_breakdown,
+            expansion_frontier_stats=expansion_frontier_stats,
         )
         self.last_scan_stats = scan_stats
         if self.params.collect_stats:
             self._stats.append(scan_stats)
+        debug_display_expansion_frontier = self._expansion_frontier_debug_enabled()
         if not self.params.debug_display_scan_stats:
+            if debug_display_expansion_frontier:
+                print_expansion_frontier_stats(
+                    timestamp=ctx.timestamp,
+                    scan_stats=scan_stats,
+                )
             return
         nscan_snapshot = self.get_n_scan_commitment_snapshot()
         print_scan_stats_report(
@@ -1000,3 +1061,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             nscan_snapshot=nscan_snapshot,
             debug_display_map_miss_hist=self.params.debug_display_map_miss_hist,
         )
+        if debug_display_expansion_frontier:
+            print_expansion_frontier_stats(
+                timestamp=ctx.timestamp,
+                scan_stats=scan_stats,
+            )

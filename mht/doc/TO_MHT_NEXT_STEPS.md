@@ -123,6 +123,15 @@ Parallelization is a future axis, but not the first tool for this phase. First u
 
 ### A. Expansion usefulness instrumentation
 
+Implemented (2026-05-15): scan stats now carry aggregate expansion/frontier
+usefulness counters by default. They connect local expansion work to retained
+top-K supported leaves, MAP-selected leaves, supported-leaf pruning removals,
+confirmed/tentative expansion split, and overload-split supported-pruning skips.
+The compact `EXPANSION_FRONTIER ...` per-scan line and
+`SUMMARY expansion_frontier ...` aggregate line remain opt-in via
+`debug_display_expansion_frontier` or `TOMHT_DEBUG_EXPANSION_FRONTIER=1`, so the
+default smoke/replay log shape is unchanged.
+
 Add or extend diagnostics to connect expansion work to later retained hypotheses.
 
 Possible metrics:
@@ -141,6 +150,11 @@ This can start as debug/stat output rather than permanent public API.
 
 ### B. Frontier growth analysis
 
+Implemented (2026-05-15): `ExpansionFrontierStats` samples active tree/leaf
+counts before expansion, after local expansion/capping, after empty-tree removal,
+after births, after post-solve supported-leaf pruning, after MAP-only N-scan
+pruning, and after lifecycle deletion.
+
 Inspect how active-leaf counts grow and shrink through the scan pipeline:
 
 1. before local expansion,
@@ -154,6 +168,10 @@ Inspect how active-leaf counts grow and shrink through the scan pipeline:
 This should clarify whether the main issue is local branching, weak pruning, overload-split behavior, births, or some combination.
 
 ### C. Overload-split pruning policy
+
+Instrumentation added (2026-05-15): the existing overload-split skip policy is
+still unchanged, but supported-leaf pruning now reports skipped overload
+subclusters, trees, and active leaves.
 
 There is a known caveat in `apply_post_solve_supported_leaf_pruning`:
 

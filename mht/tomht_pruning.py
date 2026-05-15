@@ -37,6 +37,16 @@ class MapNScanPruningResult:
     nscan_commitment_snapshot: NScanCommitmentSnapshot
 
 
+@dataclass(frozen=True)
+class SupportedLeafPruningStats:
+    """Counters from post-solve retained-global supported-leaf pruning."""
+
+    unsupported_leaf_count_pruned: int = 0
+    overload_split_clusters_skipped_supported_pruning: int = 0
+    overload_split_trees_skipped_supported_pruning: int = 0
+    overload_split_leaves_skipped_supported_pruning: int = 0
+
+
 def supported_leaf_ids_by_track_from_rebuilt_globals(
     snapshot: ClusterRebuildSnapshot,
 ) -> dict[int, set[int]]:
@@ -55,9 +65,14 @@ def apply_post_solve_supported_leaf_pruning(
     *,
     cluster_snapshots: list[ClusterRebuildSnapshot],
     tree_store: TrackTreeStore,
-) -> None:
+) -> SupportedLeafPruningStats:
     """Prune each cluster tree to leaves supported by retained rebuilt globals."""
     track_trees_by_track_id = tree_store.track_trees_by_track_id
+    unsupported_leaf_count_pruned = 0
+    overload_split_clusters_skipped_supported_pruning = 0
+    overload_split_trees_skipped_supported_pruning = 0
+    overload_split_leaves_skipped_supported_pruning = 0
+
     for snapshot in cluster_snapshots:
         # Overload-decomposed clusters are approximate; keep their current
         # frontiers to avoid over-pruning branches that may be needed once
@@ -65,6 +80,15 @@ def apply_post_solve_supported_leaf_pruning(
         #
         # TODO: Revisit this policy when overload-split semantics are reviewed.
         if snapshot.overload_split_origin_cluster_id is not None:
+            overload_split_clusters_skipped_supported_pruning += 1
+            for track_id in snapshot.track_ids:
+                tree = track_trees_by_track_id.get(track_id)
+                if tree is None:
+                    continue
+                overload_split_trees_skipped_supported_pruning += 1
+                overload_split_leaves_skipped_supported_pruning += len(
+                    tree.active_leaf_node_ids
+                )
             continue
 
         # Keep k=0 behavior non-destructive for compatibility/debug edge cases.
@@ -84,7 +108,23 @@ def apply_post_solve_supported_leaf_pruning(
                     "Post-solve supported-leaf pruning found no retained leaves "
                     f"for cluster={snapshot.cluster_id} track_id={track_id}."
                 )
+            unsupported_leaf_count_pruned += len(
+                tree.active_leaf_node_ids - supported_leaf_ids
+            )
             tree.active_leaf_node_ids = set(supported_leaf_ids)
+
+    return SupportedLeafPruningStats(
+        unsupported_leaf_count_pruned=unsupported_leaf_count_pruned,
+        overload_split_clusters_skipped_supported_pruning=(
+            overload_split_clusters_skipped_supported_pruning
+        ),
+        overload_split_trees_skipped_supported_pruning=(
+            overload_split_trees_skipped_supported_pruning
+        ),
+        overload_split_leaves_skipped_supported_pruning=(
+            overload_split_leaves_skipped_supported_pruning
+        ),
+    )
 
 
 def compute_cluster_pruning_disagreement(

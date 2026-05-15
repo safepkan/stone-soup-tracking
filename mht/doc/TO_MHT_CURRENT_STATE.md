@@ -24,6 +24,15 @@ The tracker is now a practical track-oriented TO-MHT implementation in the sense
 
 The code treats track trees as the primary persistent state. Rebuilt globals, cluster snapshots, and scan stats are retained as last-scan inspection/debug artifacts rather than as long-lived frontier state.
 
+Scan stats now include expansion/frontier usefulness counters: active tree/leaf
+counts at the main scan-pipeline boundaries, expanded leaves and local child
+volume, retained top-K supported leaves, MAP-selected leaves, supported-leaf
+pruning removals, lifecycle-state expansion split, and overload-split
+supported-pruning skip impact. These counters are collected by default in
+`ScanStats`; compact per-scan and summary lines are opt-in via
+`TOMHTParams.debug_display_expansion_frontier` or
+`TOMHT_DEBUG_EXPANSION_FRONTIER=1`.
+
 The implementation is currently:
 
 - structurally aligned with the intended track-oriented design,
@@ -447,7 +456,10 @@ For each cluster, TOMHT builds leaf options and solves the exact cluster K-best 
 
 For each non-overload-split cluster, active leaves are pruned to those appearing in at least one retained rebuilt top-K global for that cluster.
 
-Overload-decomposed clusters skip this supported-leaf pruning to avoid over-pruning under approximation.
+Overload-decomposed clusters skip this supported-leaf pruning to avoid
+over-pruning under approximation. The skip policy is unchanged, but scan stats
+now count skipped overload subclusters, affected trees, and affected leaves so
+the impact can be measured during expansion-volume work.
 
 ### MAP-only N-scan pruning
 

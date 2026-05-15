@@ -76,9 +76,12 @@ update_tracker(time, detections, *, caller_scan_context=None)
 tracks
 get_map_output_tracks(include_unpublished=False)
 get_map_hypothesis_snapshot()
+get_n_scan_commitment_snapshot()
+get_last_cluster_snapshots()
 get_track_tree_snapshot()
 get_unused_detections()
 add_external_starts(time, starts)
+print_summary_stats()
 ```
 
 `update_tracker(...)` processes one scan/update and returns the current
@@ -94,6 +97,9 @@ unpublished MAP-selected tracks.
 
 `get_map_hypothesis_snapshot()` exposes the internal MAP-selected leaf nodes for
 debugging and evaluation. It is not the public output boundary.
+
+`print_summary_stats()` prints aggregate instrumentation collected in
+`ScanStats` when `collect_stats=True`.
 
 `get_unused_detections()` returns residual detections from the most recent scan
 primarily for external-start workflows where no internal initiator is configured.
@@ -973,9 +979,40 @@ log-odds, or roughly three consecutive high-P_D misses, to reach deletion.
 
 ---
 
+## 13. Expansion/frontier instrumentation
+
+`ScanStats.expansion_frontier` carries aggregate counters that are cheap enough
+to collect by default:
+
+- active tree/leaf counts at expansion, birth, pruning, N-scan, and lifecycle
+  boundaries,
+- expanded leaves split by tentative vs confirmed trees,
+- raw local child candidates and created/retained local children,
+- miss-child vs detection-child creation,
+- MAP-selected leaf count,
+- unique leaves supported by retained top-K rebuilt globals,
+- unsupported leaves removed by post-solve supported-leaf pruning,
+- overload-split supported-pruning skip counts.
+
+Default `SCAN ...` and `SUMMARY ...` lines are kept stable. To emit compact
+expansion/frontier diagnostics, set either:
+
+```text
+TOMHT_DEBUG_EXPANSION_FRONTIER=1
+```
+
+or:
+
+```python
+params = TOMHTParams(debug_display_expansion_frontier=True)
+```
+
+This adds `EXPANSION_FRONTIER ...` per-scan lines and a
+`SUMMARY expansion_frontier ...` line when summary stats are printed.
+
 ---
 
-## 13. Parameter reference quick map
+## 14. Parameter reference quick map
 
 This is not a complete substitute for `TOMHTParams`, but it groups the most
 important public parameters by purpose.
@@ -1006,6 +1043,13 @@ important public parameters by purpose.
 - `publish_min_existence_probability`: optional existence gate for first
   publication.
 
+### Debug and stats
+
+- `collect_stats`: retain per-scan `ScanStats` for later summaries.
+- `debug_display_scan_stats`: print the standard compact per-scan diagnostics.
+- `debug_display_expansion_frontier`: print opt-in expansion/frontier usefulness
+  diagnostics.
+
 ### Tractability and guardrails
 
 These controls are implementation safety valves and are subject to revision:
@@ -1023,7 +1067,7 @@ These controls are implementation safety valves and are subject to revision:
 Tune the probabilistic model first. Use these controls to keep computation
 bounded once the scoring model is roughly calibrated.
 
-## 14. Current limitations and assumptions
+## 15. Current limitations and assumptions
 
 Current important assumptions:
 

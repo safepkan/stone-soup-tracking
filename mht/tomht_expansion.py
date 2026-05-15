@@ -40,6 +40,14 @@ class ExpansionCallStats:
     hypothesise_wall_ns: int = 0
     update_calls: int = 0
     update_wall_ns: int = 0
+    expanded_leaf_count: int = 0
+    expanded_leaves_tentative: int = 0
+    expanded_leaves_confirmed: int = 0
+    local_child_candidates_total: int = 0
+    local_children_created_total: int = 0
+    local_children_retained_total: int = 0
+    local_miss_children_created: int = 0
+    local_detection_children_created: int = 0
 
 
 def validate_distance_hypothesis(
@@ -149,6 +157,7 @@ def candidates_for_track_leaf(
     hypotheses = [
         validate_distance_hypothesis(hyp) for hyp in raw_hypotheses.single_hypotheses
     ]
+    expansion_call_stats.local_child_candidates_total += len(hypotheses)
     local_log_deltas = scoring_model.score_track_hypotheses(
         hypotheses=hypotheses,
         ctx=ctx,
@@ -208,6 +217,13 @@ def candidates_for_track_leaf(
         for _, (hyp, log_delta) in kept_rows
     ]
     out.sort(key=lambda c: c.log_delta, reverse=True)
+    expansion_call_stats.local_children_created_total += len(out)
+    expansion_call_stats.local_miss_children_created += sum(
+        1 for cand in out if cand.used_det_key is None
+    )
+    expansion_call_stats.local_detection_children_created += sum(
+        1 for cand in out if cand.used_det_key is not None
+    )
     return out
 
 
@@ -248,8 +264,14 @@ def expand_one_track_tree(
 ) -> None:
     """Expand all active leaves in one tree, then apply pre-solve cap guardrail."""
     new_leaf_ids: set[int] = set()
+    active_leaf_ids = sorted(tree.active_leaf_node_ids)
+    expansion_call_stats.expanded_leaf_count += len(active_leaf_ids)
+    if tree.lifecycle_state == "confirmed":
+        expansion_call_stats.expanded_leaves_confirmed += len(active_leaf_ids)
+    else:
+        expansion_call_stats.expanded_leaves_tentative += len(active_leaf_ids)
 
-    for leaf_id in sorted(tree.active_leaf_node_ids):
+    for leaf_id in active_leaf_ids:
         leaf = nodes_by_id[leaf_id]
         candidates = candidates_for_track_leaf(
             leaf_node=leaf,
@@ -271,6 +293,7 @@ def expand_one_track_tree(
         nodes_by_id=nodes_by_id,
         params=params,
     )
+    expansion_call_stats.local_children_retained_total += len(tree.active_leaf_node_ids)
 
 
 def expand_all_track_trees(

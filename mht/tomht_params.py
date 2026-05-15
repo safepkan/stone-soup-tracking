@@ -120,6 +120,7 @@ class TOMHTParams:
     debug_display_hypotheses: bool = True
     debug_display_births: bool = True
     debug_display_map_miss_hist: bool = False
+    debug_display_expansion_frontier: bool = False
     debug_births_max: int = 5
     debug_globals_max: int = 5
     collect_stats: bool = True
