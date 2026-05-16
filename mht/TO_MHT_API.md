@@ -97,9 +97,9 @@ add_external_starts(time, starts)
 ```
 
 `update_tracker(...)` processes one scan/update and returns the current
-published MAP output tracks.
+published output tracks.
 
-`tracks` is a convenience property returning the same published MAP output view
+`tracks` is a convenience property returning the same published output view
 for the most recently processed scan. In normal use, the set returned by
 `update_tracker(...)` and the value of `tracker.tracks` immediately afterwards
 represent the same output boundary.
@@ -111,6 +111,9 @@ primarily for external-start workflows where no internal initiator is configured
 `update_tracker(...)` call at the same timestamp.
 
 #### Inspection and debug methods
+
+These helpers are intended for inspection, evaluation, and debugging.
+They are not part of the stable integration contract and may change without notice.
 
 ```python
 get_map_output_tracks(include_unpublished=False)
@@ -451,21 +454,31 @@ important.
 
 ### Track ID passed to the DPM
 
-The `track_id` passed to the DPM is the public output ID if the track tree has
-already been published.
+The `track_id` passed to the DPM is the public output ID under which this track
+tree's output most recently appeared to the caller, or `None` if it has not yet
+appeared in any output scan.
 
-For unpublished trees, `track_id` is `None`.
+Under TOMHT's current output policy this is equivalent to "the public ID
+assigned to this tree when it was first published, retained until deletion."
+If the output policy is later extended to support stitching, ID smoothing across
+MAP flips, or other continuity strategies, `track_id` will reflect the public ID
+the caller most recently saw — which is what caller-side state keyed by ID is
+built around.
+
+The snapshot used here reflects the previous scan's output, not the in-progress
+one. During scan N's scoring, the DPM sees the mapping from scan N−1's output,
+matching what the caller has actually received.
 
 TOMHT does not pass internal logical track IDs to the DPM. This preserves the
 public/private boundary:
 
-- published tracks have a caller-visible identity,
-- unpublished tentative trees are internal,
+- published output is the caller-visible identity surface,
+- unpublished tentative trees remain internal,
 - internal IDs remain available for debugging and evaluation through metadata
   and snapshots.
 
-A track that is first published at the end of scan `N` will only have a public ID
-available to the DPM from scan `N+1` onward.
+A track tree that is first published at the end of scan N will only have a
+`track_id` available to the DPM from scan N+1 onward.
 
 ---
 
@@ -775,11 +788,18 @@ publish_min_age
 publish_min_existence_probability
 ```
 
-By default, TOMHT publishes confirmed MAP-selected tracks only:
+By default, TOMHT publishes confirmed tracks only:
 
 ```python
 publish_lifecycle_states=("confirmed",)
 ```
+
+TOMHT currently selects output tracks by MAP selection over the track tree
+hypotheses. The public contract is the resulting output tracks themselves —
+their IDs, states, and metadata — not the underlying selection strategy.
+Future versions may apply continuity-preserving policies (stitching across
+track-tree fragments, ID smoothing across MAP flips between competing
+hypotheses, and similar) without breaking this API.
 
 Tentative trees can still exist internally and can be inspected with:
 
