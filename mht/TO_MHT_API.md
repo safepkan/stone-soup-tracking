@@ -41,17 +41,10 @@ The caller owns the application-specific sensing model:
 - optional detection-probability / clutter-density model,
 - and any sensor context needed to evaluate those models.
 
-This separation is intentional. TOMHT should not know whether detections come
-from radar, bearing/range sensors, ISAC processing, or a synthetic scenario. It
-should only know how to manage hypotheses and apply scores once the caller has
+This separation is intentional. TOMHT should not know what sensor produced the detections,
+what measurement coordinates they live in, or whether they come from real or simulated data.
+It should only know how to manage hypotheses and apply scores once the caller has
 provided the Stone Soup components and probabilistic assumptions.
-
-Internally, node `detection_history_keys` remain a full-lineage cache for
-diagnostics and reconstruction. Active clustering and solving use live
-unresolved conflict keys, computed by subtracting
-`TrackTree.committed_detection_keys` from that full lineage after N-scan
-promotion fixes root-branch choices. Historical conflict relaxation is not part
-of the runtime path.
 
 ---
 
@@ -64,9 +57,9 @@ The basic setup is:
 ```python
 tracker = TOMHTTracker(
     updater=updater,
-    predictor=predictor,          # or hypothesiser=custom_hypothesiser
-    initiator=initiator,          # optional
-    deleter=deleter,              # optional
+    predictor=predictor,  # pass predictor= OR hypothesiser=, not both
+    initiator=initiator,  # optional
+    deleter=deleter,      # optional
     params=params,
     detection_probability_model=dpm,  # optional
 )
@@ -171,36 +164,121 @@ selected detection hypotheses.
 Exactly one of `predictor` or `hypothesiser` must be supplied.
 
 If `predictor` is supplied, TOMHT constructs its tracker-owned default
-NLL-distance hypothesiser.
+NLL-distance hypothesiser, parameterized by `params.mahalanobis_gate_threshold`
+(see §14). The default evaluates a Gaussian likelihood in the measurement space
+implied by the supplied `Predictor` and `Updater` and gates detections by
+Mahalanobis distance.
 
-If `hypothesiser` is supplied, it must be a distance hypothesiser that returns
-Stone Soup hypotheses whose detection-hypothesis distance is:
+If `hypothesiser` is supplied, it replaces the default. TOMHT then never
+constructs an internal hypothesiser and never applies its own gating on top of
+the one provided.
 
-```text
-NLL = -log p(z | x)
-```
+#### When to provide a custom hypothesiser
 
-This distance must be the measurement likelihood NLL only. It must not include
-detection-probability factors, clutter-density factors, birth terms, or
-additional score offsets. TOMHT applies those factors separately.
+The tracker-owned default is sufficient when the measurement-space innovation
+is well-modeled as `z − h(x)` with a Gaussian likelihood `N(0, S)`. It uses
+only standard Stone Soup interfaces (`Predictor`, `Updater`, and each
+detection's `measurement_model`), so it has no way to learn about
+sensor-specific structure that isn't expressible through those interfaces.
 
-The provided hypothesiser is expected to expose a predictor for tracker wiring.
+Provide a custom hypothesiser when that model breaks down for your sensor.
+Typical reasons:
+
+- **Folded or ambiguous measurement components.** One or more measurement
+  components are observed only modulo some interval, so the raw `z − h(x)`
+  is not the right innovation. Common radar examples are Doppler folding
+  (velocity ambiguous modulo the unambiguous Doppler interval), PRF / range
+  folding (range ambiguous modulo `c / (2·PRF)`), and angle ambiguities in
+  receive arrays with element spacing larger than `λ/2`. Standard Stone Soup
+  interfaces carry no notion of the wrap period, so the caller must inject
+  it — typically by folding the innovation into a symmetric interval around
+  zero before computing the Mahalanobis distance and NLL.
+- **Discrete ambiguity sets with several admissible candidates.** A single
+  detection is consistent with several candidate measurement values, and
+  local association needs to evaluate the candidate closest to the
+  prediction (or emit one detection-hypothesis per candidate) rather than
+  the raw reported value.
+- **Non-Gaussian likelihoods.** The measurement likelihood is heavy-tailed,
+  a mixture, or otherwise not `N(z; h(x), S)`, and a closed-form Gaussian
+  NLL is the wrong objective.
+
+A custom hypothesiser is also the natural place to put any sensor-specific
+gating logic, since the tracker applies no additional gating on top of the
+hypothesiser's output.
 
 #### Custom hypothesiser contract
 
-Custom hypothesiser integrations must satisfy the following constraints for each
-track leaf and scan:
+A custom hypothesiser must implement the Stone Soup hypothesiser signature:
 
-- return a Stone Soup `MultipleHypothesis`,
-- include only `SingleDistanceHypothesis` entries,
-- use finite distances,
-- include exactly one missed-detection hypothesis,
-- return detection-hypothesis distances as NLL only,
-- and reference the original detection objects from the current scan, not copies
-  or reconstructed detections.
+```python
+def hypothesise(
+    self,
+    track: Track,
+    detections: Iterable[Detection],
+    timestamp,
+    **kwargs,
+) -> MultipleHypothesis: ...
+```
 
-The last point is important because TOMHT recovers scan-local detection identity
-from object identity.
+and must satisfy the following constraints for each track leaf and scan:
+
+- **Returns a Stone Soup `MultipleHypothesis`** whose entries are
+  `SingleDistanceHypothesis` instances. Subclasses are permitted; TOMHT does
+  not consume hypothesis fields other than those listed in this contract, so
+  custom subclasses may carry additional fields for diagnostics without
+  affecting tracker behavior.
+- **Includes exactly one missed-detection hypothesis.** Its `distance` field
+  is a sentinel and is ignored by tracker scoring; any finite value
+  (the default uses `0.0`) is acceptable. The miss score is computed by the
+  tracker as `log(1 − P_D)`.
+- **Detection-hypothesis `distance` is the full measurement-likelihood NLL,
+  and nothing else:**
+  ```text
+  distance = NLL = −log p(z | x)
+  ```
+  For a Gaussian innovation with covariance `S` in `d` dimensions, NLL must
+  include the full normalization:
+  ```text
+  NLL = 0.5 · ( d · log(2π) + log|S| + (z − ẑ)ᵀ S⁻¹ (z − ẑ) )
+  ```
+  Not only the Mahalanobis term `½ · (z − ẑ)ᵀ S⁻¹ (z − ẑ)`, and not
+  `½ · (log|S| + Mahalanobis)`. The §5 unit contract between `lambda` and
+  NLL only holds when both are densities in the same measurement-space
+  coordinates; dropping constants from NLL silently miscalibrates every
+  score threshold downstream. For non-Gaussian likelihoods the same
+  principle applies: `distance` must be the full negative log density,
+  not a partial form. The distance must not include detection-probability
+  factors, clutter-density factors, birth terms, or any other score
+  offsets — TOMHT applies those separately.
+- **All emitted distances are finite,** both for the miss and for detection
+  hypotheses.
+- **Detection hypotheses reference the original detection objects** from
+  the current scan directly (no copies, no reconstructed detections). TOMHT
+  recovers scan-local detection identity from object identity.
+- **`measurement_prediction` is attached to each detection hypothesis,**
+  set to the predicted measurement used to compute that hypothesis's NLL.
+  Stone Soup updaters consume this field to avoid recomputing the predicted
+  measurement during the update step; omitting it forces a slower or
+  potentially inconsistent update path depending on the updater.
+- **Gating is the hypothesiser's responsibility.** Detections that should
+  not be associated with this track should simply be omitted from the
+  returned `MultipleHypothesis`. TOMHT applies no additional gating on top
+  of a custom hypothesiser's output. `params.mahalanobis_gate_threshold`
+  is consumed only by the tracker-owned default and has no effect when a
+  custom hypothesiser is supplied.
+- **A `predictor` attribute is exposed for tracker wiring.** The
+  hypothesiser must expose a `predictor` attribute — typically a Stone
+  Soup `Property`, as in the default implementation — that the tracker
+  uses for state prediction outside of local association, such as
+  advancing track states across empty scans.
+
+Timestamp handling within a scan is the hypothesiser's choice. The default
+honors per-detection timestamps when `detection.timestamp` differs from the
+scan `timestamp`, by predicting the track to each distinct detection
+timestamp before computing the innovation. Custom hypothesisers may either
+honor per-detection timestamps or treat the scan timestamp as authoritative;
+either policy is acceptable as long as it is applied consistently within a
+scan.
 
 ### `initiator`
 
@@ -294,13 +372,24 @@ already carried by the hit term through `-log(lambda)`.
 
 `lambda` must use the same measurement-space coordinates as the NLL computation.
 
+To see why, substitute `NLL = −log p(z | x)` back into the hit increment to get
+its log-likelihood-ratio form:
+
+```text
+hit = log( P_D · p(z | x) / lambda )
+```
+
+The dimensionless ratio `p(z | x) / lambda` is what gives the score its scale
+invariance, so the two terms must be evaluated as densities in the same
+measurement-space coordinates. Truncating normalization constants from NLL —
+for example, keeping only the Mahalanobis term — leaves a Jacobian factor
+uncancelled and breaks that invariance.
+
 For example, if the hypothesiser evaluates a Gaussian likelihood in
 bearing/range coordinates, the clutter density must be in detections per
 bearing/range measurement volume per scan. If the measurement coordinates are
-rescaled, the Gaussian normalization term inside the NLL and the clutter density
-term must transform consistently.
-
-This unit contract is important for scale-invariant scores.
+rescaled, the Gaussian normalization term inside the NLL and the clutter
+density term must transform consistently.
 
 ---
 
@@ -378,19 +467,9 @@ starts. Those roots are initialized from existence-probability priors.
 
 ### Why dynamic `P_D` matters
 
-A scalar `P_D` is often wrong in real systems.
-
-Detection probability can depend on:
-
-- sensor identity,
-- sensor mode,
-- field of view,
-- range,
-- aspect,
-- SNR,
-- target class,
-- weather or environmental state,
-- or scan geometry.
+A scalar `P_D` is often wrong in real systems. Detection probability depends on
+the sensor and its mode, target-relative geometry (range, aspect, field-of-view
+coverage), target properties (class, SNR), and environmental conditions.
 
 The most important case is finite coverage. If a predicted target is outside a
 sensor's field of view, then `P_D` should be close to zero. A miss should then
@@ -403,20 +482,13 @@ log(1 - P_D) ≈ 0
 That avoids unfairly penalizing a track for failing to appear in a sensor update
 where the sensor could not have detected it.
 
-This is especially important now that score-based deletion is enabled.
+This becomes especially important in conjunction with score-based deletion.
 
 ### Why dynamic `lambda` matters
 
-Clutter density can also depend on:
-
-- sensor identity,
-- measurement space,
-- range,
-- bearing,
-- Doppler,
-- weather,
-- ground/sea clutter regions,
-- or other scan context.
+Clutter density similarly depends on the sensor and measurement space, on the
+location within that measurement space (range, bearing, Doppler), and on
+environmental factors such as weather or ground/sea clutter regions.
 
 For hit hypotheses, the DPM receives both:
 
@@ -570,7 +642,7 @@ The tracker does not conceptually care whether the initiator is:
 - a simple measurement initiator,
 - a two-point initializer,
 - an M/N initiator,
-- or a domain-aware ISAC start generator.
+- or a domain-aware start generator.
 
 However, the current implementation still has internal-start guardrails and a
 per-scan cap. These are intended as tractability controls, not as part of the
@@ -1067,7 +1139,7 @@ important public parameters by purpose.
   `ConstantDetectionProbabilityModel`.
 - `log_epsilon`: numerical floor for safe logarithms.
 - `mahalanobis_gate_threshold`: local association gate used by the tracker-owned
-  default hypothesiser.
+  default hypothesiser, not used for custom hypothesisers.
 
 ### Start priors
 
@@ -1118,10 +1190,9 @@ Current important assumptions:
 
 - one sensor / measurement space per `update_tracker(...)` call,
 - each track can be associated with at most one detection per update,
-- the hypothesiser distance for detection hypotheses must be NLL only,
-- custom hypothesisers must return valid Stone Soup `MultipleHypothesis`
-  objects with finite `SingleDistanceHypothesis` entries, exactly one miss, and
-  detection hypotheses tied to the original scan detections,
+- tracker scoring assumes detection-hypothesis distance is NLL only;
+  `P_D`, `lambda`, birth terms, and other factors are applied separately by the tracker,
+- custom hypothesisers must satisfy the additional constraints listed in Section 4,
 - clutter density units must match the NLL measurement coordinates,
 - the tracker does not own generic birth-state initialization,
 - current internal-start candidates may be capped or skipped by implementation
