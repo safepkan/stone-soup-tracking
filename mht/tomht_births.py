@@ -15,7 +15,7 @@ from stonesoup.types.detection import Detection
 from stonesoup.types.track import Track
 from stonesoup.types.update import Update
 
-from .tomht_model import DetectionKey, TrackHypothesisNode
+from .tomht_model import DetectionKey, ScanContext, TrackHypothesisNode
 from .tomht_params import TOMHTParams
 from .tomht_scoring import (
     _existence_probability_to_log_odds,
@@ -23,7 +23,6 @@ from .tomht_scoring import (
 )
 from .tomht_stats import BirthStats
 from .tomht_tree_store import TrackTreeStore
-from .tomht_types import ScanContext
 
 
 @dataclass(frozen=True)

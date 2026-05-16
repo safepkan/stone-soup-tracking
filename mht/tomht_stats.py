@@ -13,9 +13,9 @@ from .tomht_model import (
     ClusterRebuildSnapshot,
     GlobalHypothesis,
     NScanCommitmentSnapshot,
+    ScanContext,
 )
 from .tomht_tree_store import TrackTreeStore
-from .tomht_types import ScanContext
 
 if TYPE_CHECKING:
     from .tomht_expansion import ExpansionCallStats

@@ -13,12 +13,11 @@ from stonesoup.types.hypothesis import SingleDistanceHypothesis, SingleHypothesi
 from stonesoup.types.multihypothesis import MultipleHypothesis
 from stonesoup.updater.base import Updater
 
-from .tomht_model import DetectionKey, TrackHypothesisNode, TrackTree
+from .tomht_model import DetectionKey, ScanContext, TrackHypothesisNode, TrackTree
 from .tomht_output import reconstruct_track_from_leaf_node
 from .tomht_params import TOMHTParams
 from .tomht_scoring import ScoringModel
 from .tomht_tree_store import TrackTreeStore
-from .tomht_types import ScanContext
 from .utils import elapsed_ns, start_timer
 
 

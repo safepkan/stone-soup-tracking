@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import datetime
 from typing import Literal, Mapping, NamedTuple
 
+from stonesoup.types.detection import Detection
 from stonesoup.types.state import State
 
 
@@ -77,6 +78,22 @@ class GlobalHypothesis:
 
     leaf_nodes_by_track_id: dict[int, TrackHypothesisNode]
     log_weight: float
+
+
+@dataclass(frozen=True)
+class ScanContext:
+    """Internal per-scan TOMHT bookkeeping.
+
+    ``caller_scan_context`` is opaque caller-provided scan data threaded to the
+    DetectionProbabilityModel. It is intentionally separate from the internal
+    bookkeeping fields in this dataclass.
+    """
+
+    scan_index: int
+    timestamp: datetime.datetime
+    detections: list[Detection]
+    det_index_by_obj: dict[int, int]
+    caller_scan_context: object | None = None
 
 
 @dataclass(frozen=True)

@@ -22,7 +22,7 @@ The tracker is now a practical track-oriented TO-MHT implementation in the sense
 - output publication is a sticky tree-level boundary separate from internal confirmation,
 - and scoring is now an additive NLL/LLR model with explicit detection-probability and clutter-density inputs.
 
-The code treats track trees as the primary persistent state. Rebuilt globals, cluster snapshots, and scan stats are retained as last-scan inspection/debug artifacts rather than as long-lived frontier state.
+The code treats track trees as the primary persistent state. Rebuilt globals, cluster snapshots, internal scan context, and scan stats are retained as last-scan inspection/debug artifacts rather than as long-lived frontier state. Passive model/data containers, including `ScanContext`, live in `mht/tomht_model.py`.
 
 Scan stats now include expansion/frontier usefulness counters: active tree/leaf
 counts at the main scan-pipeline boundaries, expanded leaves and local child

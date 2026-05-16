@@ -24,13 +24,13 @@ from .tomht_model import (
     ClusterRebuildSnapshot,
     DetectionKey,
     GlobalHypothesis,
+    ScanContext,
     TrackHypothesisNode,
 )
 from .tomht_params import TOMHTParams
 from .tomht_stats import RebuildStats
 from .tomht_tree_store import TrackTreeStore
 from .tomht_tree_utils import live_conflict_keys_for_leaf
-from .tomht_types import ScanContext
 
 
 @dataclass(frozen=True)

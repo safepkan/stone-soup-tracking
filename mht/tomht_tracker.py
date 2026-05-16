@@ -73,6 +73,7 @@ from .tomht_model import (
     GlobalHypothesis,
     MAPHypothesisSnapshot,
     NScanCommitmentSnapshot,
+    ScanContext,
     TrackHypothesisNode,
     TrackTree,
 )
@@ -93,7 +94,6 @@ from .tomht_pruning import (
     apply_map_n_scan_pruning,
     apply_post_solve_supported_leaf_pruning,
 )
-from .tomht_types import ScanContext
 from .tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from .tomht_scoring import (
     ConstantDetectionProbabilityModel,

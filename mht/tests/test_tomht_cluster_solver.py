@@ -8,6 +8,7 @@ from mht.tomht_cluster_solver import (
     ClusterSolverTrackOptions,
 )
 from mht.tomht_cluster_solver_exhaustive import ExhaustiveClusterSolver
+from mht.tomht_model import DetectionKey
 
 
 def _leaf(
@@ -21,7 +22,10 @@ def _leaf(
         leaf_id=leaf_id,
         track_id=track_id,
         score=score,
-        full_history_conflict_keys=frozenset(conflict_keys),
+        full_history_conflict_keys=frozenset(
+            DetectionKey(scan_index=scan_index, det_index=det_index)
+            for scan_index, det_index in conflict_keys
+        ),
     )
 
 

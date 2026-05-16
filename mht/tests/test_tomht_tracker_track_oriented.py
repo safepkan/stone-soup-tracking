@@ -25,6 +25,7 @@ from mht.tomht_model import (
     ClusterRebuildSnapshot,
     DetectionKey,
     GlobalHypothesis,
+    ScanContext,
     TrackHypothesisNode,
 )
 from mht.tomht_clustering import build_track_clusters
@@ -37,7 +38,6 @@ from mht.tomht_scoring import (
 from mht.tomht_tree_store import TrackTreeStore
 from mht.tomht_tree_utils import live_conflict_keys_for_leaf
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
-from mht.tomht_types import ScanContext
 
 
 class _ScriptedHypothesiser:

@@ -10,7 +10,7 @@ from stonesoup.types.detection import Detection, MissedDetection
 from stonesoup.types.hypothesis import SingleDistanceHypothesis
 from stonesoup.types.prediction import Prediction
 
-from .tomht_types import ScanContext
+from .tomht_model import ScanContext
 
 
 def _existence_probability_to_log_odds(

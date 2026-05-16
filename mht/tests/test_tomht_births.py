@@ -16,9 +16,8 @@ from mht.tomht_births import (
     residual_detection_indices_after_expansion,
     select_internal_birth_candidates,
 )
-from mht.tomht_model import DetectionKey, TrackHypothesisNode
+from mht.tomht_model import DetectionKey, ScanContext, TrackHypothesisNode
 from mht.tomht_params import TOMHTParams
-from mht.tomht_types import ScanContext
 
 
 def _track_with_state(
@@ -100,9 +99,7 @@ class TOMHTBirthHelpersTest(unittest.TestCase):
             assoc_label=-2,
             log_delta=0.0,
             accumulated_log_score=0.0,
-            detection_history_keys=frozenset(
-                {DetectionKey(scan_index=0, det_index=1)}
-            ),
+            detection_history_keys=frozenset({DetectionKey(scan_index=0, det_index=1)}),
             age=1,
             hits=0,
             missed_count=1,

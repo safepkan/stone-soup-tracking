@@ -16,7 +16,7 @@ from mht.tomht_scoring import (
     NLLScoringModel,
     maybe_log_scoring_diagnostics,
 )
-from mht.tomht_types import ScanContext
+from mht.tomht_model import ScanContext
 
 
 def _detection(x: float, timestamp: datetime.datetime) -> Detection:
