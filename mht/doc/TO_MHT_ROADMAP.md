@@ -85,7 +85,7 @@ Avoid mixing concepts that are now cleanly separated:
 - publication controls output visibility,
 - DPM calibrates local evidence,
 - initiators own state initialization and candidate validity,
-- solver exactness is per rebuilt cluster/subcluster, while overload/relaxation are explicit guardrails.
+- solver exactness is per rebuilt cluster/subcluster, while overload splitting is an explicit guardrail.
 
 ### 2.4 Treat docs as part of the handoff
 
@@ -149,7 +149,6 @@ For external-start-only integrations this is less urgent, but it remains importa
 Current pragmatic mechanisms include:
 
 - overload cluster splitting,
-- historical-conflict relaxation,
 - local leaf caps,
 - internal birth load guards.
 
@@ -158,7 +157,6 @@ These are explicit and useful but not conceptually final.
 This topic includes:
 
 - documenting/validating when each approximation is acceptable,
-- deciding how approximation-induced overlap should be treated,
 - whether overload-split clusters should participate in supported-leaf pruning differently,
 - how guardrails should interact with future score/frontier pruning.
 
@@ -309,7 +307,6 @@ This branch may follow expansion-volume work or be interleaved if expansion anal
 ### Approximation work should include
 
 - overload split semantics,
-- historical relaxation semantics,
 - supported-leaf pruning behavior for split clusters,
 - interaction with future score/frontier pruning.
 
@@ -390,4 +387,3 @@ At this checkpoint:
 4. API and integration assumptions are now documented.
 5. The tracker is modular enough for targeted subsystem work.
 6. The next main technical phase should return to **local expansion volume / frontier control**.
-

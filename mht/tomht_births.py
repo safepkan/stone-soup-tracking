@@ -24,7 +24,6 @@ from .tomht_scoring import (
 from .tomht_stats import BirthStats
 from .tomht_tree_store import TrackTreeStore
 from .tomht_types import ScanContext
-from .tomht_utils import current_scan_det_indices_from_keys
 
 
 @dataclass(frozen=True)
@@ -158,10 +157,11 @@ def residual_detection_indices_after_expansion(
     """Return current-scan detection indices unused after local expansion."""
     used_current_scan_det_indices: set[int] = set()
     for leaf in active_leaf_nodes:
-        used_current_scan_det_indices |= current_scan_det_indices_from_keys(
-            leaf.detection_history_keys,
-            ctx.scan_index,
-        )
+        if (
+            leaf.used_det_key is not None
+            and int(leaf.used_det_key[0]) == ctx.scan_index
+        ):
+            used_current_scan_det_indices.add(int(leaf.used_det_key[1]))
     return [
         i for i in range(len(ctx.detections)) if i not in used_current_scan_det_indices
     ]

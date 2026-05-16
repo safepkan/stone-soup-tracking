@@ -26,11 +26,17 @@ from mht.tomht_model import (
     GlobalHypothesis,
     TrackHypothesisNode,
 )
+from mht.tomht_clustering import build_track_clusters
+from mht.tomht_cluster_rebuild import rebuild_cluster_globals
+from mht.tomht_cluster_solver_factory import make_cluster_solver
 from mht.tomht_scoring import (
     ConstantDetectionProbabilityModel,
     DetectionProbabilityModel,
 )
+from mht.tomht_tree_store import TrackTreeStore
+from mht.tomht_tree_utils import live_conflict_keys_for_leaf
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
+from mht.tomht_types import ScanContext
 
 
 class _ScriptedHypothesiser:
@@ -450,6 +456,79 @@ def _tracker_with_manual_frontier(
     return tracker, leaves
 
 
+def _add_manual_tree_with_committed_prefix(
+    store: TrackTreeStore,
+    *,
+    root_x: float,
+    live_hit_det_key: tuple[int, int] | None,
+    live_hit_score: float,
+    live_miss_score: float | None = None,
+) -> tuple[int, TrackHypothesisNode | None, TrackHypothesisNode | None]:
+    t1 = datetime.datetime(2026, 3, 28, 10, 0, 1)
+    t2 = t1 + datetime.timedelta(seconds=1)
+    root = store.create_root_tree_for_new_track(
+        scan_index=1,
+        timestamp=t1,
+        state=_state(root_x, t1),
+        state_kind="manual_root",
+        used_det_key=(1, 0),
+        assoc_label=0,
+        log_delta=0.0,
+        age=1,
+        hits=1,
+        root_source="manual",
+    )
+    tree = store.track_trees_by_track_id[root.track_id]
+    self_key = (1, 0)
+    tree.committed_detection_keys = frozenset({self_key})
+
+    hit_leaf: TrackHypothesisNode | None = None
+    miss_leaf: TrackHypothesisNode | None = None
+    active_leaf_ids: set[int] = set()
+    if live_hit_det_key is not None:
+        hit_leaf = store.create_track_hypothesis_node(
+            track_id=root.track_id,
+            parent=root,
+            scan_index=2,
+            timestamp=t2,
+            state=_state(root_x + 1.0, t2),
+            state_kind="manual_hit",
+            used_det_key=live_hit_det_key,
+            assoc_label=int(live_hit_det_key[1]),
+            log_delta=live_hit_score,
+            age=2,
+            hits=2,
+            missed_count=0,
+            last_det_key=live_hit_det_key,
+            last_det_hit=True,
+            root_source=root.root_source,
+            birth_scan_index=root.birth_scan_index,
+        )
+        active_leaf_ids.add(hit_leaf.node_id)
+    if live_miss_score is not None:
+        miss_leaf = store.create_track_hypothesis_node(
+            track_id=root.track_id,
+            parent=root,
+            scan_index=2,
+            timestamp=t2,
+            state=_state(root_x, t2),
+            state_kind="manual_miss",
+            used_det_key=None,
+            assoc_label=TOMHTTracker.ASSOC_MISS,
+            log_delta=live_miss_score,
+            age=2,
+            hits=1,
+            missed_count=1,
+            last_det_key=root.last_det_key,
+            last_det_hit=False,
+            root_source=root.root_source,
+            birth_scan_index=root.birth_scan_index,
+        )
+        active_leaf_ids.add(miss_leaf.node_id)
+    tree.active_leaf_node_ids = active_leaf_ids
+    return root.track_id, hit_leaf, miss_leaf
+
+
 class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
     def test_explicit_trees_clustering_and_rebuilt_globals(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
@@ -520,6 +599,93 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
 
         tree_snapshot = tracker.get_track_tree_snapshot()
         self.assertEqual({0, 1}, set(tree_snapshot.keys()))
+
+    def test_track_tree_committed_detection_keys_start_empty(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+
+        tree = tracker.track_trees_by_track_id[0]
+        self.assertEqual(frozenset(), tree.committed_detection_keys)
+
+    def test_clustering_ignores_committed_prefix_only_conflicts(self) -> None:
+        store = TrackTreeStore()
+        _add_manual_tree_with_committed_prefix(
+            store,
+            root_x=0.0,
+            live_hit_det_key=(2, 0),
+            live_hit_score=5.0,
+        )
+        _add_manual_tree_with_committed_prefix(
+            store,
+            root_x=10.0,
+            live_hit_det_key=(2, 1),
+            live_hit_score=5.0,
+        )
+
+        clusters = build_track_clusters(tree_store=store, scan_index=2)
+
+        self.assertEqual([(0,), (1,)], [cluster.track_ids for cluster in clusters])
+        self.assertTrue(all(not cluster.conflict_links for cluster in clusters))
+
+    def test_live_unresolved_conflicts_are_enforced_by_cluster_solver(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
+        store = TrackTreeStore()
+        track0_id, track0_hit, track0_miss = _add_manual_tree_with_committed_prefix(
+            store,
+            root_x=0.0,
+            live_hit_det_key=(2, 0),
+            live_hit_score=10.0,
+            live_miss_score=9.0,
+        )
+        track1_id, track1_hit, _ = _add_manual_tree_with_committed_prefix(
+            store,
+            root_x=10.0,
+            live_hit_det_key=(2, 0),
+            live_hit_score=10.0,
+        )
+        self.assertIsNotNone(track0_hit)
+        self.assertIsNotNone(track0_miss)
+        self.assertIsNotNone(track1_hit)
+
+        clusters = build_track_clusters(tree_store=store, scan_index=2)
+        self.assertEqual(1, len(clusters))
+        self.assertEqual((track0_id, track1_id), clusters[0].track_ids)
+        self.assertEqual(
+            ((track0_id, track1_id, ((2, 0),)),), clusters[0].conflict_links
+        )
+
+        ctx = ScanContext(
+            scan_index=2,
+            timestamp=timestamp,
+            detections=[_detection(1.0, 1.0, timestamp)],
+            det_index_by_obj={},
+        )
+        snapshots, stats = rebuild_cluster_globals(
+            clusters=clusters,
+            ctx=ctx,
+            tree_store=store,
+            params=TOMHTParams(
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+            cluster_solver=make_cluster_solver("branch_and_bound"),
+        )
+
+        self.assertEqual(1, len(snapshots))
+        self.assertEqual(1, stats.feasible_combinations)
+        map_global = snapshots[0].map_global
+        self.assertIsNotNone(map_global)
+        assert map_global is not None
+        self.assertIs(map_global.leaf_nodes_by_track_id[track0_id], track0_miss)
+        self.assertIs(map_global.leaf_nodes_by_track_id[track1_id], track1_hit)
 
     def test_track_confirmation_uses_max_active_leaf_score(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
@@ -2025,6 +2191,22 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
             timestamp=t1, track_id=0, options=[(0, 5.0), (None, 0.0)]
         )
         tracker.update_tracker(t1, [_detection(1.0, 1.0, t1)])
+        scan1_map = tracker.get_map_hypothesis_snapshot()
+        self.assertIsNotNone(scan1_map)
+        assert scan1_map is not None
+        scan1_leaf = scan1_map.leaf_nodes_by_track_id[0]
+        tree_before_detection_commit = tracker.track_trees_by_track_id[0]
+        self.assertEqual(
+            frozenset(),
+            tree_before_detection_commit.committed_detection_keys,
+        )
+        self.assertEqual(
+            scan1_leaf.detection_history_keys,
+            live_conflict_keys_for_leaf(
+                leaf=scan1_leaf,
+                tree=tree_before_detection_commit,
+            ),
+        )
 
         hypothesiser.set_options(
             timestamp=t2, track_id=0, options=[(0, 5.0), (None, 0.0)]
@@ -2033,6 +2215,10 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
 
         tree_after_first_prune = tracker.track_trees_by_track_id[0]
         self.assertEqual(1, len(tree_after_first_prune.committed_states))
+        self.assertEqual(
+            frozenset({(1, 0)}),
+            tree_after_first_prune.committed_detection_keys,
+        )
 
         hypothesiser.set_options(
             timestamp=t3, track_id=0, options=[(0, 5.0), (None, 0.0)]
@@ -2041,6 +2227,21 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
 
         tree_after_second_prune = tracker.track_trees_by_track_id[0]
         self.assertEqual(2, len(tree_after_second_prune.committed_states))
+        self.assertEqual(
+            frozenset({(1, 0), (2, 0)}),
+            tree_after_second_prune.committed_detection_keys,
+        )
+        scan3_map = tracker.get_map_hypothesis_snapshot()
+        self.assertIsNotNone(scan3_map)
+        assert scan3_map is not None
+        scan3_leaf = scan3_map.leaf_nodes_by_track_id[0]
+        self.assertEqual(
+            frozenset({(3, 0)}),
+            live_conflict_keys_for_leaf(
+                leaf=scan3_leaf,
+                tree=tree_after_second_prune,
+            ),
+        )
         committed_x = [
             float(np.asarray(state.state_vector, dtype=float).reshape(-1)[0])
             for state in tree_after_second_prune.committed_states

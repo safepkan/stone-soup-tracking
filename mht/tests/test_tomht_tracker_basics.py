@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import datetime
+from pathlib import Path
 import unittest
 from typing import Any, Callable, Iterable
 
@@ -15,6 +16,7 @@ from stonesoup.types.track import Track
 
 from mht.tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from mht.tomht_scoring import ConstantDetectionProbabilityModel, NLLScoringModel
+from mht.tomht_stats import RebuildStats, ScanStats
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
 
 
@@ -149,6 +151,33 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
         self.assertNotIn("birth_density", param_fields)
         self.assertNotIn("birth_max_abs_pos", param_fields)
         self.assertNotIn("birth_max_covar_trace", param_fields)
+        self.assertNotIn("historical_conflict_relaxation_enabled", param_fields)
+
+    def test_historical_relaxation_runtime_stats_are_absent(self) -> None:
+        rebuild_fields = RebuildStats.__dataclass_fields__
+        scan_fields = ScanStats.__dataclass_fields__
+
+        for field_name in (
+            "historical_relaxation_attempts",
+            "historical_relaxation_successes",
+            "historical_relaxed_keys_total",
+        ):
+            with self.subTest(field_name=field_name):
+                self.assertNotIn(field_name, rebuild_fields)
+                self.assertNotIn(field_name, scan_fields)
+
+    def test_active_conflict_code_uses_live_conflict_helpers(self) -> None:
+        mht_dir = Path(__file__).resolve().parents[1]
+        active_conflict_modules = [
+            "tomht_clustering.py",
+            "tomht_cluster_rebuild.py",
+            "tomht_births.py",
+        ]
+
+        for module_name in active_conflict_modules:
+            with self.subTest(module_name=module_name):
+                source = (mht_dir / module_name).read_text(encoding="utf-8")
+                self.assertNotIn("leaf.detection_history_keys", source)
 
     def test_constructor_builds_nll_scoring_model_from_params(self) -> None:
         params = TOMHTParams(

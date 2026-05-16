@@ -145,7 +145,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     6. Rebuild feasible globals per cluster through the exact cluster-solver
        contract (default backend = branch-and-bound exact search) and choose MAP per
        cluster; overloaded clusters may first be approximately decomposed by
-       severing weakest full-history conflict edges.
+       severing weakest live conflict edges.
     7. Post-solve prune each cluster tree frontier to leaves supported by at
        least one retained rebuilt top-K global for that cluster.
     8. Merge cluster MAP selections into full-scan MAP.
@@ -160,10 +160,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
     Behavior notes for readability:
     - Exact behavior: cluster feasibility checks and exclusivity constraints use
-      full detection-history keys on active leaves.
+      live unresolved detection keys on active leaves.
     - Safety valves: pre-solve per-tree leaf capping and birth load guards.
-    - Approximation paths: overload cluster decomposition and optional narrow
-      historical-conflict relaxation.
+    - Approximation paths: overload cluster decomposition.
     - Inspection/debug retention: last-scan cluster snapshots and scan stats.
     """
 
@@ -823,7 +822,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # =========================================================================
 
     def _build_track_clusters(self, ctx: ScanContext) -> list[_ClusterWorkItem]:
-        """Build independent clusters from shared active-leaf history detections."""
+        """Build independent clusters from shared active-leaf live detections."""
         return build_track_clusters(
             tree_store=self._tree_store,
             scan_index=ctx.scan_index,
@@ -989,11 +988,16 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 track_ids=cluster.track_ids,
                 tree_store=self._tree_store,
             )
-            if has_any_feasible_cluster_combination(leaf_options):
+            if has_any_feasible_cluster_combination(
+                cluster=cluster,
+                leaf_options=leaf_options,
+                tree_store=self._tree_store,
+            ):
                 continue
             dbg = infeasible_cluster_debug_summary(
                 cluster=cluster,
                 leaf_options=leaf_options,
+                tree_store=self._tree_store,
                 ctx=ctx,
             )
             raise RuntimeError(

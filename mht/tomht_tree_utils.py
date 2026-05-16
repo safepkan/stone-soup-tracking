@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from .tomht_model import TrackHypothesisNode
+from .tomht_model import DetectionKey, TrackHypothesisNode, TrackTree
+
+
+def live_conflict_keys_for_leaf(
+    *,
+    leaf: TrackHypothesisNode,
+    tree: TrackTree,
+) -> frozenset[DetectionKey]:
+    """Return unresolved-window conflict keys for one active leaf."""
+    return frozenset(leaf.detection_history_keys - tree.committed_detection_keys)
 
 
 def child_of_root_on_path(

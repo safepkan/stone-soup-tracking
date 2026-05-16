@@ -64,6 +64,7 @@ class TrackTree:
     publication_state: TrackPublicationState = "unpublished"
     public_track_id: object | None = None
     committed_states: list[State] = field(default_factory=list)
+    committed_detection_keys: frozenset[DetectionKey] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)

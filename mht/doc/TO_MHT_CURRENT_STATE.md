@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, and module-extraction cleanup completed through **2026-05-15**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, and live conflict-key cleanup completed through **2026-05-16**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -108,7 +108,7 @@ Important extracted modules include:
 - `tomht_births.py` for internal-birth residual/candidate handling,
 - `tomht_external_starts.py` for external-start validation/insertion,
 - `tomht_clustering.py` for cluster construction and overload decomposition,
-- `tomht_cluster_rebuild.py` for cluster option materialization, exact solve orchestration, relaxation retry, and MAP merge,
+- `tomht_cluster_rebuild.py` for cluster option materialization, exact solve orchestration, and MAP merge,
 - `tomht_pruning.py` for post-solve supported-leaf pruning and MAP-only N-scan pruning,
 - `tomht_lifecycle.py` for confirmation, score deletion, miss/deleter lifecycle, and live-MAP filtering,
 - `tomht_output.py` for publication policy, public-ID assignment, and output reconstruction,
@@ -125,7 +125,7 @@ Persistent scan-to-scan state consists primarily of:
 - explicit `TrackTree` objects keyed by internal logical `track_id`,
 - persistent `TrackHypothesisNode` objects linked by same-track parent/child structure,
 - each tree's current unresolved root and active leaf set,
-- each tree's committed prefix history before the unresolved root,
+- each tree's committed prefix states and committed detection keys from fixed pre-frontier branch decisions,
 - tree-level lifecycle/publication state,
 - public ID assignment state,
 - N-scan commitment bookkeeping,
@@ -170,6 +170,7 @@ Nodes are mutable in this phase so child-link bookkeeping can be maintained dire
 - active leaf node IDs,
 - `root_source`,
 - committed prefix states,
+- committed prefix detection keys,
 - sticky `lifecycle_state` (`tentative` / `confirmed`),
 - sticky `publication_state` (`unpublished` / `published`),
 - optional `public_track_id` assigned at first publication.
@@ -186,8 +187,8 @@ The current runtime pipeline is:
 2. expand active leaves in every persistent tree,
 3. remove empty trees,
 4. optionally create internal birth trees from residual detections,
-5. build full-history conflict clusters,
-6. rebuild feasible globals per cluster through the exact cluster-solver contract, with overload splitting and historical-relaxation retry as explicit guardrails,
+5. build live unresolved conflict clusters,
+6. rebuild feasible globals per cluster through the exact cluster-solver contract, with overload splitting as the explicit cluster-size guardrail,
 7. post-solve prune each non-overload-split cluster tree frontier to leaves supported by retained rebuilt globals,
 8. merge cluster MAP selections into a full-scan MAP global,
 9. apply MAP-only N-scan pruning on explicit trees,
@@ -378,14 +379,13 @@ A dedicated solver seam exists:
 The exact cluster problem contract carries:
 
 - one leaf option per track choice,
-- full-history conflict keys for feasibility,
+- live unresolved conflict keys for feasibility,
 - pre-scored accumulated leaf scores,
 - retain up to K best feasible combinations.
 
 Tracker-side approximation/policy remains outside the solver:
 
-- overload splitting is a pre-solve cluster transformation,
-- historical-conflict relaxation is an around-solver retry policy.
+- overload splitting is a pre-solve cluster transformation.
 
 ### Branch-and-bound default
 
@@ -395,7 +395,7 @@ The backend:
 
 - performs deterministic depth-first exact search over ordered tracks,
 - uses a 1-track fast path,
-- enforces full-history conflict-key exclusivity exactly,
+- enforces supplied live conflict-key exclusivity exactly,
 - orders tracks/leaves deterministically,
 - uses suffix-score optimistic bounds for pruning,
 - retains exact K-best solutions through the shared deterministic heap.
@@ -446,7 +446,14 @@ These changes improved expansion timing, but the next likely leverage is expansi
 
 ### Clustering
 
-Clusters are built from full active-leaf historical detection-key overlap, not only current-scan overlap. This keeps clustering and solver feasibility aligned around full-history exclusivity.
+Clusters are built from live unresolved active-leaf detection-key overlap, not only current-scan overlap. Each node still caches its full lineage in `detection_history_keys`, while each `TrackTree` stores detection keys from branch decisions fixed by N-scan promotion in `committed_detection_keys`. Active conflict keys are computed as:
+
+```text
+leaf.detection_history_keys - tree.committed_detection_keys
+```
+
+This keeps clustering and solver feasibility aligned while avoiding constraints from committed pre-root history that the current unresolved frontier can no longer change.
+Historical-conflict relaxation has been removed from this path.
 
 ### Global rebuild
 
@@ -472,6 +479,7 @@ N-scan pruning is MAP-only:
 - promote the child of the current root on the MAP path,
 - remove siblings structurally,
 - append committed states to the tree's committed prefix,
+- add the promoted child's full detection history to the tree's committed detection keys,
 - update commitment snapshot and disagreement stats.
 
 Default `ns_scan_window` remains `6`.
@@ -481,9 +489,8 @@ Default `ns_scan_window` remains `6`.
 The explicit approximation/safety mechanisms are:
 
 1. overload cluster splitting,
-2. narrow historical-conflict relaxation retry,
-3. internal birth load guards,
-4. pre-solve local leaf caps.
+2. internal birth load guards,
+3. pre-solve local leaf caps.
 
 These are pragmatic robustness/tractability mechanisms and remain conceptually provisional. They should be revisited as expansion-volume and frontier-control work proceeds.
 
@@ -511,7 +518,7 @@ Per-scan and summary instrumentation reports include:
 - clusters and rebuild stats,
 - evaluated/feasible combinations,
 - solver diagnostics,
-- overload split and historical-relaxation counters,
+- overload split counters,
 - N-scan commitment counts,
 - birth statistics,
 - lifecycle deletion reasons,
@@ -533,7 +540,7 @@ The following are solid enough to treat as the current base architecture:
 
 - explicit `TrackTree` + `TrackHypothesisNode` persistence,
 - scan-to-scan persistence through trees rather than globals,
-- full-history detection-key exclusivity semantics,
+- live unresolved detection-key exclusivity semantics with full-lineage node caches,
 - per-scan rebuilt cluster globals,
 - exact cluster-solver seam,
 - branch-and-bound as default exact backend,
@@ -570,7 +577,7 @@ Internal birth candidate selection is now state-layout agnostic, but its ranking
 
 ### 4. Approximation semantics
 
-Overload splitting and historical-conflict relaxation are explicit but not conceptually final. Their interaction with future pruning/volume controls should be reviewed.
+Overload splitting remains active but is not conceptually final. Its interaction with future pruning/volume controls should be reviewed separately.
 
 ### 5. Tracking quality / false-start / target-jump review
 

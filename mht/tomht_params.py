@@ -66,9 +66,6 @@ class TOMHTParams:
     # known to be unsafe on standard replay because split-local support can
     # remove leaves needed for a later globally feasible recombination.
     overload_split_supported_pruning_policy: str = "skip"
-    # Narrow safety-net: if an exact cluster is infeasible, allow relaxation only
-    # for forced historical keys that are already shared across tracks.
-    historical_conflict_relaxation_enabled: bool = True
 
     # Scoring / numerical behavior.
     # prob_detect and clutter_density are scalar defaults used by

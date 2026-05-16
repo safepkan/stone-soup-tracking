@@ -8,6 +8,7 @@ from typing import Iterable, Mapping
 from .tomht_model import DetectionKey, TrackHypothesisNode, TrackTree
 from .tomht_params import TOMHTParams
 from .tomht_tree_store import TrackTreeStore
+from .tomht_tree_utils import live_conflict_keys_for_leaf
 
 
 @dataclass(frozen=True)
@@ -27,7 +28,7 @@ class OverloadSplitRemovedEdge:
 
     left_track_id: int
     right_track_id: int
-    shared_history_key_count: int
+    shared_live_key_count: int
 
 
 @dataclass(frozen=True)
@@ -59,16 +60,16 @@ def current_scan_candidate_keys_for_tree(
     return keys
 
 
-def history_conflict_keys_for_tree(
+def live_conflict_keys_for_tree(
     *,
     tree: TrackTree,
     nodes_by_id: Mapping[int, TrackHypothesisNode],
 ) -> set[DetectionKey]:
-    """Return all detection-history keys present in this tree's active leaves."""
+    """Return unresolved conflict keys present in this tree's active leaves."""
     keys: set[DetectionKey] = set()
     for leaf_id in tree.active_leaf_node_ids:
         leaf = nodes_by_id[leaf_id]
-        keys |= set(leaf.detection_history_keys)
+        keys |= set(live_conflict_keys_for_leaf(leaf=leaf, tree=tree))
     return keys
 
 
@@ -77,15 +78,15 @@ def build_track_clusters(
     tree_store: TrackTreeStore,
     scan_index: int,
 ) -> list[ClusterWorkItem]:
-    """Build independent clusters from shared active-leaf history detections."""
+    """Build independent clusters from shared active-leaf live detections."""
     track_trees_by_track_id = tree_store.track_trees_by_track_id
     nodes_by_id = tree_store.nodes_by_id
     track_ids = sorted(track_trees_by_track_id.keys())
     if not track_ids:
         return []
 
-    history_keys_by_track: dict[int, set[DetectionKey]] = {
-        track_id: history_conflict_keys_for_tree(
+    live_keys_by_track: dict[int, set[DetectionKey]] = {
+        track_id: live_conflict_keys_for_tree(
             tree=track_trees_by_track_id[track_id],
             nodes_by_id=nodes_by_id,
         )
@@ -105,8 +106,7 @@ def build_track_clusters(
     for i, left_track_id in enumerate(track_ids):
         for right_track_id in track_ids[i + 1 :]:
             shared = (
-                history_keys_by_track[left_track_id]
-                & history_keys_by_track[right_track_id]
+                live_keys_by_track[left_track_id] & live_keys_by_track[right_track_id]
             )
             if not shared:
                 continue
@@ -224,7 +224,7 @@ def connected_components_from_pairs(
 def cluster_edge_strengths(
     cluster: ClusterWorkItem,
 ) -> dict[tuple[int, int], int]:
-    """Return conflict-edge strengths = shared full-history key counts."""
+    """Return conflict-edge strengths = shared live-key counts."""
     strengths: dict[tuple[int, int], int] = {}
     for left_track_id, right_track_id, shared_keys in cluster.conflict_links:
         strengths[canonical_edge_pair(left_track_id, right_track_id)] = len(shared_keys)
@@ -298,7 +298,7 @@ def split_overloaded_cluster(
             OverloadSplitRemovedEdge(
                 left_track_id=left_track_id,
                 right_track_id=right_track_id,
-                shared_history_key_count=strength,
+                shared_live_key_count=strength,
             )
         )
 

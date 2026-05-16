@@ -24,7 +24,7 @@ The tracker owns:
 - additive score accumulation,
 - measurement-exclusivity clustering,
 - exact solving within rebuilt clusters/subclusters,
-- optional overload/relaxation guardrails around cluster rebuilds,
+- optional overload splitting around cluster rebuilds,
 - N-scan pruning,
 - whole-track confirmation and deletion,
 - sticky output publication,
@@ -45,6 +45,13 @@ This separation is intentional. TOMHT should not know whether detections come
 from radar, bearing/range sensors, ISAC processing, or a synthetic scenario. It
 should only know how to manage hypotheses and apply scores once the caller has
 provided the Stone Soup components and probabilistic assumptions.
+
+Internally, node `detection_history_keys` remain a full-lineage cache for
+diagnostics and reconstruction. Active clustering and solving use live
+unresolved conflict keys, computed by subtracting
+`TrackTree.committed_detection_keys` from that full lineage after N-scan
+promotion fixes root-branch choices. Historical conflict relaxation is not part
+of the runtime path.
 
 ---
 
@@ -1064,7 +1071,6 @@ These controls are implementation safety valves and are subject to revision:
 - `overload_split_supported_pruning_policy`: experimental overload-split
   supported-leaf pruning policy, default `"skip"`; set `"apply"` to prune
   overload subclusters like normal clusters.
-- historical conflict relaxation
 - `ns_scan_window`
 
 Tune the probabilistic model first. Use these controls to keep computation

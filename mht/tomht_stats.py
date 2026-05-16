@@ -38,9 +38,6 @@ class RebuildStats:
     nscan_disagreement_total: int = 0
     overload_split_clusters: int = 0
     overload_split_operations: int = 0
-    historical_relaxation_attempts: int = 0
-    historical_relaxation_successes: int = 0
-    historical_relaxed_keys_total: int = 0
 
 
 @dataclass(frozen=True)
@@ -125,9 +122,6 @@ class ScanStats:
     nscan_disagreement_total: int
     overload_split_clusters: int
     overload_split_operations: int
-    historical_relaxation_attempts: int
-    historical_relaxation_successes: int
-    historical_relaxed_keys_total: int
     nscan_boundary_scan_index: int
     nscan_tracks_in_scope: int
     nscan_tracks_committed: int
@@ -434,9 +428,6 @@ def build_scan_stats(
         nscan_disagreement_total=rebuild_stats.nscan_disagreement_total,
         overload_split_clusters=rebuild_stats.overload_split_clusters,
         overload_split_operations=rebuild_stats.overload_split_operations,
-        historical_relaxation_attempts=rebuild_stats.historical_relaxation_attempts,
-        historical_relaxation_successes=rebuild_stats.historical_relaxation_successes,
-        historical_relaxed_keys_total=rebuild_stats.historical_relaxed_keys_total,
         nscan_boundary_scan_index=nscan_boundary_scan_index,
         nscan_tracks_in_scope=nscan_tracks_in_scope,
         nscan_tracks_committed=nscan_tracks_committed,
@@ -500,9 +491,6 @@ def print_scan_stats(
         f"rebuilt_globals={scan_stats.rebuilt_globals_stored} "
         f"split_clusters={scan_stats.overload_split_clusters} "
         f"split_ops={scan_stats.overload_split_operations} "
-        f"hist_relax_attempts={scan_stats.historical_relaxation_attempts} "
-        f"hist_relax_ok={scan_stats.historical_relaxation_successes} "
-        f"hist_relax_keys={scan_stats.historical_relaxed_keys_total} "
         f"nscan boundary={scan_stats.nscan_boundary_scan_index} "
         f"in_scope={scan_stats.nscan_tracks_in_scope} "
         f"committed_now={scan_stats.nscan_tracks_committed} "
@@ -650,9 +638,6 @@ def print_summary_stats(
     rebuilt = [s.rebuilt_globals_stored for s in stats]
     split_clusters = [s.overload_split_clusters for s in stats]
     split_ops = [s.overload_split_operations for s in stats]
-    hist_relax_attempts = [s.historical_relaxation_attempts for s in stats]
-    hist_relax_ok = [s.historical_relaxation_successes for s in stats]
-    hist_relax_keys = [s.historical_relaxed_keys_total for s in stats]
     disagree = [s.nscan_disagreement_total for s in stats]
 
     birth_created = [s.birth_tracks_created for s in stats]
@@ -794,11 +779,7 @@ def print_summary_stats(
         f"comb_feas med={median(comb_feas):.1f} max={max(comb_feas)} "
         f"globals med={median(rebuilt):.1f} max={max(rebuilt)} "
         f"split_clusters med={median(split_clusters):.1f} max={max(split_clusters)} "
-        f"split_ops med={median(split_ops):.1f} max={max(split_ops)} "
-        "hist_relax_attempts med="
-        f"{median(hist_relax_attempts):.1f} max={max(hist_relax_attempts)} "
-        f"hist_relax_ok med={median(hist_relax_ok):.1f} max={max(hist_relax_ok)} "
-        f"hist_relax_keys med={median(hist_relax_keys):.1f} max={max(hist_relax_keys)}"
+        f"split_ops med={median(split_ops):.1f} max={max(split_ops)}"
     )
     print(
         "SUMMARY timing "

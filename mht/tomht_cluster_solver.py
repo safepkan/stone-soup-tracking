@@ -17,7 +17,11 @@ from .tomht_model import DetectionKey
 
 @dataclass(frozen=True)
 class ClusterSolverLeafOption:
-    """One solver-facing leaf option for one track."""
+    """One solver-facing leaf option for one track.
+
+    ``full_history_conflict_keys`` is a legacy field name. Tracker-side
+    preparation now supplies the active live/unresolved conflict keys.
+    """
 
     leaf_id: int
     track_id: int
@@ -39,7 +43,7 @@ class ClusterSolverProblem:
 
     Semantics:
     - choose exactly one leaf option per track,
-    - reject combinations with overlapping full-history conflict keys,
+    - reject combinations with overlapping caller-supplied conflict keys,
     - score = sum(selected leaf scores),
     - keep up to ``max_results`` best feasible combinations.
     """
@@ -198,7 +202,7 @@ def score_selected_leaf_ids_if_exact_feasible(
     if len(selected_leaf_id_by_track_id) != len(problem.track_options):
         return None
 
-    used_history_keys: set[DetectionKey] = set()
+    used_conflict_keys: set[DetectionKey] = set()
     leaf_score_sum = 0.0
 
     for track in problem.track_options:
@@ -210,11 +214,11 @@ def score_selected_leaf_ids_if_exact_feasible(
         if leaf is None or int(leaf.track_id) != track_id:
             return None
 
-        overlap = used_history_keys & leaf.full_history_conflict_keys
+        overlap = used_conflict_keys & leaf.full_history_conflict_keys
         if overlap:
             return None
 
-        used_history_keys |= set(leaf.full_history_conflict_keys)
+        used_conflict_keys |= set(leaf.full_history_conflict_keys)
         leaf_score_sum += float(leaf.score)
 
     return float(leaf_score_sum)

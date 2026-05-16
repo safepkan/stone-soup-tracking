@@ -270,6 +270,12 @@ def apply_planned_map_n_scan_pruning(
 
         # Preserve committed output prefix strictly before the new unresolved root.
         current_tree.committed_states.append(root_before.state)
+        # The promoted child is now the only surviving root branch, so its
+        # historical detection choices are fixed for future live solves even
+        # though its state remains in the reconstruction root lineage.
+        current_tree.committed_detection_keys = (
+            current_tree.committed_detection_keys | chosen_child.detection_history_keys
+        )
 
         current_tree.root_node_id = chosen_child.node_id
         chosen_child.parent = None

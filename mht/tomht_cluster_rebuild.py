@@ -29,18 +29,15 @@ from .tomht_model import (
 from .tomht_params import TOMHTParams
 from .tomht_stats import RebuildStats
 from .tomht_tree_store import TrackTreeStore
+from .tomht_tree_utils import live_conflict_keys_for_leaf
 from .tomht_types import ScanContext
-from .tomht_utils import format_detection_key_sample
 
 
 @dataclass(frozen=True)
 class _ClusterRebuildResult:
-    """Cluster rebuild result with narrow historical-relaxation bookkeeping."""
+    """Cluster rebuild result for one solved cluster."""
 
     snapshot: ClusterRebuildSnapshot
-    historical_relaxation_attempted: bool = False
-    historical_relaxation_succeeded: bool = False
-    historical_relaxed_key_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -63,14 +60,11 @@ class _PreparedClusterSolveProblem:
 
 @dataclass(frozen=True)
 class _ClusterSolveOutcome:
-    """Solver outcome with optional historical-relaxation bookkeeping."""
+    """Solver outcome for one exact cluster solve."""
 
     kept_globals: tuple[GlobalHypothesis, ...]
     combinations_evaluated: int
     feasible_combinations: int
-    historical_relaxation_attempted: bool = False
-    historical_relaxation_succeeded: bool = False
-    historical_relaxed_keys: frozenset[DetectionKey] = frozenset()
 
 
 def _projected_combination_count(
@@ -106,13 +100,21 @@ def cluster_leaf_options(
 
 
 def has_any_feasible_cluster_combination(
+    *,
+    cluster: ClusterWorkItem,
     leaf_options: list[list[TrackHypothesisNode]],
+    tree_store: TrackTreeStore,
 ) -> bool:
     """Return whether at least one cluster leaf-product combination is feasible."""
-    prepared = [
-        [(leaf, set(leaf.detection_history_keys)) for leaf in leaves]
-        for leaves in leaf_options
-    ]
+    prepared: list[list[tuple[TrackHypothesisNode, set[DetectionKey]]]] = []
+    for idx, track_id in enumerate(cluster.track_ids):
+        tree = tree_store.track_trees_by_track_id[track_id]
+        prepared.append(
+            [
+                (leaf, set(live_conflict_keys_for_leaf(leaf=leaf, tree=tree)))
+                for leaf in leaf_options[idx]
+            ]
+        )
     for picked in product(*prepared):
         used_keys: set[DetectionKey] = set()
         feasible = True
@@ -151,29 +153,27 @@ def _build_cluster_solver_problem(
     *,
     cluster: ClusterWorkItem,
     leaf_options: list[list[TrackHypothesisNode]],
+    tree_store: TrackTreeStore,
     ctx: ScanContext,
     cluster_universe: set[DetectionKey],
-    relaxed_conflict_keys: frozenset[DetectionKey],
     params: TOMHTParams,
 ) -> _PreparedClusterSolveProblem:
     """Build one solver-facing exact cluster problem from tracker state."""
-    relaxed_key_set = set(relaxed_conflict_keys)
     leaf_node_by_leaf_id: dict[int, TrackHypothesisNode] = {}
     track_options: list[ClusterSolverTrackOptions] = []
 
     for idx, track_id in enumerate(cluster.track_ids):
+        tree = tree_store.track_trees_by_track_id[track_id]
         solver_leaf_options: list[ClusterSolverLeafOption] = []
         for leaf in leaf_options[idx]:
             leaf_id = int(leaf.node_id)
             leaf_node_by_leaf_id[leaf_id] = leaf
 
-            conflict_keys = set(leaf.detection_history_keys)
-            if relaxed_key_set:
-                conflict_keys -= relaxed_key_set
+            conflict_keys = set(live_conflict_keys_for_leaf(leaf=leaf, tree=tree))
 
             used_current_scan_keys = sorted(
                 key
-                for key in leaf.detection_history_keys
+                for key in conflict_keys
                 if key[0] == ctx.scan_index and key in cluster_universe
             )
             if len(used_current_scan_keys) > 1:
@@ -183,19 +183,6 @@ def _build_cluster_solver_problem(
                     f"track_id={track_id} leaf_id={leaf_id} "
                     f"current_scan_keys={used_current_scan_keys}"
                 )
-            uses_current_scan_detection = bool(used_current_scan_keys)
-
-            if (
-                uses_current_scan_detection
-                and used_current_scan_keys[0] not in conflict_keys
-            ):
-                raise RuntimeError(
-                    "Current-scan detections cannot be relaxed out of "
-                    "full-history conflict keys for exact cluster solving. "
-                    f"track_id={track_id} leaf_id={leaf_id} "
-                    f"det_key={used_current_scan_keys[0]}"
-                )
-
             solver_leaf_options.append(
                 ClusterSolverLeafOption(
                     leaf_id=leaf_id,
@@ -268,6 +255,7 @@ def infeasible_cluster_debug_summary(
     *,
     cluster: ClusterWorkItem,
     leaf_options: list[list[TrackHypothesisNode]],
+    tree_store: TrackTreeStore,
     ctx: ScanContext,
 ) -> str:
     """Build compact debug context for a cluster with no feasible combinations."""
@@ -282,18 +270,28 @@ def infeasible_cluster_debug_summary(
     }
     parts.append(f"leaf_counts={leaf_count_by_track_id}")
 
-    # Pairwise overlap counts on full detection histories indicate how "hard"
-    # the incompatibilities are between tree frontiers.
+    # Pairwise overlap counts on live conflict keys indicate how "hard" the
+    # unresolved incompatibilities are between tree frontiers.
     pairwise_overlap_counts: list[str] = []
     for i, left_track_id in enumerate(cluster.track_ids):
         left_leaves = leaf_options[i]
+        left_tree = tree_store.track_trees_by_track_id[left_track_id]
         for j, right_track_id in enumerate(cluster.track_ids[i + 1 :], start=i + 1):
             right_leaves = leaf_options[j]
+            right_tree = tree_store.track_trees_by_track_id[right_track_id]
             conflicting_pairs = 0
             for left_leaf in left_leaves:
-                left_hist = set(left_leaf.detection_history_keys)
+                left_keys = set(
+                    live_conflict_keys_for_leaf(leaf=left_leaf, tree=left_tree)
+                )
                 for right_leaf in right_leaves:
-                    if left_hist & set(right_leaf.detection_history_keys):
+                    right_keys = set(
+                        live_conflict_keys_for_leaf(
+                            leaf=right_leaf,
+                            tree=right_tree,
+                        )
+                    )
+                    if left_keys & right_keys:
                         conflicting_pairs += 1
             total_pairs = len(left_leaves) * len(right_leaves)
             pairwise_overlap_counts.append(
@@ -305,165 +303,22 @@ def infeasible_cluster_debug_summary(
     return "; ".join(parts)
 
 
-def _forced_detection_history_keys(
-    leaves: list[TrackHypothesisNode],
-) -> set[DetectionKey]:
-    """Return detection keys present in every active leaf for one track tree."""
-    forced = set(leaves[0].detection_history_keys)
-    for leaf in leaves[1:]:
-        forced &= set(leaf.detection_history_keys)
-    return forced
-
-
-def _historical_relaxed_conflict_keys_for_cluster(
-    *,
-    cluster: ClusterWorkItem,
-    leaf_options: list[list[TrackHypothesisNode]],
-    ctx: ScanContext,
-    tree_store: TrackTreeStore,
-    params: TOMHTParams,
-) -> set[DetectionKey]:
-    """Return forced committed historical keys shared by multiple tracks."""
-    boundary_scan_index = int(ctx.scan_index) - int(params.ns_scan_window)
-    key_track_count: dict[DetectionKey, int] = {}
-    for idx, track_id in enumerate(cluster.track_ids):
-        leaves = leaf_options[idx]
-        forced_keys = _forced_detection_history_keys(leaves)
-        tree = tree_store.track_trees_by_track_id[track_id]
-        root = tree_store.nodes_by_id[tree.root_node_id]
-        root_keys = set(root.detection_history_keys)
-        forced_committed_keys = {
-            key
-            for key in (forced_keys & root_keys)
-            if int(key[0]) <= boundary_scan_index
-        }
-        for key in forced_committed_keys:
-            key_track_count[key] = key_track_count.get(key, 0) + 1
-
-    return {key for key, count in key_track_count.items() if count > 1}
-
-
-def _log_historical_relaxation(
-    *,
-    cluster: ClusterWorkItem,
-    ctx: ScanContext,
-    relaxed_keys: set[DetectionKey],
-    feasible_before: int,
-    feasible_after: int,
-) -> None:
-    """Emit compact instrumentation for historical-conflict relaxation events."""
-    print(
-        "HIST_RELAX "
-        f"scan={ctx.scan_index} "
-        f"cluster={cluster.cluster_id} "
-        f"track_ids={list(cluster.track_ids)} "
-        f"relaxed_keys={len(relaxed_keys)} "
-        "relaxed_sample="
-        f"{format_detection_key_sample(relaxed_keys)} "
-        f"feasible_before={feasible_before} "
-        f"feasible_after={feasible_after} "
-        f"status={'enabled' if feasible_after > 0 else 'failed'}"
-    )
-
-
 def _raise_cluster_infeasible_error(
     *,
     solve_input: _ClusterSolveInput,
-    relaxed_historical_keys: set[DetectionKey],
+    tree_store: TrackTreeStore,
 ) -> None:
-    """Raise the existing cluster infeasibility error with optional relax debug."""
+    """Raise the existing cluster infeasibility error with live-key debug."""
     dbg = infeasible_cluster_debug_summary(
         cluster=solve_input.cluster,
         leaf_options=solve_input.leaf_options,
+        tree_store=tree_store,
         ctx=solve_input.ctx,
     )
-    relaxation_dbg = ""
-    if relaxed_historical_keys:
-        relaxation_dbg = (
-            "; "
-            f"relaxed_historical_keys={len(relaxed_historical_keys)} "
-            "relaxed_sample="
-            f"{format_detection_key_sample(relaxed_historical_keys)}"
-        )
     raise RuntimeError(
         "Cluster rebuild found no feasible combination. "
         "Expected at least one feasible joint assignment. "
-        f"{dbg}{relaxation_dbg}"
-    )
-
-
-def _solve_with_optional_historical_relaxation(
-    *,
-    solve_input: _ClusterSolveInput,
-    tree_store: TrackTreeStore,
-    params: TOMHTParams,
-    cluster_solver: ClusterSolver,
-) -> _ClusterSolveOutcome:
-    """Solve one cluster, with optional relaxed-key retry around exact solve."""
-    prepared_problem = _build_cluster_solver_problem(
-        cluster=solve_input.cluster,
-        leaf_options=solve_input.leaf_options,
-        ctx=solve_input.ctx,
-        cluster_universe=solve_input.cluster_universe,
-        relaxed_conflict_keys=frozenset(),
-        params=params,
-    )
-    kept_globals, solve_diagnostics = _solve_cluster_exact(
-        prepared_problem=prepared_problem,
-        cluster_solver=cluster_solver,
-    )
-    combinations_evaluated = int(solve_diagnostics.combinations_evaluated)
-    feasible_combinations = int(solve_diagnostics.feasible_combinations)
-
-    historical_relaxation_attempted = False
-    historical_relaxation_succeeded = False
-    relaxed_historical_keys: set[DetectionKey] = set()
-    if feasible_combinations == 0 and params.historical_conflict_relaxation_enabled:
-        relaxed_historical_keys = _historical_relaxed_conflict_keys_for_cluster(
-            cluster=solve_input.cluster,
-            leaf_options=solve_input.leaf_options,
-            ctx=solve_input.ctx,
-            tree_store=tree_store,
-            params=params,
-        )
-        if relaxed_historical_keys:
-            historical_relaxation_attempted = True
-            relaxed_problem = _build_cluster_solver_problem(
-                cluster=solve_input.cluster,
-                leaf_options=solve_input.leaf_options,
-                ctx=solve_input.ctx,
-                cluster_universe=solve_input.cluster_universe,
-                relaxed_conflict_keys=frozenset(relaxed_historical_keys),
-                params=params,
-            )
-            kept_globals, relaxed_diagnostics = _solve_cluster_exact(
-                prepared_problem=relaxed_problem,
-                cluster_solver=cluster_solver,
-            )
-            combinations_evaluated += int(relaxed_diagnostics.combinations_evaluated)
-            feasible_combinations = int(relaxed_diagnostics.feasible_combinations)
-            historical_relaxation_succeeded = feasible_combinations > 0
-            _log_historical_relaxation(
-                cluster=solve_input.cluster,
-                ctx=solve_input.ctx,
-                relaxed_keys=relaxed_historical_keys,
-                feasible_before=0,
-                feasible_after=feasible_combinations,
-            )
-
-    if feasible_combinations == 0:
-        _raise_cluster_infeasible_error(
-            solve_input=solve_input,
-            relaxed_historical_keys=relaxed_historical_keys,
-        )
-
-    return _ClusterSolveOutcome(
-        kept_globals=kept_globals,
-        combinations_evaluated=combinations_evaluated,
-        feasible_combinations=feasible_combinations,
-        historical_relaxation_attempted=historical_relaxation_attempted,
-        historical_relaxation_succeeded=historical_relaxation_succeeded,
-        historical_relaxed_keys=frozenset(relaxed_historical_keys),
+        f"{dbg}"
     )
 
 
@@ -474,12 +329,32 @@ def _solve_cluster(
     params: TOMHTParams,
     cluster_solver: ClusterSolver,
 ) -> _ClusterSolveOutcome:
-    """Tracker-side policy wrapper around exact cluster-solver calls."""
-    return _solve_with_optional_historical_relaxation(
-        solve_input=solve_input,
+    """Tracker-side policy wrapper around one exact cluster-solver call."""
+    prepared_problem = _build_cluster_solver_problem(
+        cluster=solve_input.cluster,
+        leaf_options=solve_input.leaf_options,
         tree_store=tree_store,
+        ctx=solve_input.ctx,
+        cluster_universe=solve_input.cluster_universe,
         params=params,
+    )
+    kept_globals, solve_diagnostics = _solve_cluster_exact(
+        prepared_problem=prepared_problem,
         cluster_solver=cluster_solver,
+    )
+    combinations_evaluated = int(solve_diagnostics.combinations_evaluated)
+    feasible_combinations = int(solve_diagnostics.feasible_combinations)
+
+    if feasible_combinations == 0:
+        _raise_cluster_infeasible_error(
+            solve_input=solve_input,
+            tree_store=tree_store,
+        )
+
+    return _ClusterSolveOutcome(
+        kept_globals=kept_globals,
+        combinations_evaluated=combinations_evaluated,
+        feasible_combinations=feasible_combinations,
     )
 
 
@@ -535,10 +410,7 @@ def _rebuild_one_cluster(
             feasible_combinations=solve_outcome.feasible_combinations,
             evaluated_combinations=solve_outcome.combinations_evaluated,
             overload_split_origin_cluster_id=cluster.overload_split_origin_cluster_id,
-        ),
-        historical_relaxation_attempted=solve_outcome.historical_relaxation_attempted,
-        historical_relaxation_succeeded=solve_outcome.historical_relaxation_succeeded,
-        historical_relaxed_key_count=len(solve_outcome.historical_relaxed_keys),
+        )
     )
 
 
@@ -553,7 +425,7 @@ def _log_overload_split_summary(
         + ", ".join(
             (
                 f"{edge.left_track_id}-{edge.right_track_id}:"
-                f"{edge.shared_history_key_count}"
+                f"{edge.shared_live_key_count}"
             )
             for edge in summary.removed_edges
         )
@@ -630,19 +502,6 @@ def rebuild_cluster_globals(
             overload_split_clusters=len(split_summaries),
             overload_split_operations=sum(
                 len(summary.removed_edges) for summary in split_summaries
-            ),
-            historical_relaxation_attempts=sum(
-                1
-                for result in rebuild_results
-                if result.historical_relaxation_attempted
-            ),
-            historical_relaxation_successes=sum(
-                1
-                for result in rebuild_results
-                if result.historical_relaxation_succeeded
-            ),
-            historical_relaxed_keys_total=sum(
-                result.historical_relaxed_key_count for result in rebuild_results
             ),
         ),
     )

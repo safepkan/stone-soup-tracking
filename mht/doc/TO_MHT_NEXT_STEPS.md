@@ -34,6 +34,14 @@ The next improvement is therefore likely to come from reducing how much expansio
 
 ## Current baseline to preserve
 
+Update (2026-05-16): active cluster/solver conflicts now use live unresolved
+detection keys, computed as each leaf's full-lineage `detection_history_keys`
+minus `TrackTree.committed_detection_keys`. MAP-only N-scan pruning adds the
+promoted child's full detection history to the tree-level committed key set,
+while `committed_states` still records the output-state prefix before the
+promoted root. Historical-conflict relaxation has been removed from the runtime
+path; overload splitting remains active and is still a separate review item.
+
 The following pieces should be treated as the current foundation, not reopened casually:
 
 - track trees are the persistent frontier,
@@ -87,8 +95,7 @@ This phase should make that distinction explicit. Candidate controls include:
 - score-based whole-tree deletion,
 - publication gates,
 - birth caps / guardrails,
-- overload cluster splitting,
-- historical-conflict relaxation.
+- overload cluster splitting.
 
 Avoid mixing semantic pruning and emergency tractability caps without documenting the distinction.
 

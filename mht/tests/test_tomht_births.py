@@ -13,8 +13,10 @@ from mht.tomht_births import (
     birth_existence_probability_sort_value,
     birth_track_sort_key,
     format_birth_state_vector,
+    residual_detection_indices_after_expansion,
     select_internal_birth_candidates,
 )
+from mht.tomht_model import TrackHypothesisNode
 from mht.tomht_params import TOMHTParams
 from mht.tomht_types import ScanContext
 
@@ -42,6 +44,76 @@ def _scan_context(timestamp: datetime.datetime) -> ScanContext:
 
 
 class TOMHTBirthHelpersTest(unittest.TestCase):
+    def test_residual_detection_indices_use_current_scan_leaf_detections(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 5, 14, 12, 0, 0)
+        detections = [
+            Detection(np.array([[0.0], [0.0]]), timestamp=timestamp),
+            Detection(np.array([[1.0], [1.0]]), timestamp=timestamp),
+            Detection(np.array([[2.0], [2.0]]), timestamp=timestamp),
+        ]
+        ctx = ScanContext(
+            scan_index=3,
+            timestamp=timestamp,
+            detections=detections,
+            det_index_by_obj={id(det): i for i, det in enumerate(detections)},
+        )
+        state = GaussianState(
+            [0.0],
+            covar=np.eye(1),
+            timestamp=timestamp,
+        )
+        hit_leaf = TrackHypothesisNode(
+            node_id=1,
+            track_id=1,
+            parent=None,
+            scan_index=3,
+            timestamp=timestamp,
+            state=state,
+            state_kind="manual_hit",
+            used_det_key=(3, 1),
+            assoc_label=1,
+            log_delta=0.0,
+            accumulated_log_score=0.0,
+            detection_history_keys=frozenset({(0, 0), (3, 1)}),
+            age=1,
+            hits=1,
+            missed_count=0,
+            last_det_key=(3, 1),
+            last_det_hit=True,
+            root_source="manual",
+            birth_scan_index=0,
+        )
+        miss_leaf = TrackHypothesisNode(
+            node_id=2,
+            track_id=2,
+            parent=None,
+            scan_index=3,
+            timestamp=timestamp,
+            state=state,
+            state_kind="manual_miss",
+            used_det_key=None,
+            assoc_label=-2,
+            log_delta=0.0,
+            accumulated_log_score=0.0,
+            detection_history_keys=frozenset({(0, 1)}),
+            age=1,
+            hits=0,
+            missed_count=1,
+            last_det_key=None,
+            last_det_hit=False,
+            root_source="manual",
+            birth_scan_index=0,
+        )
+
+        residual_indices = residual_detection_indices_after_expansion(
+            active_leaf_nodes=[hit_leaf, miss_leaf],
+            ctx=ctx,
+        )
+
+        self.assertEqual([0, 2], residual_indices)
+
     def test_candidate_selection_keeps_layout_extreme_states(self) -> None:
         timestamp = datetime.datetime(2026, 5, 14, 12, 0, 0)
         layout_extreme = _track_with_state(
