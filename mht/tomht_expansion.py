@@ -99,7 +99,7 @@ def candidate_from_distance_hypothesis(
         state = updater.update(hypothesis)
         expansion_call_stats.update_calls += 1
         expansion_call_stats.update_wall_ns += elapsed_ns(update_start_ns)
-        used_det_key = (ctx.scan_index, det_index)
+        used_det_key = DetectionKey(scan_index=ctx.scan_index, det_index=det_index)
         assoc_label = det_index
         state_kind = "update"
         missed_count = 0

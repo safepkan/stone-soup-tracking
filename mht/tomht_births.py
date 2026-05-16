@@ -50,7 +50,7 @@ def birth_used_key(
         det_index = det_index_by_obj.get(id(meas))
         if det_index is None:
             return None
-        return (scan_index, int(det_index))
+        return DetectionKey(scan_index=scan_index, det_index=int(det_index))
     except Exception:
         return None
 
@@ -136,7 +136,7 @@ def birth_track_sort_key(
     st = tr.states[-1]
     state_components = _sanitized_flat_state_components(st.state_vector)
 
-    used_idx = float(10**9 if used_key is None else int(used_key[1]))
+    used_idx = float(10**9 if used_key is None else int(used_key.det_index))
     return (
         float(-support),
         float(misses),
@@ -159,9 +159,9 @@ def residual_detection_indices_after_expansion(
     for leaf in active_leaf_nodes:
         if (
             leaf.used_det_key is not None
-            and int(leaf.used_det_key[0]) == ctx.scan_index
+            and int(leaf.used_det_key.scan_index) == ctx.scan_index
         ):
-            used_current_scan_det_indices.add(int(leaf.used_det_key[1]))
+            used_current_scan_det_indices.add(int(leaf.used_det_key.det_index))
     return [
         i for i in range(len(ctx.detections)) if i not in used_current_scan_det_indices
     ]
@@ -322,7 +322,9 @@ def run_internal_births_from_residuals(
             state=state,
             state_kind="internal_birth",
             used_det_key=used_key,
-            assoc_label=assoc_pad_label if used_key is None else int(used_key[1]),
+            assoc_label=(
+                assoc_pad_label if used_key is None else int(used_key.det_index)
+            ),
             log_delta=float(root_log_delta),
             age=age,
             hits=hits,

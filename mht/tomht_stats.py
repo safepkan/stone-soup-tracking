@@ -333,7 +333,8 @@ def map_stats_for_current_map(
     used_keys = {
         leaf.used_det_key
         for leaf in leaf_nodes_by_track_id.values()
-        if leaf.used_det_key is not None and int(leaf.used_det_key[0]) == scan_index
+        if leaf.used_det_key is not None
+        and int(leaf.used_det_key.scan_index) == scan_index
     }
     map_used = len(used_keys)
     map_unused = int(detection_count) - map_used

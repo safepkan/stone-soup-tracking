@@ -154,7 +154,7 @@ Persistent scan-to-scan state consists primarily of:
 - same-track `parent`,
 - `scan_index` / `timestamp`,
 - Stone Soup state payload,
-- used detection key / association label,
+- used `DetectionKey(scan_index, det_index)` / association label,
 - local and accumulated score,
 - cached age / hit / miss counters,
 - provenance such as `root_source` and `birth_scan_index`.
@@ -446,7 +446,15 @@ These changes improved expansion timing, but the next likely leverage is expansi
 
 ### Clustering
 
-Clusters are built from live unresolved active-leaf detection-key overlap, not only current-scan overlap. Each node still caches its full lineage in `detection_history_keys`, while each `TrackTree` stores detection keys from branch decisions fixed by N-scan promotion in `committed_detection_keys`. Active conflict keys are computed as:
+Clusters are built from live unresolved active-leaf `DetectionKey` overlap,
+not only current-scan overlap. `DetectionKey` is a tuple-compatible named
+tuple with `scan_index` and `det_index` fields, so it remains usable as an
+immutable set/dict key while call sites that inspect the components avoid
+positional indexing.
+
+Each node still caches its full lineage in `detection_history_keys`, while each
+`TrackTree` stores detection keys from branch decisions fixed by N-scan
+promotion in `committed_detection_keys`. Active conflict keys are computed as:
 
 ```text
 leaf.detection_history_keys - tree.committed_detection_keys

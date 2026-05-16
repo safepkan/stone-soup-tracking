@@ -4,15 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import datetime
-from typing import Literal, Mapping
+from typing import Literal, Mapping, NamedTuple
 
 from stonesoup.types.state import State
 
-# Detection key used for exclusivity/conflict checks.
-#
-# Key format is (scan_index, det_index), so keys are unique across the unresolved
-# tree window and cannot collide when multiple scans are still represented.
-type DetectionKey = tuple[int, int]
+
+class DetectionKey(NamedTuple):
+    """Detection key used for exclusivity/conflict checks."""
+
+    # Keys are unique across the unresolved tree window and cannot collide when
+    # multiple scans are still represented.
+    scan_index: int
+    det_index: int
+
 
 type TrackLifecycleState = Literal["tentative", "confirmed"]
 type TrackPublicationState = Literal["unpublished", "published"]

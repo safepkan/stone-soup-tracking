@@ -55,7 +55,10 @@ def current_scan_candidate_keys_for_tree(
     keys: set[DetectionKey] = set()
     for leaf_id in tree.active_leaf_node_ids:
         leaf = nodes_by_id[leaf_id]
-        if leaf.used_det_key is not None and int(leaf.used_det_key[0]) == scan_index:
+        if (
+            leaf.used_det_key is not None
+            and int(leaf.used_det_key.scan_index) == scan_index
+        ):
             keys.add(leaf.used_det_key)
     return keys
 

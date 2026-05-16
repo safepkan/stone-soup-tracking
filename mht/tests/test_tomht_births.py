@@ -16,7 +16,7 @@ from mht.tomht_births import (
     residual_detection_indices_after_expansion,
     select_internal_birth_candidates,
 )
-from mht.tomht_model import TrackHypothesisNode
+from mht.tomht_model import DetectionKey, TrackHypothesisNode
 from mht.tomht_params import TOMHTParams
 from mht.tomht_types import ScanContext
 
@@ -64,6 +64,7 @@ class TOMHTBirthHelpersTest(unittest.TestCase):
             covar=np.eye(1),
             timestamp=timestamp,
         )
+        hit_key = DetectionKey(scan_index=3, det_index=1)
         hit_leaf = TrackHypothesisNode(
             node_id=1,
             track_id=1,
@@ -72,15 +73,17 @@ class TOMHTBirthHelpersTest(unittest.TestCase):
             timestamp=timestamp,
             state=state,
             state_kind="manual_hit",
-            used_det_key=(3, 1),
+            used_det_key=hit_key,
             assoc_label=1,
             log_delta=0.0,
             accumulated_log_score=0.0,
-            detection_history_keys=frozenset({(0, 0), (3, 1)}),
+            detection_history_keys=frozenset(
+                {DetectionKey(scan_index=0, det_index=0), hit_key}
+            ),
             age=1,
             hits=1,
             missed_count=0,
-            last_det_key=(3, 1),
+            last_det_key=hit_key,
             last_det_hit=True,
             root_source="manual",
             birth_scan_index=0,
@@ -97,7 +100,9 @@ class TOMHTBirthHelpersTest(unittest.TestCase):
             assoc_label=-2,
             log_delta=0.0,
             accumulated_log_score=0.0,
-            detection_history_keys=frozenset({(0, 1)}),
+            detection_history_keys=frozenset(
+                {DetectionKey(scan_index=0, det_index=1)}
+            ),
             age=1,
             hits=0,
             missed_count=1,

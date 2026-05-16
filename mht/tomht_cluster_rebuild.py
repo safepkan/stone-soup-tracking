@@ -174,7 +174,7 @@ def _build_cluster_solver_problem(
             used_current_scan_keys = sorted(
                 key
                 for key in conflict_keys
-                if key[0] == ctx.scan_index and key in cluster_universe
+                if key.scan_index == ctx.scan_index and key in cluster_universe
             )
             if len(used_current_scan_keys) > 1:
                 raise RuntimeError(

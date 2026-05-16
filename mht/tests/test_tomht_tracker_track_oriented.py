@@ -23,6 +23,7 @@ from stonesoup.types.update import Update
 
 from mht.tomht_model import (
     ClusterRebuildSnapshot,
+    DetectionKey,
     GlobalHypothesis,
     TrackHypothesisNode,
 )
@@ -460,7 +461,7 @@ def _add_manual_tree_with_committed_prefix(
     store: TrackTreeStore,
     *,
     root_x: float,
-    live_hit_det_key: tuple[int, int] | None,
+    live_hit_det_key: DetectionKey | None,
     live_hit_score: float,
     live_miss_score: float | None = None,
 ) -> tuple[int, TrackHypothesisNode | None, TrackHypothesisNode | None]:
@@ -471,7 +472,7 @@ def _add_manual_tree_with_committed_prefix(
         timestamp=t1,
         state=_state(root_x, t1),
         state_kind="manual_root",
-        used_det_key=(1, 0),
+        used_det_key=DetectionKey(scan_index=1, det_index=0),
         assoc_label=0,
         log_delta=0.0,
         age=1,
@@ -479,7 +480,7 @@ def _add_manual_tree_with_committed_prefix(
         root_source="manual",
     )
     tree = store.track_trees_by_track_id[root.track_id]
-    self_key = (1, 0)
+    self_key = DetectionKey(scan_index=1, det_index=0)
     tree.committed_detection_keys = frozenset({self_key})
 
     hit_leaf: TrackHypothesisNode | None = None
@@ -494,7 +495,7 @@ def _add_manual_tree_with_committed_prefix(
             state=_state(root_x + 1.0, t2),
             state_kind="manual_hit",
             used_det_key=live_hit_det_key,
-            assoc_label=int(live_hit_det_key[1]),
+            assoc_label=int(live_hit_det_key.det_index),
             log_delta=live_hit_score,
             age=2,
             hits=2,
@@ -576,7 +577,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         assert map_snapshot is not None
         self.assertEqual(2, len(map_snapshot.leaf_nodes_by_track_id))
         used_det_indices = {
-            int(leaf.used_det_key[1])
+            int(leaf.used_det_key.det_index)
             for leaf in map_snapshot.leaf_nodes_by_track_id.values()
             if leaf.used_det_key is not None
         }
@@ -618,13 +619,13 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         _add_manual_tree_with_committed_prefix(
             store,
             root_x=0.0,
-            live_hit_det_key=(2, 0),
+            live_hit_det_key=DetectionKey(scan_index=2, det_index=0),
             live_hit_score=5.0,
         )
         _add_manual_tree_with_committed_prefix(
             store,
             root_x=10.0,
-            live_hit_det_key=(2, 1),
+            live_hit_det_key=DetectionKey(scan_index=2, det_index=1),
             live_hit_score=5.0,
         )
 
@@ -639,14 +640,14 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         track0_id, track0_hit, track0_miss = _add_manual_tree_with_committed_prefix(
             store,
             root_x=0.0,
-            live_hit_det_key=(2, 0),
+            live_hit_det_key=DetectionKey(scan_index=2, det_index=0),
             live_hit_score=10.0,
             live_miss_score=9.0,
         )
         track1_id, track1_hit, _ = _add_manual_tree_with_committed_prefix(
             store,
             root_x=10.0,
-            live_hit_det_key=(2, 0),
+            live_hit_det_key=DetectionKey(scan_index=2, det_index=0),
             live_hit_score=10.0,
         )
         self.assertIsNotNone(track0_hit)
