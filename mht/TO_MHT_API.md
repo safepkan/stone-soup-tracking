@@ -57,7 +57,9 @@ of the runtime path.
 
 ## 2. Core tracker usage
 
-A typical setup looks like:
+### Typical setup
+
+The basic setup is:
 
 ```python
 tracker = TOMHTTracker(
@@ -75,20 +77,23 @@ time, published_tracks = tracker.update_tracker(
     caller_scan_context=sensor_context,
 )
 ```
+The `caller_scan_context` argument and the optional `detection_probability_model` are central to non-trivial integrations; see Section 6 for their detailed contracts.
 
-The most important public methods are:
+For integrations where another caller-side process decides which tracks should enter the tracker, pass `initiator=None` at construction and use `add_external_starts(...)` after each `update_tracker(...)` call at the same timestamp to inject caller-vetted starts.
+
+The tracker also supports the Stone Soup iterator-style usage pattern via `_TrackerMixInUpdate`, where detections are pulled from a `Detector` passed to the constructor. This mode is convenient for simple cases but cannot accommodate `caller_scan_context` or `add_external_starts(...)`. Use the push pattern above for any integration that needs scan-dependent detection-probability models or external start handoff.
+
+See Section 11 for worked examples of each integration pattern.
+
+### Public methods
+
+#### Main methods
 
 ```python
 update_tracker(time, detections, *, caller_scan_context=None)
 tracks
-get_map_output_tracks(include_unpublished=False)
-get_map_hypothesis_snapshot()
-get_n_scan_commitment_snapshot()
-get_last_cluster_snapshots()
-get_track_tree_snapshot()
 get_unused_detections()
 add_external_starts(time, starts)
-print_summary_stats()
 ```
 
 `update_tracker(...)` processes one scan/update and returns the current
@@ -99,6 +104,23 @@ for the most recently processed scan. In normal use, the set returned by
 `update_tracker(...)` and the value of `tracker.tracks` immediately afterwards
 represent the same output boundary.
 
+`get_unused_detections()` returns residual detections from the most recent scan
+primarily for external-start workflows where no internal initiator is configured.
+
+`add_external_starts(...)` injects caller-vetted external starts after an
+`update_tracker(...)` call at the same timestamp.
+
+#### Inspection and debug methods
+
+```python
+get_map_output_tracks(include_unpublished=False)
+get_map_hypothesis_snapshot()
+get_n_scan_commitment_snapshot()
+get_last_cluster_snapshots()
+get_track_tree_snapshot()
+print_summary_stats()
+```
+
 `get_map_output_tracks(include_unpublished=True)` can be used for inspection of
 unpublished MAP-selected tracks.
 
@@ -107,12 +129,6 @@ debugging and evaluation. It is not the public output boundary.
 
 `print_summary_stats()` prints aggregate instrumentation collected in
 `ScanStats` when `collect_stats=True`.
-
-`get_unused_detections()` returns residual detections from the most recent scan
-primarily for external-start workflows where no internal initiator is configured.
-
-`add_external_starts(...)` injects caller-vetted external starts after an
-`update_tracker(...)` call at the same timestamp.
 
 ---
 
