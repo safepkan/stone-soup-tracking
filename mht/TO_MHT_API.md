@@ -391,6 +391,29 @@ bearing/range measurement volume per scan. If the measurement coordinates are
 rescaled, the Gaussian normalization term inside the NLL and the clutter
 density term must transform consistently.
 
+### Why log-likelihood-ratio scoring?
+
+Stone Soup hypothesisers can in principle return any "distance" that makes
+sense to their consuming associator — for some simple associators only a
+ranking is needed, and for a GNN associator only summability across an
+assignment.
+
+TOMHT needs more. Per-hypothesis increments are accumulated into running
+track scores that are compared against confirmation, deletion, and publication
+thresholds, and the same accumulated scores drive the assignment problem
+solved at each scan. For those thresholds to be principled, and for scores
+to remain comparable across scans and across sensors, the per-hypothesis
+increment must be a log-likelihood ratio.
+
+The hit increment is the log-ratio between the "target generated this
+detection" and "clutter generated this detection" hypotheses for the same `z`.
+The miss increment is its counterpart for the "target present, no detection
+produced" alternative. Summed over a track's history, these increments form
+the accumulated LLR — the standard MHT track score (Reid 1979; Blackman &
+Popoli 1999) — and a threshold on the accumulated score corresponds via the
+sigmoid to a threshold on existence probability, which is what gives the
+calibration values in Section 12 their meaning.
+
 ---
 
 ## 6. DetectionProbabilityModel
@@ -657,7 +680,7 @@ Initiator-created roots use:
 params.initiator_start_initial_existence_probability
 ```
 
-converted internally to log-odds.
+converted internally to log-odds, `log( p / (1 − p) )`.
 
 If the returned Stone Soup track has valid metadata:
 
@@ -678,13 +701,14 @@ Invalid metadata at one level falls through to the next level. Log-odds metadata
 is accepted as any finite float and is not clamped. Probability metadata must
 satisfy `0.0 < p < 1.0`.
 
-`metadata["existence_probability"]` is the preferred way for an initiator to
-communicate manually calibrated candidate confidence. `metadata["existence_log_odds"]`
-is preferred for upstream systems that already compute additive LLR/evidence,
-because TOMHT can use it directly without converting through probability.
-TOMHT may also use valid probability metadata as a candidate-quality hint when
-internal-start capping/ordering is needed. Exact internal-start ordering remains
-an implementation detail.
+The two fields are equivalent ways of expressing the same prior.
+`metadata["existence_probability"]` is usually the more convenient form for
+human-calibrated priors. Use `metadata["existence_log_odds"]` when an upstream
+system already computes additive LLR/evidence, to avoid a probability roundtrip.
+
+TOMHT may also consult valid probability metadata as a candidate-quality hint
+for internal-start capping and ordering. The exact ordering strategy is an
+implementation detail.
 
 ### Residual detections and `get_unused_detections()`
 
@@ -709,6 +733,7 @@ logit(P_init) = log(P_D * beta_NT / lambda)
 
 where:
 
+- `logit(p) = log( p / (1 − p) )` is the log-odds, and `sigmoid` is its inverse,
 - `beta_NT` is new-target density in the same measurement-space units as
   clutter density,
 - `lambda` is clutter density,
