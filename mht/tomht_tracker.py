@@ -854,9 +854,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         return apply_post_solve_supported_leaf_pruning(
             cluster_snapshots=cluster_snapshots,
             tree_store=self._tree_store,
-            overload_split_supported_pruning_policy=(
-                self.params.overload_split_supported_pruning_policy
-            ),
         )
 
     # =========================================================================

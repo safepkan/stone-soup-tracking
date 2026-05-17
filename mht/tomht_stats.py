@@ -77,10 +77,6 @@ class ExpansionFrontierStats:
     map_selected_leaf_count: int = 0
     retained_topk_supported_leaf_count: int = 0
     unsupported_leaf_count_pruned: int = 0
-    overload_split_unsupported_leaf_count_pruned: int = 0
-    overload_split_clusters_skipped_supported_pruning: int = 0
-    overload_split_trees_skipped_supported_pruning: int = 0
-    overload_split_leaves_skipped_supported_pruning: int = 0
 
 
 @dataclass(frozen=True)
@@ -236,18 +232,6 @@ def build_expansion_frontier_stats(
         ),
         unsupported_leaf_count_pruned=int(
             supported_pruning_stats.unsupported_leaf_count_pruned
-        ),
-        overload_split_unsupported_leaf_count_pruned=int(
-            supported_pruning_stats.overload_split_unsupported_leaf_count_pruned
-        ),
-        overload_split_clusters_skipped_supported_pruning=int(
-            supported_pruning_stats.overload_split_clusters_skipped_supported_pruning
-        ),
-        overload_split_trees_skipped_supported_pruning=int(
-            supported_pruning_stats.overload_split_trees_skipped_supported_pruning
-        ),
-        overload_split_leaves_skipped_supported_pruning=int(
-            supported_pruning_stats.overload_split_leaves_skipped_supported_pruning
         ),
     )
 
@@ -578,15 +562,7 @@ def print_expansion_frontier_stats(
         f"detection_children={stats.local_detection_children_created} "
         f"topk_supported={stats.retained_topk_supported_leaf_count} "
         f"map_selected={stats.map_selected_leaf_count} "
-        f"unsupported_pruned={stats.unsupported_leaf_count_pruned} "
-        "overload_unsupported_pruned="
-        f"{stats.overload_split_unsupported_leaf_count_pruned} "
-        "overload_prune_skipped_clusters="
-        f"{stats.overload_split_clusters_skipped_supported_pruning} "
-        "overload_prune_skipped_trees="
-        f"{stats.overload_split_trees_skipped_supported_pruning} "
-        "overload_prune_skipped_leaves="
-        f"{stats.overload_split_leaves_skipped_supported_pruning}"
+        f"unsupported_pruned={stats.unsupported_leaf_count_pruned}"
     )
 
 
@@ -737,18 +713,6 @@ def print_summary_stats(
         topk_supported = [s.retained_topk_supported_leaf_count for s in expansion_stats]
         map_selected = [s.map_selected_leaf_count for s in expansion_stats]
         unsupported_pruned = [s.unsupported_leaf_count_pruned for s in expansion_stats]
-        overload_unsupported_pruned = [
-            s.overload_split_unsupported_leaf_count_pruned for s in expansion_stats
-        ]
-        overload_skip_clusters = [
-            s.overload_split_clusters_skipped_supported_pruning for s in expansion_stats
-        ]
-        overload_skip_trees = [
-            s.overload_split_trees_skipped_supported_pruning for s in expansion_stats
-        ]
-        overload_skip_leaves = [
-            s.overload_split_leaves_skipped_supported_pruning for s in expansion_stats
-        ]
         print(
             "SUMMARY expansion_frontier "
             f"leaves_before med={median(leaves_before):.1f} max={max(leaves_before)} "
@@ -766,12 +730,7 @@ def print_summary_stats(
             f"children_retained sum={sum(children_retained)} mean={_mean(children_retained):.2f} "
             f"topk_supported sum={sum(topk_supported)} mean={_mean(topk_supported):.2f} "
             f"map_selected sum={sum(map_selected)} mean={_mean(map_selected):.2f} "
-            f"unsupported_pruned sum={sum(unsupported_pruned)} "
-            "overload_unsupported_pruned "
-            f"sum={sum(overload_unsupported_pruned)} "
-            f"overload_skip_clusters sum={sum(overload_skip_clusters)} "
-            f"overload_skip_trees sum={sum(overload_skip_trees)} "
-            f"overload_skip_leaves sum={sum(overload_skip_leaves)}"
+            f"unsupported_pruned sum={sum(unsupported_pruned)}"
         )
     print(
         "SUMMARY clusters "

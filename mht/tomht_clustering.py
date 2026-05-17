@@ -43,6 +43,20 @@ class OverloadSplitSummary:
     resulting_subclusters: tuple[tuple[int, ...], ...]
     projected_after_by_subcluster: tuple[int, ...]
     stopping_reason: str
+    conditional_branches_attempted: int = 0
+    conditional_branches_without_solution: int = 0
+    recombination_candidates_considered: int = 0
+    infeasible_recombination_candidates_skipped: int = 0
+    branch_recombined_globals_retained: int = 0
+    recombination_failures: int = 0
+    interface_assignment_cap_fallbacks: int = 0
+    recursive_cache_hits: int = 0
+    recursive_cache_misses: int = 0
+    max_recursion_depth: int = 0
+    max_cut_key_count: int = 0
+    total_interface_assignments: int = 0
+    max_recombination_product_size: int = 0
+    final_recombined_globals_retained: int = 0
 
 
 def current_scan_candidate_keys_for_tree(

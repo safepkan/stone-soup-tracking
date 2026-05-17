@@ -28,9 +28,13 @@ from mht.tomht_model import (
     ScanContext,
     TrackHypothesisNode,
 )
-from mht.tomht_clustering import build_track_clusters
-from mht.tomht_cluster_rebuild import rebuild_cluster_globals
+from mht.tomht_clustering import ClusterWorkItem, build_track_clusters
+from mht.tomht_cluster_rebuild import (
+    is_global_feasible_under_live_conflicts,
+    rebuild_cluster_globals,
+)
 from mht.tomht_cluster_solver_factory import make_cluster_solver
+from mht.tomht_pruning import apply_post_solve_supported_leaf_pruning
 from mht.tomht_scoring import (
     ConstantDetectionProbabilityModel,
     DetectionProbabilityModel,
@@ -430,16 +434,12 @@ def _single_track_rebuild_snapshot(
     )
 
 
-def _tracker_with_manual_frontier(
-    *,
-    pruning_policy: str = "skip",
-) -> tuple[TOMHTTracker, list[TrackHypothesisNode]]:
+def _tracker_with_manual_frontier() -> tuple[TOMHTTracker, list[TrackHypothesisNode]]:
     timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
     tracker = _build_tracker(
         hypothesiser=_ScriptedHypothesiser(),
         updater=_ScriptedUpdater(),
         params=TOMHTParams(
-            overload_split_supported_pruning_policy=pruning_policy,
             debug_display_scan_stats=False,
             debug_display_hypotheses=False,
             debug_display_births=False,
@@ -455,6 +455,116 @@ def _tracker_with_manual_frontier(
         timestamp=timestamp,
     )
     return tracker, leaves
+
+
+def _add_manual_tree_with_live_options(
+    store: TrackTreeStore,
+    *,
+    root_x: float,
+    live_options: list[tuple[DetectionKey | None, float]],
+) -> tuple[int, list[TrackHypothesisNode]]:
+    t1 = datetime.datetime(2026, 3, 28, 10, 0, 1)
+    t2 = t1 + datetime.timedelta(seconds=1)
+    track_id = store.allocate_track_id()
+    root_key = DetectionKey(scan_index=1, det_index=track_id)
+    root = store.create_root_node(
+        track_id=track_id,
+        scan_index=1,
+        timestamp=t1,
+        state=_state(root_x, t1),
+        state_kind="manual_root",
+        used_det_key=root_key,
+        assoc_label=int(root_key.det_index),
+        log_delta=0.0,
+        age=1,
+        hits=1,
+        root_source="manual",
+    )
+    tree = store.add_track_tree_for_root(root, root_source="manual")
+    tree.committed_detection_keys = frozenset({root_key})
+
+    leaves: list[TrackHypothesisNode] = []
+    for option_index, (live_det_key, score) in enumerate(live_options):
+        if live_det_key is None:
+            assoc_label = TOMHTTracker.ASSOC_MISS
+            state = _state(root_x, t2)
+            hits = 1
+            missed_count = 1
+            last_det_key = root.last_det_key
+            last_det_hit = False
+        else:
+            assoc_label = int(live_det_key.det_index)
+            state = _state(root_x + float(option_index + 1), t2)
+            hits = 2
+            missed_count = 0
+            last_det_key = live_det_key
+            last_det_hit = True
+
+        leaf = store.create_track_hypothesis_node(
+            track_id=track_id,
+            parent=root,
+            scan_index=2,
+            timestamp=t2,
+            state=state,
+            state_kind="manual_live",
+            used_det_key=live_det_key,
+            assoc_label=assoc_label,
+            log_delta=float(score),
+            age=2,
+            hits=hits,
+            missed_count=missed_count,
+            last_det_key=last_det_key,
+            last_det_hit=last_det_hit,
+            root_source=root.root_source,
+            birth_scan_index=root.birth_scan_index,
+        )
+        leaves.append(leaf)
+
+    tree.active_leaf_node_ids = {leaf.node_id for leaf in leaves}
+    return track_id, leaves
+
+
+def _manual_cluster_for_track_ids(
+    *,
+    store: TrackTreeStore,
+    track_ids: tuple[int, ...],
+    scan_index: int,
+) -> ClusterWorkItem:
+    current_scan_keys_by_track_id: dict[int, set[DetectionKey]] = {}
+    live_keys_by_track_id: dict[int, set[DetectionKey]] = {}
+    for track_id in track_ids:
+        tree = store.track_trees_by_track_id[track_id]
+        current_scan_keys: set[DetectionKey] = set()
+        live_keys: set[DetectionKey] = set()
+        for leaf_id in tree.active_leaf_node_ids:
+            leaf = store.nodes_by_id[leaf_id]
+            live_keys |= set(live_conflict_keys_for_leaf(leaf=leaf, tree=tree))
+            if (
+                leaf.used_det_key is not None
+                and int(leaf.used_det_key.scan_index) == scan_index
+            ):
+                current_scan_keys.add(leaf.used_det_key)
+        current_scan_keys_by_track_id[track_id] = current_scan_keys
+        live_keys_by_track_id[track_id] = live_keys
+
+    conflict_links: list[tuple[int, int, tuple[DetectionKey, ...]]] = []
+    for index, left_track_id in enumerate(track_ids):
+        for right_track_id in track_ids[index + 1 :]:
+            shared = (
+                live_keys_by_track_id[left_track_id]
+                & live_keys_by_track_id[right_track_id]
+            )
+            if shared:
+                conflict_links.append(
+                    (left_track_id, right_track_id, tuple(sorted(shared)))
+                )
+
+    return ClusterWorkItem(
+        cluster_id=0,
+        track_ids=track_ids,
+        current_scan_det_keys_by_track_id=current_scan_keys_by_track_id,
+        conflict_links=tuple(conflict_links),
+    )
 
 
 def _add_manual_tree_with_committed_prefix(
@@ -687,6 +797,267 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         assert map_global is not None
         self.assertIs(map_global.leaf_nodes_by_track_id[track0_id], track0_miss)
         self.assertIs(map_global.leaf_nodes_by_track_id[track1_id], track1_hit)
+
+    def test_overload_solve_returns_one_original_cluster_snapshot(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
+        store = TrackTreeStore()
+        shared_key = DetectionKey(scan_index=2, det_index=0)
+        track0_id, _ = _add_manual_tree_with_live_options(
+            store,
+            root_x=0.0,
+            live_options=[(shared_key, 10.0), (None, 0.0)],
+        )
+        track1_id, _ = _add_manual_tree_with_live_options(
+            store,
+            root_x=10.0,
+            live_options=[(shared_key, 9.0), (None, 0.0)],
+        )
+        clusters = build_track_clusters(tree_store=store, scan_index=2)
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            snapshots, stats = rebuild_cluster_globals(
+                clusters=clusters,
+                ctx=ScanContext(
+                    scan_index=2,
+                    timestamp=timestamp,
+                    detections=[_detection(1.0, 1.0, timestamp)],
+                    det_index_by_obj={},
+                ),
+                tree_store=store,
+                params=TOMHTParams(
+                    max_global_hypotheses=3,
+                    overload_split_projected_combination_threshold=1,
+                    debug_display_scan_stats=False,
+                    debug_display_hypotheses=False,
+                    debug_display_births=False,
+                    collect_stats=False,
+                ),
+                cluster_solver=make_cluster_solver("branch_and_bound"),
+            )
+        overload_log = stdout.getvalue()
+
+        self.assertEqual(1, len(snapshots))
+        snapshot = snapshots[0]
+        self.assertEqual((track0_id, track1_id), snapshot.track_ids)
+        self.assertIsNone(snapshot.overload_split_origin_cluster_id)
+        self.assertGreaterEqual(stats.overload_split_clusters, 1)
+        self.assertGreaterEqual(stats.overload_split_operations, 1)
+        self.assertTrue(snapshot.rebuilt_globals)
+        for rebuilt_global in snapshot.rebuilt_globals:
+            self.assertTrue(
+                is_global_feasible_under_live_conflicts(
+                    global_hypothesis=rebuilt_global,
+                    tree_store=store,
+                )
+            )
+        self.assertRegex(overload_log, r"recursive_cache_hits=[1-9][0-9]*")
+        self.assertIn("recursive_cache_misses=", overload_log)
+        self.assertIn("max_recursion_depth=1", overload_log)
+        self.assertIn("max_cut_key_count=1", overload_log)
+        self.assertIn("total_interface_assignments=3", overload_log)
+        self.assertIn("max_recombination_product_size=", overload_log)
+        self.assertIn("branch_recomb_retained=", overload_log)
+        self.assertIn(
+            f"final_recomb_retained={len(snapshot.rebuilt_globals)}",
+            overload_log,
+        )
+        self.assertIn("interface_assignment_cap_fallbacks=0", overload_log)
+
+    def test_overload_recombination_recovers_beyond_naive_subcluster_top1(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
+        store = TrackTreeStore()
+        shared_key = DetectionKey(scan_index=2, det_index=0)
+        track0_id, track0_leaves = _add_manual_tree_with_live_options(
+            store,
+            root_x=0.0,
+            live_options=[(shared_key, 10.0), (None, 0.0)],
+        )
+        track1_id, track1_leaves = _add_manual_tree_with_live_options(
+            store,
+            root_x=10.0,
+            live_options=[(shared_key, 9.0), (None, 0.0)],
+        )
+        clusters = build_track_clusters(tree_store=store, scan_index=2)
+
+        snapshots, _ = rebuild_cluster_globals(
+            clusters=clusters,
+            ctx=ScanContext(
+                scan_index=2,
+                timestamp=timestamp,
+                detections=[_detection(1.0, 1.0, timestamp)],
+                det_index_by_obj={},
+            ),
+            tree_store=store,
+            params=TOMHTParams(
+                max_global_hypotheses=1,
+                overload_split_projected_combination_threshold=1,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+            cluster_solver=make_cluster_solver("branch_and_bound"),
+        )
+
+        self.assertEqual(1, len(snapshots))
+        map_global = snapshots[0].map_global
+        self.assertIsNotNone(map_global)
+        assert map_global is not None
+        self.assertIs(map_global.leaf_nodes_by_track_id[track0_id], track0_leaves[0])
+        self.assertIs(map_global.leaf_nodes_by_track_id[track1_id], track1_leaves[1])
+        self.assertTrue(
+            is_global_feasible_under_live_conflicts(
+                global_hypothesis=map_global,
+                tree_store=store,
+            )
+        )
+
+    def test_overload_supported_leaf_pruning_uses_original_feasible_globals(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
+        store = TrackTreeStore()
+        shared_key = DetectionKey(scan_index=2, det_index=0)
+        track0_id, track0_leaves = _add_manual_tree_with_live_options(
+            store,
+            root_x=0.0,
+            live_options=[(shared_key, 10.0), (None, 0.0)],
+        )
+        track1_id, track1_leaves = _add_manual_tree_with_live_options(
+            store,
+            root_x=10.0,
+            live_options=[(shared_key, 9.0), (None, 0.0)],
+        )
+
+        snapshots, _ = rebuild_cluster_globals(
+            clusters=build_track_clusters(tree_store=store, scan_index=2),
+            ctx=ScanContext(
+                scan_index=2,
+                timestamp=timestamp,
+                detections=[_detection(1.0, 1.0, timestamp)],
+                det_index_by_obj={},
+            ),
+            tree_store=store,
+            params=TOMHTParams(
+                max_global_hypotheses=1,
+                overload_split_projected_combination_threshold=1,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+            cluster_solver=make_cluster_solver("branch_and_bound"),
+        )
+
+        stats = apply_post_solve_supported_leaf_pruning(
+            cluster_snapshots=snapshots,
+            tree_store=store,
+        )
+
+        self.assertEqual(2, stats.unsupported_leaf_count_pruned)
+        self.assertEqual(
+            {track0_leaves[0].node_id},
+            store.track_trees_by_track_id[track0_id].active_leaf_node_ids,
+        )
+        self.assertEqual(
+            {track1_leaves[1].node_id},
+            store.track_trees_by_track_id[track1_id].active_leaf_node_ids,
+        )
+
+    def test_overload_recombined_globals_are_deterministically_ordered(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
+        store = TrackTreeStore()
+        track0_id, track0_leaves = _add_manual_tree_with_live_options(
+            store,
+            root_x=0.0,
+            live_options=[(None, 1.0), (None, 1.0)],
+        )
+        track1_id, track1_leaves = _add_manual_tree_with_live_options(
+            store,
+            root_x=10.0,
+            live_options=[(None, 0.0)],
+        )
+        cluster = _manual_cluster_for_track_ids(
+            store=store,
+            track_ids=(track0_id, track1_id),
+            scan_index=2,
+        )
+
+        snapshots, _ = rebuild_cluster_globals(
+            clusters=[cluster],
+            ctx=ScanContext(
+                scan_index=2,
+                timestamp=timestamp,
+                detections=[],
+                det_index_by_obj={},
+            ),
+            tree_store=store,
+            params=TOMHTParams(
+                max_global_hypotheses=2,
+                overload_split_projected_combination_threshold=1,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+            cluster_solver=make_cluster_solver("branch_and_bound"),
+        )
+
+        selections = [
+            (
+                global_hypothesis.leaf_nodes_by_track_id[track0_id].node_id,
+                global_hypothesis.leaf_nodes_by_track_id[track1_id].node_id,
+            )
+            for global_hypothesis in snapshots[0].rebuilt_globals
+        ]
+        self.assertEqual(
+            [
+                (track0_leaves[0].node_id, track1_leaves[0].node_id),
+                (track0_leaves[1].node_id, track1_leaves[0].node_id),
+            ],
+            selections,
+        )
+
+    def test_overload_no_feasible_conditional_branch_reports_clear_error(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
+        store = TrackTreeStore()
+        shared_key = DetectionKey(scan_index=2, det_index=0)
+        _add_manual_tree_with_live_options(
+            store,
+            root_x=0.0,
+            live_options=[(shared_key, 10.0), (shared_key, 8.0)],
+        )
+        _add_manual_tree_with_live_options(
+            store,
+            root_x=10.0,
+            live_options=[(shared_key, 9.0), (shared_key, 7.0)],
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "no feasible combination"):
+            rebuild_cluster_globals(
+                clusters=build_track_clusters(tree_store=store, scan_index=2),
+                ctx=ScanContext(
+                    scan_index=2,
+                    timestamp=timestamp,
+                    detections=[_detection(1.0, 1.0, timestamp)],
+                    det_index_by_obj={},
+                ),
+                tree_store=store,
+                params=TOMHTParams(
+                    max_global_hypotheses=1,
+                    overload_split_projected_combination_threshold=1,
+                    debug_display_scan_stats=False,
+                    debug_display_hypotheses=False,
+                    debug_display_births=False,
+                    collect_stats=False,
+                ),
+                cluster_solver=make_cluster_solver("branch_and_bound"),
+            )
 
     def test_track_confirmation_uses_max_active_leaf_score(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
@@ -1941,14 +2312,8 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertEqual(1, frontier.map_selected_leaf_count)
         self.assertEqual(3, frontier.retained_topk_supported_leaf_count)
         self.assertEqual(0, frontier.unsupported_leaf_count_pruned)
-        self.assertEqual(0, frontier.overload_split_clusters_skipped_supported_pruning)
-        self.assertEqual(0, frontier.overload_split_trees_skipped_supported_pruning)
-        self.assertEqual(0, frontier.overload_split_leaves_skipped_supported_pruning)
-        self.assertEqual(0, frontier.overload_split_unsupported_leaf_count_pruned)
 
-    def test_overload_split_supported_pruning_default_skip_preserves_frontier(
-        self,
-    ) -> None:
+    def test_supported_leaf_pruning_applies_to_all_snapshots(self) -> None:
         tracker, leaves = _tracker_with_manual_frontier()
         snapshot = _single_track_rebuild_snapshot(
             track_id=0,
@@ -1959,19 +2324,13 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         stats = tracker._apply_post_solve_supported_leaf_pruning([snapshot])
 
         active_leaf_ids = tracker.track_trees_by_track_id[0].active_leaf_node_ids
-        self.assertEqual({leaf.node_id for leaf in leaves}, active_leaf_ids)
-        self.assertEqual(0, stats.unsupported_leaf_count_pruned)
-        self.assertEqual(0, stats.overload_split_unsupported_leaf_count_pruned)
-        self.assertEqual(1, stats.overload_split_clusters_skipped_supported_pruning)
-        self.assertEqual(1, stats.overload_split_trees_skipped_supported_pruning)
-        self.assertEqual(3, stats.overload_split_leaves_skipped_supported_pruning)
+        self.assertEqual({leaves[0].node_id}, active_leaf_ids)
+        self.assertEqual(2, stats.unsupported_leaf_count_pruned)
         for stat_field in fields(stats):
             self.assertGreaterEqual(getattr(stats, stat_field.name), 0)
 
-    def test_overload_split_supported_pruning_apply_prunes_to_supported_leaves(
-        self,
-    ) -> None:
-        tracker, leaves = _tracker_with_manual_frontier(pruning_policy="apply")
+    def test_supported_leaf_pruning_is_deterministic(self) -> None:
+        tracker, leaves = _tracker_with_manual_frontier()
         snapshot = _single_track_rebuild_snapshot(
             track_id=0,
             supported_leaves=[leaves[0], leaves[2]],
@@ -1983,18 +2342,10 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
 
         self.assertEqual({leaves[0].node_id, leaves[2].node_id}, active_leaf_ids)
         self.assertEqual(1, first_stats.unsupported_leaf_count_pruned)
-        self.assertEqual(1, first_stats.overload_split_unsupported_leaf_count_pruned)
-        self.assertEqual(
-            0, first_stats.overload_split_clusters_skipped_supported_pruning
-        )
-        self.assertEqual(0, first_stats.overload_split_trees_skipped_supported_pruning)
-        self.assertEqual(0, first_stats.overload_split_leaves_skipped_supported_pruning)
         for stat_field in fields(first_stats):
             self.assertGreaterEqual(getattr(first_stats, stat_field.name), 0)
 
-        tracker_again, leaves_again = _tracker_with_manual_frontier(
-            pruning_policy="apply"
-        )
+        tracker_again, leaves_again = _tracker_with_manual_frontier()
         snapshot_again = _single_track_rebuild_snapshot(
             track_id=0,
             supported_leaves=[leaves_again[0], leaves_again[2]],
@@ -2004,41 +2355,6 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
             [snapshot_again]
         )
         self.assertEqual(first_stats, second_stats)
-
-    def test_non_overload_supported_pruning_unaffected_by_policy(self) -> None:
-        tracker_skip, leaves_skip = _tracker_with_manual_frontier(pruning_policy="skip")
-        tracker_apply, leaves_apply = _tracker_with_manual_frontier(
-            pruning_policy="apply"
-        )
-        snapshot_skip = _single_track_rebuild_snapshot(
-            track_id=0,
-            supported_leaves=[leaves_skip[1]],
-            overload_split_origin_cluster_id=None,
-        )
-        snapshot_apply = _single_track_rebuild_snapshot(
-            track_id=0,
-            supported_leaves=[leaves_apply[1]],
-            overload_split_origin_cluster_id=None,
-        )
-
-        stats_skip = tracker_skip._apply_post_solve_supported_leaf_pruning(
-            [snapshot_skip]
-        )
-        stats_apply = tracker_apply._apply_post_solve_supported_leaf_pruning(
-            [snapshot_apply]
-        )
-
-        self.assertEqual(stats_skip, stats_apply)
-        self.assertEqual(
-            {leaves_skip[1].node_id},
-            tracker_skip.track_trees_by_track_id[0].active_leaf_node_ids,
-        )
-        self.assertEqual(
-            {leaves_apply[1].node_id},
-            tracker_apply.track_trees_by_track_id[0].active_leaf_node_ids,
-        )
-        self.assertEqual(2, stats_apply.unsupported_leaf_count_pruned)
-        self.assertEqual(0, stats_apply.overload_split_unsupported_leaf_count_pruned)
 
     def test_expansion_frontier_debug_flag_does_not_change_behavior(self) -> None:
         def run_case(
@@ -2117,10 +2433,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
             "trees_after_lifecycle=1 expanded=1 expanded_tentative=1 "
             "expanded_confirmed=0 child_candidates=3 children_created=3 "
             "children_retained=3 miss_children=1 detection_children=2 "
-            "topk_supported=3 map_selected=1 unsupported_pruned=0 "
-            "overload_unsupported_pruned=0 "
-            "overload_prune_skipped_clusters=0 "
-            "overload_prune_skipped_trees=0 overload_prune_skipped_leaves=0",
+            "topk_supported=3 map_selected=1 unsupported_pruned=0",
             debug_lines[-1],
         )
 

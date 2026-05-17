@@ -27,9 +27,9 @@ The code treats track trees as the primary persistent state. Rebuilt globals, cl
 Scan stats now include expansion/frontier usefulness counters: active tree/leaf
 counts at the main scan-pipeline boundaries, expanded leaves and local child
 volume, retained top-K supported leaves, MAP-selected leaves, supported-leaf
-pruning removals, lifecycle-state expansion split, and overload-split
-supported-pruning skip/apply impact. These counters are collected by default in
-`ScanStats`; compact per-scan and summary lines are opt-in via
+pruning removals, and lifecycle-state expansion split. These counters are
+collected by default in `ScanStats`; compact per-scan and summary lines are
+opt-in via
 `TOMHTParams.debug_display_expansion_frontier` or
 `TOMHT_DEBUG_EXPANSION_FRONTIER=1`.
 
@@ -188,8 +188,8 @@ The current runtime pipeline is:
 3. remove empty trees,
 4. optionally create internal birth trees from residual detections,
 5. build live unresolved conflict clusters,
-6. rebuild feasible globals per cluster through the exact cluster-solver contract, with overload splitting as the explicit cluster-size guardrail,
-7. post-solve prune each non-overload-split cluster tree frontier to leaves supported by retained rebuilt globals,
+6. rebuild feasible globals per original cluster through the exact cluster-solver contract, using recursive conditional overload splitting internally when needed,
+7. post-solve prune each cluster tree frontier to leaves supported by retained rebuilt globals,
 8. merge cluster MAP selections into a full-scan MAP global,
 9. apply MAP-only N-scan pruning on explicit trees,
 10. apply whole-track lifecycle: sticky confirmation, then score deletion plus either native miss lifecycle or optional Stone Soup deleter,
@@ -383,9 +383,10 @@ The exact cluster problem contract carries:
 - pre-scored accumulated leaf scores,
 - retain up to K best feasible combinations.
 
-Tracker-side approximation/policy remains outside the solver:
+Tracker-side overload handling remains outside the concrete solver backend:
 
-- overload splitting is a pre-solve cluster transformation.
+- overload splitting is an internal recursive/conditional strategy around exact
+  subproblem solves and returns feasible globals for the original live cluster.
 
 ### Branch-and-bound default
 
@@ -465,19 +466,40 @@ Historical-conflict relaxation has been removed from this path.
 
 ### Global rebuild
 
-For each cluster, TOMHT builds leaf options and solves the exact cluster K-best problem through the solver seam. Scores are accumulated leaf scores; there is no current-scan unused-detection affine offset.
+For each cluster, TOMHT builds leaf options and solves the cluster K-best
+problem through the exact solver interface. Scores are accumulated leaf scores;
+there is no current-scan unused-detection affine offset.
+
+If a cluster exceeds `overload_split_projected_combination_threshold`, rebuild
+keeps the original cluster as the public unit of work and applies recursive
+conditional splitting internally:
+
+- choose a deterministic weak-link binary split,
+- enumerate cut-key forbiddance assignments when the cut interface is small,
+- recursively solve left/right subclusters with inherited forbidden keys,
+- recombine left/right solutions by summed score,
+- reject any recombined global that violates the original live conflict keys,
+- retain deterministic top-K feasible globals for the original cluster.
+
+Recursive subproblem results are memoized within one original-cluster solve by
+`(track_ids, inherited_forbidden_keys)`, preserving the same conditional solve
+semantics while avoiding repeated exact solves and recombinations for identical
+branches. Large cut interfaces use a conservative fallback assignment set and
+are reported in `OVERLOAD_SPLIT ...
+interface_assignment_cap_fallbacks=...` diagnostics. The same log line also
+reports recursive cache hit/miss counts, max recursion depth, max cut-key count,
+total interface assignments, max recombination product size,
+`branch_recomb_retained`, and `final_recomb_retained`. Split subclusters are not
+exposed as ordinary `ClusterRebuildSnapshot` objects.
 
 ### Post-solve supported-leaf pruning
 
-For each non-overload-split cluster, active leaves are pruned to those appearing in at least one retained rebuilt top-K global for that cluster.
-
-Overload-decomposed clusters default to skipping this supported-leaf pruning to
-avoid over-pruning under approximation. The experimental
-`TOMHTParams.overload_split_supported_pruning_policy` parameter preserves that
-behavior with `"skip"` (default) or applies the same retained-global pruning to
-overload subclusters with `"apply"`. Scan stats count skipped overload
-subclusters, affected trees/leaves, and overload-specific unsupported leaves
-removed by the `"apply"` policy.
+For each cluster, active leaves are pruned to those appearing in at least one
+retained rebuilt top-K global for that original cluster. This now applies
+uniformly to clusters solved through overload recursion because every retained
+rebuilt global is checked against the original live conflict constraints before
+it reaches downstream MAP merge, N-scan pruning, lifecycle/output, or
+supported-leaf pruning.
 
 ### MAP-only N-scan pruning
 

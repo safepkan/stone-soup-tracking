@@ -23,8 +23,8 @@ The tracker owns:
 - local hypothesis expansion,
 - additive score accumulation,
 - measurement-exclusivity clustering,
-- exact solving within rebuilt clusters/subclusters,
-- optional overload splitting around cluster rebuilds,
+- exact solving within rebuilt clusters,
+- optional recursive overload splitting inside one original cluster solve,
 - N-scan pruning,
 - whole-track confirmation and deletion,
 - sticky output publication,
@@ -1145,8 +1145,7 @@ to collect by default:
 - miss-child vs detection-child creation,
 - MAP-selected leaf count,
 - unique leaves supported by retained top-K rebuilt globals,
-- unsupported leaves removed by post-solve supported-leaf pruning,
-- overload-split supported-pruning skip counts and apply-policy prune counts.
+- unsupported leaves removed by post-solve supported-leaf pruning.
 
 Default `SCAN ...` and `SUMMARY ...` lines are kept stable. To emit compact
 expansion/frontier diagnostics, set either:
@@ -1215,9 +1214,6 @@ These controls are implementation safety valves and are subject to revision:
 - `max_global_hypotheses`
 - `max_projected_cluster_combinations`
 - overload-splitting parameters
-- `overload_split_supported_pruning_policy`: experimental overload-split
-  supported-leaf pruning policy, default `"skip"`; set `"apply"` to prune
-  overload subclusters like normal clusters.
 - `ns_scan_window`
 
 Tune the probabilistic model first. Use these controls to keep computation

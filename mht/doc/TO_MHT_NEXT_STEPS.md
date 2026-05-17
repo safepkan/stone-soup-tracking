@@ -133,7 +133,7 @@ Parallelization is a future axis, but not the first tool for this phase. First u
 Implemented (2026-05-15): scan stats now carry aggregate expansion/frontier
 usefulness counters by default. They connect local expansion work to retained
 top-K supported leaves, MAP-selected leaves, supported-leaf pruning removals,
-confirmed/tentative expansion split, and overload-split supported-pruning skips.
+confirmed/tentative expansion split, and supported-pruning impact.
 The compact `EXPANSION_FRONTIER ...` per-scan line and
 `SUMMARY expansion_frontier ...` aggregate line remain opt-in via
 `debug_display_expansion_frontier` or `TOMHT_DEBUG_EXPANSION_FRONTIER=1`, so the
@@ -174,43 +174,40 @@ Inspect how active-leaf counts grow and shrink through the scan pipeline:
 
 This should clarify whether the main issue is local branching, weak pruning, overload-split behavior, births, or some combination.
 
-### C. Overload-split pruning policy
+### C. Overload-split soundness
 
-Implemented (2026-05-15): added experimental
-`TOMHTParams.overload_split_supported_pruning_policy` with default `"skip"` and
-alternate `"apply"`. The default preserves the historical overload-split
-supported-pruning skip. `"apply"` uses the same retained-global supported-leaf
-pruning on overload-split subclusters and reports overload-specific unsupported
-leaf pruning in expansion/frontier stats. Replay/smoke baselines are not updated
-by this experiment.
+Implemented (2026-05-17): overload splitting is now an internal recursive
+cluster-solve strategy. Rebuild still starts from the original live cluster; if
+the projected leaf product exceeds the overload threshold, the solver chooses a
+binary weak-link split, recursively solves conditional subproblems with cut-key
+forbiddance assignments, recombines left/right solutions, and rejects any
+recombined global that is infeasible under the original live conflict keys.
 
-Instrumentation added (2026-05-15): the existing default overload-split skip
-policy is still unchanged, but supported-leaf pruning now reports skipped overload
-subclusters, trees, and active leaves.
+The downstream snapshot shape is now one `ClusterRebuildSnapshot` per original
+cluster. Split subclusters are diagnostic only and are no longer exposed as
+ordinary downstream clusters. `snapshot.rebuilt_globals`, `snapshot.map_global`,
+MAP merge, N-scan pruning, lifecycle/output, and supported-leaf pruning all see
+feasible globals for the original cluster.
 
-There is a known caveat in `apply_post_solve_supported_leaf_pruning`:
+The old `overload_split_supported_pruning_policy` experiment and overload
+supported-pruning skip counters have been removed. Supported-leaf pruning now
+applies uniformly to every non-empty retained-global cluster snapshot, including
+clusters solved through overload recursion.
 
-```python
-# Overload-decomposed clusters are approximate; keep their current
-# frontiers to avoid over-pruning branches that may be needed once
-# severed weak links reconnect in later scans.
-#
-# TODO: Revisit this policy when overload-split semantics are reviewed.
-if snapshot.overload_split_origin_cluster_id is not None:
-    continue
-```
+Implemented (2026-05-17): recursive overload conditioning now memoizes identical
+subproblems within one original-cluster solve, keyed by
+`(track_ids, inherited_forbidden_keys)`. `OVERLOAD_SPLIT ...` diagnostics now
+include recursive cache hit/miss counts, max recursion depth, max cut-key count,
+total interface assignments, max recombination product size,
+`branch_recomb_retained`, `final_recomb_retained`, and
+`interface_assignment_cap_fallbacks`.
 
-This may suppress supported-leaf pruning exactly when clusters are large and pruning pressure is most needed.
+Remaining overload-solve review points:
 
-This should be explicitly investigated in this phase:
-
-- how often overload splitting occurs,
-- how many leaves/trees are affected by the pruning skip,
-- whether skipped pruning materially increases future expansion volume,
-- whether a weaker but still safe pruning rule can be applied to overload-split subclusters,
-- whether overload-split approximation should carry different retention semantics.
-
-Do not change this policy blindly. First measure its impact.
+- interface-assignment fallback behavior when a cut has many contested keys,
+- remaining recombination candidate volume and timing on replay-heavy scans,
+- whether a future K-best solver hint/warm-start can recover better quality
+  without changing the downstream feasible-global invariant.
 
 ### D. Birth ranking and capping
 
@@ -253,7 +250,7 @@ The second branch can introduce one targeted control, for example:
 - tentative-tree expansion cap,
 - relative per-tree leaf score pruning,
 - earlier score deletion for hopeless trees,
-- overload-split supported-leaf pruning variant,
+- overload recursive-solve quality/performance tuning,
 - or a confirmed/tentative frontier budget.
 
 Which one comes first should be data-driven.
@@ -284,7 +281,7 @@ This phase is successful when we have:
 
 - clear metrics showing where expansion volume comes from,
 - clear metrics showing which expansion work is retained/useful,
-- an explicit decision on whether overload-split pruning skip is materially harmful,
+- overload-split soundness maintained while supported-leaf pruning runs uniformly,
 - at least one conservative expansion/frontier control identified or implemented,
 - smoke/replay baselines updated when behavior changes intentionally,
 - no regression in the coherent scoring/start/lifecycle/API model,

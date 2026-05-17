@@ -42,10 +42,6 @@ class SupportedLeafPruningStats:
     """Counters from post-solve retained-global supported-leaf pruning."""
 
     unsupported_leaf_count_pruned: int = 0
-    overload_split_unsupported_leaf_count_pruned: int = 0
-    overload_split_clusters_skipped_supported_pruning: int = 0
-    overload_split_trees_skipped_supported_pruning: int = 0
-    overload_split_leaves_skipped_supported_pruning: int = 0
 
 
 def supported_leaf_ids_by_track_from_rebuilt_globals(
@@ -66,39 +62,12 @@ def apply_post_solve_supported_leaf_pruning(
     *,
     cluster_snapshots: list[ClusterRebuildSnapshot],
     tree_store: TrackTreeStore,
-    overload_split_supported_pruning_policy: str = "skip",
 ) -> SupportedLeafPruningStats:
     """Prune each cluster tree to leaves supported by retained rebuilt globals."""
-    if overload_split_supported_pruning_policy not in {"skip", "apply"}:
-        raise ValueError(
-            "overload_split_supported_pruning_policy must be 'skip' or 'apply'; "
-            f"got {overload_split_supported_pruning_policy!r}."
-        )
-
     track_trees_by_track_id = tree_store.track_trees_by_track_id
     unsupported_leaf_count_pruned = 0
-    overload_split_unsupported_leaf_count_pruned = 0
-    overload_split_clusters_skipped_supported_pruning = 0
-    overload_split_trees_skipped_supported_pruning = 0
-    overload_split_leaves_skipped_supported_pruning = 0
 
     for snapshot in cluster_snapshots:
-        is_overload_split = snapshot.overload_split_origin_cluster_id is not None
-        # Overload-decomposed clusters are approximate. The default policy keeps
-        # their current frontiers; the experimental "apply" policy uses the same
-        # retained-global support rule as normal clusters.
-        if is_overload_split and overload_split_supported_pruning_policy == "skip":
-            overload_split_clusters_skipped_supported_pruning += 1
-            for track_id in snapshot.track_ids:
-                tree = track_trees_by_track_id.get(track_id)
-                if tree is None:
-                    continue
-                overload_split_trees_skipped_supported_pruning += 1
-                overload_split_leaves_skipped_supported_pruning += len(
-                    tree.active_leaf_node_ids
-                )
-            continue
-
         # Keep k=0 behavior non-destructive for compatibility/debug edge cases.
         if not snapshot.rebuilt_globals:
             continue
@@ -118,24 +87,10 @@ def apply_post_solve_supported_leaf_pruning(
                 )
             pruned_leaf_count = len(tree.active_leaf_node_ids - supported_leaf_ids)
             unsupported_leaf_count_pruned += pruned_leaf_count
-            if is_overload_split:
-                overload_split_unsupported_leaf_count_pruned += pruned_leaf_count
             tree.active_leaf_node_ids = set(supported_leaf_ids)
 
     return SupportedLeafPruningStats(
         unsupported_leaf_count_pruned=unsupported_leaf_count_pruned,
-        overload_split_unsupported_leaf_count_pruned=(
-            overload_split_unsupported_leaf_count_pruned
-        ),
-        overload_split_clusters_skipped_supported_pruning=(
-            overload_split_clusters_skipped_supported_pruning
-        ),
-        overload_split_trees_skipped_supported_pruning=(
-            overload_split_trees_skipped_supported_pruning
-        ),
-        overload_split_leaves_skipped_supported_pruning=(
-            overload_split_leaves_skipped_supported_pruning
-        ),
     )
 
 
