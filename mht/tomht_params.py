@@ -64,7 +64,7 @@ class TOMHTParams:
     # Overload split solve strategy:
     # - "conditional_exact": current sound K-best-oriented recursive conditioning
     # - "greedy_partition": experimental sound approximation with exact fallback
-    overload_split_solution_mode: str = "conditional_exact"
+    overload_split_solution_mode: str = "greedy_partition"
     overload_split_greedy_ownership_metric: str = "best_leaf_score"
 
     # Scoring / numerical behavior.
