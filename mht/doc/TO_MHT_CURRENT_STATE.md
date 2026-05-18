@@ -275,7 +275,19 @@ External starts are the clean integration path for systems that already own init
 
 `add_external_starts(time, starts)` inserts starts after an `update_tracker(...)` call at the same timestamp. The preceding update establishes scan timestamp/bookkeeping; it can be an empty update when appropriate.
 
-External-start roots use `TOMHTParams.external_start_initial_existence_probability` by default, with optional per-track metadata override via `existence_log_odds` or `existence_probability`.
+External-start roots use
+`TOMHTParams.external_start_initial_existence_probability` by default, with
+optional per-track metadata override via `existence_log_odds` or
+`existence_probability`. After inserting starts and updating the MAP view,
+`add_external_starts(...)` runs the same score-based confirmation pass used by
+the normal scan lifecycle before applying output publication. With defaults, a
+`0.95` external-start prior crosses the `0.9` confirmation threshold and is
+published immediately; lower per-track existence metadata can leave the tree
+tentative/unpublished but still inspectable with
+`get_map_output_tracks(include_unpublished=True)`.
+
+`add_external_starts(...)` does not run full lifecycle deletion, N-scan
+pruning, cluster rebuild, or scan stats updates.
 
 ### Internal initiator starts
 

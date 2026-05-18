@@ -2303,8 +2303,8 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertEqual(3, frontier.leaves_after_n_scan_pruning)
         self.assertEqual(3, frontier.leaves_after_lifecycle)
         self.assertEqual(1, frontier.expanded_leaf_count)
-        self.assertEqual(1, frontier.expanded_leaves_tentative)
-        self.assertEqual(0, frontier.expanded_leaves_confirmed)
+        self.assertEqual(0, frontier.expanded_leaves_tentative)
+        self.assertEqual(1, frontier.expanded_leaves_confirmed)
         self.assertEqual(3, frontier.local_child_candidates_total)
         self.assertEqual(3, frontier.local_children_created_total)
         self.assertEqual(3, frontier.local_children_retained_total)
@@ -2431,8 +2431,8 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
             "leaves_before=1 leaves_after_expansion=3 leaves_after_empty=3 "
             "leaves_after_births=3 leaves_after_supported_prune=3 "
             "leaves_after_nscan=3 leaves_after_lifecycle=3 trees_before=1 "
-            "trees_after_lifecycle=1 expanded=1 expanded_tentative=1 "
-            "expanded_confirmed=0 child_candidates=3 children_created=3 "
+            "trees_after_lifecycle=1 expanded=1 expanded_tentative=0 "
+            "expanded_confirmed=1 child_candidates=3 children_created=3 "
             "children_retained=3 miss_children=1 detection_children=2 "
             "topk_supported=3 map_selected=1 unsupported_pruned=0",
             debug_lines[-1],

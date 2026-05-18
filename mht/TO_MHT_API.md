@@ -765,8 +765,12 @@ lifecycle.
 Use external starts when another caller-side process has already decided which
 starts should enter the tracker. External starts bypass the internal initiator
 path and its current candidate capping/guardrails. They are still inserted as
-TOMHT trees and go through TOMHT confirmation, deletion, and publication after
-insertion.
+TOMHT trees. After insertion, TOMHT updates the MAP view, runs the same
+score-based confirmation pass used in the normal scan lifecycle, and then
+applies output publication. Full lifecycle deletion, N-scan pruning, cluster
+rebuild, and scan stats are not run from `add_external_starts(...)`.
+For immediate publication of an externally started track, ensure that its
+existence probability exceeds the confirmation and publication thresholds.
 
 It is valid to use `initiator=None` and manage all starts externally. That is
 the cleanest integration pattern when the application already has a
@@ -809,6 +813,13 @@ external start generator already computes additive LLR/evidence; TOMHT accepts
 any finite log-odds value directly and does not clamp it.
 
 External starts may also provide `"age"` and `"hits"` metadata.
+
+With the defaults, `external_start_initial_existence_probability=0.95` crosses
+the default `track_confirmation_existence_probability=0.9`, so an external
+start is confirmed and published immediately unless publication gates are
+tightened. A lower per-track `"existence_probability"` or `"existence_log_odds"`
+can keep the inserted tree tentative and unpublished while still making it
+available through `get_map_output_tracks(include_unpublished=True)`.
 
 ---
 

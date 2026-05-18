@@ -55,13 +55,14 @@ class _NoopUpdater:
 
 
 def _quiet_params(**overrides: Any) -> TOMHTParams:
-    return TOMHTParams(
-        debug_display_scan_stats=False,
-        debug_display_hypotheses=False,
-        debug_display_births=False,
-        collect_stats=False,
-        **overrides,
-    )
+    defaults: dict[str, Any] = {
+        "debug_display_scan_stats": False,
+        "debug_display_hypotheses": False,
+        "debug_display_births": False,
+        "collect_stats": False,
+    }
+    defaults.update(overrides)
+    return TOMHTParams(**defaults)
 
 
 def _build_tracker(params: TOMHTParams | None = None) -> TOMHTTracker:
@@ -152,7 +153,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
                 [_external_start(external_timestamp)],
             )
 
-    def test_add_external_starts_inserts_unpublished_tentative_tree_by_default(
+    def test_default_external_start_confirms_and_publishes_immediately(
         self,
     ) -> None:
         tracker = _build_tracker()
@@ -167,14 +168,14 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         tree_snapshot = tracker.get_track_tree_snapshot()
         self.assertEqual(1, len(tree_snapshot))
         tree = next(iter(tracker.track_trees_by_track_id.values()))
-        self.assertEqual("tentative", tree.lifecycle_state)
-        self.assertEqual("unpublished", tree.publication_state)
-        self.assertIsNone(tree.public_track_id)
+        self.assertEqual("confirmed", tree.lifecycle_state)
+        self.assertEqual("published", tree.publication_state)
+        self.assertEqual(0, tree.public_track_id)
         self.assertEqual(
-            "unpublished",
+            "published",
             next(iter(tree_snapshot.values()))["publication_state"],
         )
-        self.assertIsNone(next(iter(tree_snapshot.values()))["public_track_id"])
+        self.assertEqual(0, next(iter(tree_snapshot.values()))["public_track_id"])
 
         map_snapshot = tracker.get_map_hypothesis_snapshot()
         self.assertIsNotNone(map_snapshot)
@@ -187,18 +188,17 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         self.assertAlmostEqual(expected_log_delta, leaf.accumulated_log_score)
         self.assertAlmostEqual(expected_log_delta, map_snapshot.log_weight)
 
-        self.assertEqual(set(), tracker.get_map_output_tracks())
-        output_tracks = tracker.get_map_output_tracks(include_unpublished=True)
+        output_tracks = tracker.get_map_output_tracks()
         self.assertEqual(1, len(output_tracks))
         output_track = next(iter(output_tracks))
+        self.assertEqual(0, output_track.id)
         self.assertEqual(leaf.track_id, output_track.metadata["track_id"])
         self.assertEqual(leaf.track_id, output_track.metadata["internal_track_id"])
-        self.assertIsNone(output_track.metadata["public_track_id"])
-        self.assertEqual(leaf.track_id, output_track.id)
+        self.assertEqual(0, output_track.metadata["public_track_id"])
         self.assertEqual(leaf.node_id, output_track.metadata["node_id"])
         self.assertEqual("external_start", output_track.metadata["root_source"])
-        self.assertEqual("tentative", output_track.metadata["lifecycle_state"])
-        self.assertEqual("unpublished", output_track.metadata["publication_state"])
+        self.assertEqual("confirmed", output_track.metadata["lifecycle_state"])
+        self.assertEqual("published", output_track.metadata["publication_state"])
         self.assertAlmostEqual(
             expected_log_delta,
             output_track.metadata["existence_log_odds"],
@@ -209,6 +209,64 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         )
         self.assertNotIn("opaque_source_tag", output_track.metadata)
 
+    def test_metadata_low_probability_external_start_remains_unpublished(
+        self,
+    ) -> None:
+        tracker = _build_tracker()
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        tracker.update_tracker(timestamp, [])
+        start = _external_start(timestamp)
+        start.metadata["existence_probability"] = 0.6
+
+        tracker.add_external_starts(timestamp, [start])
+
+        tree = next(iter(tracker.track_trees_by_track_id.values()))
+        self.assertEqual("tentative", tree.lifecycle_state)
+        self.assertEqual("unpublished", tree.publication_state)
+        self.assertIsNone(tree.public_track_id)
+        self.assertEqual(set(), tracker.get_map_output_tracks())
+
+        inspection_tracks = tracker.get_map_output_tracks(include_unpublished=True)
+        self.assertEqual(1, len(inspection_tracks))
+        inspection_track = next(iter(inspection_tracks))
+        self.assertEqual(0, inspection_track.id)
+        self.assertEqual(0, inspection_track.metadata["internal_track_id"])
+        self.assertIsNone(inspection_track.metadata["public_track_id"])
+        self.assertEqual("tentative", inspection_track.metadata["lifecycle_state"])
+        self.assertEqual(
+            "unpublished",
+            inspection_track.metadata["publication_state"],
+        )
+        self.assertAlmostEqual(
+            _logit(0.6),
+            inspection_track.metadata["existence_log_odds"],
+        )
+
+    def test_add_external_starts_does_not_run_deletion_lifecycle(self) -> None:
+        tracker = _build_tracker(
+            params=_quiet_params(
+                track_deletion_existence_probability=0.4,
+                collect_stats=True,
+            )
+        )
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        tracker.update_tracker(timestamp, [])
+        stats_before = tracker.last_scan_stats
+        start = _external_start(timestamp)
+        start.metadata["existence_probability"] = 0.1
+
+        tracker.add_external_starts(timestamp, [start])
+
+        self.assertIs(stats_before, tracker.last_scan_stats)
+        self.assertEqual(1, len(tracker.track_trees_by_track_id))
+        tree = next(iter(tracker.track_trees_by_track_id.values()))
+        self.assertEqual("tentative", tree.lifecycle_state)
+        self.assertEqual("unpublished", tree.publication_state)
+        self.assertEqual(
+            1,
+            len(tracker.get_map_output_tracks(include_unpublished=True)),
+        )
+
     def test_external_start_tree_can_remain_unpublished_by_policy(self) -> None:
         tracker = _build_tracker(params=_quiet_params(publish_lifecycle_states=()))
         timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
@@ -218,6 +276,7 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
 
         self.assertEqual(1, len(tracker.track_trees_by_track_id))
         tree = next(iter(tracker.track_trees_by_track_id.values()))
+        self.assertEqual("confirmed", tree.lifecycle_state)
         self.assertEqual("unpublished", tree.publication_state)
         self.assertEqual(set(), tracker.get_map_output_tracks())
 
@@ -241,6 +300,11 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
 
         self.assertEqual(2, len(tracker.track_trees_by_track_id))
         self.assertEqual([0, 1], sorted(tracker.track_trees_by_track_id.keys()))
+        map_snapshot = tracker.get_map_hypothesis_snapshot()
+        self.assertIsNotNone(map_snapshot)
+        assert map_snapshot is not None
+        self.assertEqual([0, 1], sorted(map_snapshot.leaf_nodes_by_track_id))
+        self.assertAlmostEqual(2.0 * _logit(0.95), map_snapshot.log_weight)
 
     def test_add_external_starts_missing_existence_probability_uses_params_default(
         self,

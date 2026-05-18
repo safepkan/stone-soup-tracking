@@ -614,6 +614,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             assoc_pad_label=TOMHTTracker.ASSOC_PAD,
         )
         self._last_map_global = result.map_global
+        self._apply_score_based_track_confirmation()
         self._apply_output_publication(self._last_map_global)
         self.global_hypotheses = [self._last_map_global]
 
