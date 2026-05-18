@@ -8,7 +8,7 @@ version = "0.0.0"
 requires-python = ">=3.12"
 dependencies = [
   "stonesoup[mfa]==1.8",
-  "numpy==2.4.4",
+  "numpy==2.4.5",
   "scipy==1.17.1",
   "matplotlib==3.10.9",
   "ordered-set==4.1.0",
@@ -17,10 +17,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "black==26.3.1",
+  "black==26.5.0",
   "flake8==7.3.0",
   "Flake8-pyproject==1.2.4",
-  "mypy==2.0.0",
+  "mypy==2.1.0",
   "pytest==9.0.3",
   "nbformat==5.10.4",
 ]
