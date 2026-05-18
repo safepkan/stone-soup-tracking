@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import datetime
-from typing import Literal, Mapping, NamedTuple
+from typing import Literal, Mapping, NamedTuple, TypeAlias
 
 from stonesoup.types.detection import Detection
 from stonesoup.types.state import State
@@ -19,8 +19,8 @@ class DetectionKey(NamedTuple):
     det_index: int
 
 
-type TrackLifecycleState = Literal["tentative", "confirmed"]
-type TrackPublicationState = Literal["unpublished", "published"]
+TrackLifecycleState: TypeAlias = Literal["tentative", "confirmed"]
+TrackPublicationState: TypeAlias = Literal["unpublished", "published"]
 
 
 @dataclass

@@ -35,12 +35,15 @@ The `Makefile` provides a few convenience targets:
 You can select a different environment by passing `ENV` (default is `venv`):
 
 ```bash
+make setup_venv ENV=.venv310
+make smoke ENV=.venv310
 make update_venv ENV=.venv312
 make smoke ENV=.venv312
 ```
 
-This is useful for periodic Python 3.12 compatibility checks while keeping your
-main development environment separate.
+This is useful for compatibility checks across supported Python versions while
+keeping your main development environment separate. For names like `.venv310`,
+`make setup_venv` uses `python3.10` when it is available.
 
 ## Dependency Updates
 
@@ -64,7 +67,7 @@ It runs on:
 Current CI job:
 
 - Ubuntu 24.04 runner
-- Python 3.12
+- Python 3.10, 3.12, 3.13, and 3.14
 - dependency install from `requirements.txt`
 - `python pre_commit.py --no-dirty`
 - `make smoke`

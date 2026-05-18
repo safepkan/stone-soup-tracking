@@ -1,13 +1,29 @@
 # Flat makefile used as command shortener
 
 ENV ?= venv
+ENV_PYTHON_VERSION ?= $(shell printf '%s\n' "$(ENV)" | sed -n 's/.*venv\([0-9]\)\([0-9][0-9]\)$$/\1.\2/p')
+VENV_PYTHON ?= $(shell \
+	if [ -f "$(ENV)/pyvenv.cfg" ]; then \
+		home=$$(sed -n 's/^home = //p' "$(ENV)/pyvenv.cfg" | sed 1q); \
+		if [ -n "$(ENV_PYTHON_VERSION)" ] && [ -x "$$home/python$(ENV_PYTHON_VERSION)" ]; then \
+			printf '%s\n' "$$home/python$(ENV_PYTHON_VERSION)"; \
+		elif [ -x "$$home/python3" ]; then \
+			printf '%s\n' "$$home/python3"; \
+		else \
+			command -v python3; \
+		fi; \
+	elif [ -n "$(ENV_PYTHON_VERSION)" ] && command -v "python$(ENV_PYTHON_VERSION)" >/dev/null 2>&1; then \
+		command -v "python$(ENV_PYTHON_VERSION)"; \
+	else \
+		command -v python3; \
+	fi)
 PYTHON := ./$(ENV)/bin/python
 PIP := ./$(ENV)/bin/pip
 
 .PHONY: setup_venv
 setup_venv:
 	rm -rf $(ENV)/
-	python3 -m venv $(ENV)
+	$(VENV_PYTHON) -m venv $(ENV)
 	$(PIP) install -r requirements.txt
 
 .PHONY: update_venv

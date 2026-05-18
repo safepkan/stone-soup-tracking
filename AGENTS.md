@@ -18,7 +18,7 @@
 
 ## Code Guidelines
 
-- Target Python >=3.12.
+- Target Python >=3.10.
 - Use type hints throughout; prefer builtin generics (`list[int]`, `dict[str, Any]`) over `List`/`Dict`.
 - Formatting/lint/type checks: `black`, `flake8`, `mypy`; always run `venv/bin/python pre_commit.py` after modifying code (not just before pushing).
 - Use the repo venv interpreter for project commands; avoid plain `python`.

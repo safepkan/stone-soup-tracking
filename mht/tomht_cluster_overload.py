@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from itertools import product
-from typing import Mapping
+from typing import Mapping, TypeAlias
 
 from .tomht_clustering import (
     ClusterWorkItem,
@@ -86,8 +86,8 @@ class _BinaryClusterSplit:
     removed_edges: tuple[OverloadSplitRemovedEdge, ...]
 
 
-type _RecursiveCacheKey = tuple[tuple[int, ...], frozenset[DetectionKey]]
-type _RecursiveSolveCache = dict[_RecursiveCacheKey, tuple[GlobalHypothesis, ...]]
+_RecursiveCacheKey: TypeAlias = tuple[tuple[int, ...], frozenset[DetectionKey]]
+_RecursiveSolveCache: TypeAlias = dict[_RecursiveCacheKey, tuple[GlobalHypothesis, ...]]
 
 
 @dataclass

@@ -8,6 +8,8 @@ It is a **current-state snapshot**, not a roadmap and not a full design history.
 
 The long dated update stack from the previous version has been consolidated into the main text below. The main result of the most recent phase is that scoring, start priors, confirmation, publication, deletion, public IDs, and API documentation now have a coherent interpretation. This puts the tracker in a good position to return to expansion-volume work.
 
+Update (2026-05-18): the project now targets Python >=3.10 for ISAC integration compatibility. The repo metadata, formatter/type-check settings, and GitHub Actions matrix include Python 3.10 while retaining the newer-version CI checks.
+
 ---
 
 ## Bottom line
