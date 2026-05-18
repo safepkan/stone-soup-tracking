@@ -61,6 +61,11 @@ class TOMHTParams:
     overload_split_enabled: bool = True
     overload_split_projected_combination_threshold: int | None = 500_000
     overload_split_max_edge_removals_per_cluster: int | None = None
+    # Overload split solve strategy:
+    # - "conditional_exact": current sound K-best-oriented recursive conditioning
+    # - "greedy_partition": experimental sound approximation with exact fallback
+    overload_split_solution_mode: str = "conditional_exact"
+    overload_split_greedy_ownership_metric: str = "best_leaf_score"
 
     # Scoring / numerical behavior.
     # prob_detect and clutter_density are scalar defaults used by
@@ -141,7 +146,29 @@ class TOMHTParams:
             self.initiator_start_initial_existence_probability,
             parameter_name="initiator_start_initial_existence_probability",
         )
+        self._validate_overload_split_params()
         self._validate_publication_params()
+
+    def _validate_overload_split_params(self) -> None:
+        """Validate overload split mode controls."""
+        valid_solution_modes = {"conditional_exact", "greedy_partition"}
+        if self.overload_split_solution_mode not in valid_solution_modes:
+            valid_str = ", ".join(repr(mode) for mode in sorted(valid_solution_modes))
+            raise ValueError(
+                "overload_split_solution_mode must be one of "
+                f"({valid_str}); got {self.overload_split_solution_mode!r}."
+            )
+
+        valid_ownership_metrics = {"best_leaf_score"}
+        if self.overload_split_greedy_ownership_metric not in valid_ownership_metrics:
+            valid_str = ", ".join(
+                repr(metric) for metric in sorted(valid_ownership_metrics)
+            )
+            raise ValueError(
+                "overload_split_greedy_ownership_metric must be one of "
+                f"({valid_str}); got "
+                f"{self.overload_split_greedy_ownership_metric!r}."
+            )
 
     def _validate_publication_params(self) -> None:
         """Validate sticky output-publication gate controls."""

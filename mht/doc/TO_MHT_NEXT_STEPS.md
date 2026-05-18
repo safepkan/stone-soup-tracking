@@ -202,12 +202,26 @@ total interface assignments, max recombination product size,
 `branch_recomb_retained`, `final_recomb_retained`, and
 `interface_assignment_cap_fallbacks`.
 
+Implemented (2026-05-18): overload splitting now has an experimental
+`overload_split_solution_mode="greedy_partition"` beside the default
+`"conditional_exact"` mode. Greedy mode assigns cut keys by best local
+claiming-leaf score, solves one side first, releases assigned keys that no
+retained first-side global uses, recombines with final live-conflict
+verification, and falls back to conditional exact if the greedy partition cannot
+produce feasible parent globals. This preserves the original-cluster feasible
+global invariant while explicitly allowing different, non-K-best outputs in the
+experimental mode. `OVERLOAD_SPLIT ...` diagnostics include greedy split,
+fallback, assignment, and release counters when the mode is active.
+
 Remaining overload-solve review points:
 
-- interface-assignment fallback behavior when a cut has many contested keys,
-- remaining recombination candidate volume and timing on replay-heavy scans,
-- whether a future K-best solver hint/warm-start can recover better quality
-  without changing the downstream feasible-global invariant.
+- compare `conditional_exact` and `greedy_partition` on replay-heavy scans,
+  especially scan 174 recombination timing and output deltas,
+- interface-assignment fallback behavior when conditional exact sees a cut with
+  many contested keys,
+- whether a future K-best solver hint/warm-start or improved greedy ownership
+  policy can recover better quality without changing the downstream
+  feasible-global invariant.
 
 ### D. Birth ranking and capping
 

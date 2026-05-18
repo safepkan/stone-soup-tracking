@@ -1,0 +1,5 @@
+{
+  "tomht_params": {
+    "overload_split_solution_mode": "greedy_partition"
+  }
+}

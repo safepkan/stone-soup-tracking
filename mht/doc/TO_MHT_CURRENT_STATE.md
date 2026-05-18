@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, and live conflict-key cleanup completed through **2026-05-16**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, and overload-split mode work completed through **2026-05-18**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -471,8 +471,11 @@ problem through the exact solver interface. Scores are accumulated leaf scores;
 there is no current-scan unused-detection affine offset.
 
 If a cluster exceeds `overload_split_projected_combination_threshold`, rebuild
-keeps the original cluster as the public unit of work and applies recursive
-conditional splitting internally:
+keeps the original cluster as the public unit of work and applies one of the
+configured overload split solution modes internally.
+
+`TOMHTParams.overload_split_solution_mode="conditional_exact"` is the default
+and keeps the exact-preserving recursive conditional path:
 
 - choose a deterministic weak-link binary split,
 - enumerate cut-key forbiddance assignments when the cut interface is small,
@@ -480,6 +483,17 @@ conditional splitting internally:
 - recombine left/right solutions by summed score,
 - reject any recombined global that violates the original live conflict keys,
 - retain deterministic top-K feasible globals for the original cluster.
+
+`"greedy_partition"` is an experimental sound approximation for overload
+fallbacks. At each binary split it assigns cut keys to the side with the best
+local claiming-leaf score, solves the side with more assigned keys first,
+forbids only first-side assigned keys that are actually claimed by retained
+first-side globals, solves the second side, then recombines and verifies
+feasibility under the original live conflicts. If either side has no retained
+solutions or recombination produces no feasible parent globals, that split
+falls back to the `conditional_exact` path. Greedy mode may return different
+feasible top-K globals because it does not preserve strict K-best optimality
+across all cut assignments.
 
 Recursive subproblem results are memoized within one original-cluster solve by
 `(track_ids, inherited_forbidden_keys)`, preserving the same conditional solve
@@ -489,8 +503,9 @@ are reported in `OVERLOAD_SPLIT ...
 interface_assignment_cap_fallbacks=...` diagnostics. The same log line also
 reports recursive cache hit/miss counts, max recursion depth, max cut-key count,
 total interface assignments, max recombination product size,
-`branch_recomb_retained`, and `final_recomb_retained`. Split subclusters are not
-exposed as ordinary `ClusterRebuildSnapshot` objects.
+`branch_recomb_retained`, and `final_recomb_retained`. In greedy mode it also
+reports compact `greedy_*` assignment, release, split, and fallback counters.
+Split subclusters are not exposed as ordinary `ClusterRebuildSnapshot` objects.
 
 ### Post-solve supported-leaf pruning
 

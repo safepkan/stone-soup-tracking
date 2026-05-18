@@ -57,6 +57,12 @@ class OverloadSplitSummary:
     total_interface_assignments: int = 0
     max_recombination_product_size: int = 0
     final_recombined_globals_retained: int = 0
+    greedy_partition_splits: int = 0
+    greedy_partition_fallbacks: int = 0
+    greedy_cut_keys_assigned_left: int = 0
+    greedy_cut_keys_assigned_right: int = 0
+    greedy_cut_keys_assigned_neither: int = 0
+    greedy_cut_keys_released: int = 0
 
 
 def current_scan_candidate_keys_for_tree(

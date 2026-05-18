@@ -1213,7 +1213,14 @@ These controls are implementation safety valves and are subject to revision:
 - birth load guards
 - `max_global_hypotheses`
 - `max_projected_cluster_combinations`
-- overload-splitting parameters
+- `overload_split_enabled`
+- `overload_split_projected_combination_threshold`
+- `overload_split_max_edge_removals_per_cluster`
+- `overload_split_solution_mode`: `"conditional_exact"` by default, or
+  experimental `"greedy_partition"` for a feasible but approximate overload
+  fallback
+- `overload_split_greedy_ownership_metric`: currently only
+  `"best_leaf_score"`
 - `ns_scan_window`
 
 Tune the probabilistic model first. Use these controls to keep computation
