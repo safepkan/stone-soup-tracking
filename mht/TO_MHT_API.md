@@ -342,6 +342,13 @@ If supplied, it maps the internal TOMHT logical track ID to the public
 `Track.id` assigned when a tree first becomes published. A custom mapper is
 responsible for returning unique, non-`None`, non-reused public IDs.
 
+### Python 3.14 note
+
+If a custom Stone Soup component declares `Property` fields in a module
+using `from __future__ import annotations`, prefer the explicit
+`Property(Type,...)` form, or mirror the built-in version gate,
+because Stone Soup may not recover annotation-only property types there.
+
 ---
 
 ## 5. Local scoring model

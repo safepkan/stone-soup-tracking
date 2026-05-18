@@ -5,6 +5,7 @@ from dataclasses import fields, replace
 import datetime
 import io
 from math import exp, log, log1p
+import sys
 import unittest
 from typing import Iterable, cast
 
@@ -226,9 +227,14 @@ class _CaptureDetectionProbabilityModel:
 
 
 class _MetadataMissCountDeleter(Deleter):
-    threshold: int = Property(
-        default=1, doc="Delete when metadata missed_count >= threshold."
-    )
+    if sys.version_info >= (3, 14):
+        threshold = Property(
+            int, default=1, doc="Delete when metadata missed_count >= threshold."
+        )
+    else:
+        threshold: int = Property(
+            default=1, doc="Delete when metadata missed_count >= threshold."
+        )
 
     def check_for_deletion(self, track: Track, **kwargs) -> bool:
         del kwargs
