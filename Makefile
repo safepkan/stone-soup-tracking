@@ -14,6 +14,10 @@ setup_venv:
 update_venv:
 	$(PIP) install -r requirements.txt
 
+.PHONY: mht_tests
+mht_tests:
+	$(PYTHON) -m pytest mht/tests
+
 .PHONY: smoke
 smoke:
 	MPLBACKEND=Agg TOMHT_NO_SHOW=1 $(PYTHON) mht/runners/run_tomht_crossing.py

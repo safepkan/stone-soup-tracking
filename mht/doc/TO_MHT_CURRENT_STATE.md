@@ -596,6 +596,7 @@ Expansion timing is split into hypothesiser and updater call counts/times, which
 ### Regression status
 
 Smoke and replay regression harnesses are now in place for both output and timing comparisons. Baselines have been updated for the scoring/lifecycle/publication and birth-cleanup changes.
+Focused MHT unit tests are available through `make mht_tests`, which runs `pytest mht/tests`.
 
 ---
 

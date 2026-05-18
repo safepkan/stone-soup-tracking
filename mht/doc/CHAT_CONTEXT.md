@@ -48,6 +48,7 @@ This means external track initiation is a first-class integration requirement.
 - Workflow details and repo conventions live in `AGENTS.md`.
 
 ## Quick sanity checks
+- MHT unit tests: `make mht_tests`
 - Smoke test (headless): `make smoke`
 - Crossing only (headless): `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht/runners/run_tomht_crossing.py`
 - Bearing-range only (headless): `MPLBACKEND=Agg TOMHT_NO_SHOW=1 venv/bin/python mht/runners/run_tomht_bearing_range.py`
