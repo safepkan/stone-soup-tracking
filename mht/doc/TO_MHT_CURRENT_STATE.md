@@ -107,8 +107,9 @@ Important extracted modules include:
 - `tomht_expansion.py` for local expansion orchestration,
 - `tomht_births.py` for internal-birth residual/candidate handling,
 - `tomht_external_starts.py` for external-start validation/insertion,
-- `tomht_clustering.py` for cluster construction and overload decomposition,
-- `tomht_cluster_rebuild.py` for cluster option materialization, exact solve orchestration, and MAP merge,
+- `tomht_clustering.py` for live-conflict cluster construction,
+- `tomht_cluster_overload.py` for direct cluster solving plus internal overload split modes,
+- `tomht_cluster_rebuild.py` for cluster option materialization, snapshot assembly, and MAP merge,
 - `tomht_pruning.py` for post-solve supported-leaf pruning and MAP-only N-scan pruning,
 - `tomht_lifecycle.py` for confirmation, score deletion, miss/deleter lifecycle, and live-MAP filtering,
 - `tomht_output.py` for publication policy, public-ID assignment, and output reconstruction,
@@ -188,7 +189,7 @@ The current runtime pipeline is:
 3. remove empty trees,
 4. optionally create internal birth trees from residual detections,
 5. build live unresolved conflict clusters,
-6. rebuild feasible globals per original cluster through the exact cluster-solver contract, using recursive conditional overload splitting internally when needed,
+6. rebuild feasible globals per original cluster through the exact cluster-solver contract, using an internal overload split mode when needed,
 7. post-solve prune each cluster tree frontier to leaves supported by retained rebuilt globals,
 8. merge cluster MAP selections into a full-scan MAP global,
 9. apply MAP-only N-scan pruning on explicit trees,
@@ -385,8 +386,9 @@ The exact cluster problem contract carries:
 
 Tracker-side overload handling remains outside the concrete solver backend:
 
-- overload splitting is an internal recursive/conditional strategy around exact
-  subproblem solves and returns feasible globals for the original live cluster.
+- overload splitting is internal to one original-cluster solve,
+- both overload modes return feasible globals for the original live cluster,
+- no split subcluster pseudo-globals are exposed downstream.
 
 ### Branch-and-bound default
 
@@ -474,8 +476,25 @@ If a cluster exceeds `overload_split_projected_combination_threshold`, rebuild
 keeps the original cluster as the public unit of work and applies one of the
 configured overload split solution modes internally.
 
-`TOMHTParams.overload_split_solution_mode="conditional_exact"` is the default
-and keeps the exact-preserving recursive conditional path:
+`TOMHTParams.overload_split_solution_mode="greedy_partition"` is the default
+operational overload fallback. It is sound but approximate:
+
+- choose a deterministic weak-link binary split,
+- assign contested cut keys by best local claiming-leaf score,
+- solve the side with more assigned cut keys first,
+- release assigned keys that no retained first-side global actually uses,
+- solve the second side forbidding only first-side assigned keys that remain claimed,
+- recombine left/right solutions by summed score,
+- reject any recombined global that violates the original live conflict keys,
+- retain deterministic top-K feasible globals for the original cluster,
+- fall back to `conditional_exact` for that branch if the greedy partition cannot produce feasible parent globals.
+
+Greedy mode may return different feasible top-K globals because it does not
+preserve strict K-best optimality across all cut assignments. It is the default
+because the standard replay quality looked acceptable while the scan-174
+conditional-exact recombination hotspot disappeared.
+
+`"conditional_exact"` remains available as a reference / higher-compute mode:
 
 - choose a deterministic weak-link binary split,
 - enumerate cut-key forbiddance assignments when the cut interface is small,
@@ -483,17 +502,6 @@ and keeps the exact-preserving recursive conditional path:
 - recombine left/right solutions by summed score,
 - reject any recombined global that violates the original live conflict keys,
 - retain deterministic top-K feasible globals for the original cluster.
-
-`"greedy_partition"` is an experimental sound approximation for overload
-fallbacks. At each binary split it assigns cut keys to the side with the best
-local claiming-leaf score, solves the side with more assigned keys first,
-forbids only first-side assigned keys that are actually claimed by retained
-first-side globals, solves the second side, then recombines and verifies
-feasibility under the original live conflicts. If either side has no retained
-solutions or recombination produces no feasible parent globals, that split
-falls back to the `conditional_exact` path. Greedy mode may return different
-feasible top-K globals because it does not preserve strict K-best optimality
-across all cut assignments.
 
 Recursive subproblem results are memoized within one original-cluster solve by
 `(track_ids, inherited_forbidden_keys)`, preserving the same conditional solve

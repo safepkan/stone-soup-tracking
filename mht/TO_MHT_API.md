@@ -23,8 +23,8 @@ The tracker owns:
 - local hypothesis expansion,
 - additive score accumulation,
 - measurement-exclusivity clustering,
-- exact solving within rebuilt clusters,
-- optional recursive overload splitting inside one original cluster solve,
+- solver-backed K-best solving within rebuilt clusters,
+- optional overload split solving inside one original cluster solve,
 - N-scan pruning,
 - whole-track confirmation and deletion,
 - sticky output publication,
@@ -1216,9 +1216,10 @@ These controls are implementation safety valves and are subject to revision:
 - `overload_split_enabled`
 - `overload_split_projected_combination_threshold`
 - `overload_split_max_edge_removals_per_cluster`
-- `overload_split_solution_mode`: `"conditional_exact"` by default, or
-  experimental `"greedy_partition"` for a feasible but approximate overload
-  fallback
+- `overload_split_solution_mode`: `"greedy_partition"` by default for the
+  operational sound-but-approximate overload fallback, or
+  `"conditional_exact"` for reference / higher-compute K-best-oriented
+  conditioning
 - `overload_split_greedy_ownership_metric`: currently only
   `"best_leaf_score"`
 - `ns_scan_window`

@@ -154,10 +154,11 @@ def _map_global(snapshot: ClusterRebuildSnapshot) -> GlobalHypothesis:
 class TOMHTOverloadGreedyPartitionTest(unittest.TestCase):
     def test_params_validate_greedy_mode_controls(self) -> None:
         self.assertEqual(
-            "conditional_exact",
+            "greedy_partition",
             TOMHTParams().overload_split_solution_mode,
         )
         TOMHTParams(overload_split_solution_mode="greedy_partition")
+        TOMHTParams(overload_split_solution_mode="conditional_exact")
 
         with self.assertRaisesRegex(ValueError, "overload_split_solution_mode"):
             TOMHTParams(overload_split_solution_mode="not-a-mode")

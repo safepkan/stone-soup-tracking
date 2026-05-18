@@ -56,14 +56,19 @@ class TOMHTParams:
     max_projected_cluster_combinations: int | None = None
     # Optional overload mitigation:
     # when a cluster's projected Cartesian combinations exceed this threshold,
-    # recursively condition on internal weak-link splits while returning feasible
-    # globals for the original live cluster.
+    # split solving remains internal and returns feasible globals for the
+    # original live cluster.
     overload_split_enabled: bool = True
     overload_split_projected_combination_threshold: int | None = 500_000
     overload_split_max_edge_removals_per_cluster: int | None = None
     # Overload split solve strategy:
-    # - "conditional_exact": current sound K-best-oriented recursive conditioning
-    # - "greedy_partition": experimental sound approximation with exact fallback
+    # - "greedy_partition": default operational overload fallback; sound but
+    #   approximate. It greedily partitions contested cut detections and falls
+    #   back to conditional_exact if the partition cannot produce feasible
+    #   original-cluster globals.
+    # - "conditional_exact": reference / higher-compute recursive conditional
+    #   mode. It enumerates cut assignments to preserve K-best-oriented behavior
+    #   under overload.
     overload_split_solution_mode: str = "greedy_partition"
     overload_split_greedy_ownership_metric: str = "best_leaf_score"
 

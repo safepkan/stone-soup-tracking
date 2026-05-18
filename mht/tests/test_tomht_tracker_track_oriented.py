@@ -828,6 +828,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
                 params=TOMHTParams(
                     max_global_hypotheses=3,
                     overload_split_projected_combination_threshold=1,
+                    overload_split_solution_mode="conditional_exact",
                     debug_display_scan_stats=False,
                     debug_display_hypotheses=False,
                     debug_display_births=False,
