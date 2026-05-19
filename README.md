@@ -64,6 +64,23 @@ entry to `RELEASE_HISTORY.md`. To intentionally export a dirty source snapshot,
 run `source venv/bin/activate && python tools/export_tomht_release.py --allow-dirty`;
 the recorded source commit gets a `-dirty` suffix.
 
+## TO-MHT Snapshot Install
+
+Install a `stonesoup-tomht` GitHub zip or unpacked snapshot into a target folder
+with:
+
+```bash
+python tools/install_tomht_snapshot.py ~/releases/stonesoup-tomht-main.zip
+```
+
+The default target is the current ISAC integration folder:
+`/home/eatpadn/isac/radiant-isac-coeur/apps/radiant_isac/radiant_isac/sandbox/fusion/mht`.
+Pass `--target <folder>` to install somewhere else. The helper also accepts an
+already-unpacked snapshot folder instead of a zip, preserves target `venv` and
+`.venv*` folders, and skips source-side local artifacts such as `.git`,
+`__pycache__`, virtualenv folders, caches, and build outputs. Use `--dry-run`
+to preview the replacement.
+
 ## Dependency Updates
 
 Direct runtime and dev dependencies are pinned in `pyproject.toml` so the
