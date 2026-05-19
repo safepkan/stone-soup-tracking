@@ -30,6 +30,10 @@ setup_venv:
 update_venv:
 	$(PIP) install -r requirements.txt
 
+.PHONY: pre_commit
+pre_commit:
+	PATH="$(CURDIR)/$(ENV)/bin:$$PATH" $(PYTHON) pre_commit.py --no-dirty
+
 .PHONY: mht_tests
 mht_tests:
 	$(PYTHON) -m pytest mht/tests
