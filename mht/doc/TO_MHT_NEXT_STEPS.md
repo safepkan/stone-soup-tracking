@@ -216,6 +216,17 @@ the scan-174 conditional-exact recombination hotspot with acceptable output
 quality for this phase. `OVERLOAD_SPLIT ...` diagnostics include greedy split,
 fallback, assignment, and release counters when the mode is active.
 
+Implemented (2026-05-19): overload solve code was reorganized for readability
+without intentional behavior or diagnostic-label changes. The public entry and
+`OVERLOAD_SPLIT` logging remain in `tomht_cluster_overload.py`; shared solver
+mechanics moved to `tomht_cluster_overload_common.py`; split trigger and
+weak-link split selection moved to `tomht_cluster_split_policy.py`; the default
+`greedy_partition` strategy moved to `tomht_cluster_overload_greedy.py`; and
+the reference `conditional_exact` strategy moved to
+`tomht_cluster_overload_conditional.py`. Temporary private compatibility
+re-exports were removed from the entry module; internal imports now point to
+the owning modules.
+
 Remaining overload-solve review points:
 
 - continue comparing `conditional_exact` and `greedy_partition` on replay-heavy

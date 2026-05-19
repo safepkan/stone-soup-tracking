@@ -2,13 +2,15 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, and overload-split mode work completed through **2026-05-18**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, overload-split mode work, and overload-solver module split completed through **2026-05-19**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
 The long dated update stack from the previous version has been consolidated into the main text below. The main result of the most recent phase is that scoring, start priors, confirmation, publication, deletion, public IDs, and API documentation now have a coherent interpretation. This puts the tracker in a good position to return to expansion-volume work.
 
 Update (2026-05-18): the project now targets Python >=3.10 for ISAC integration compatibility. The repo metadata, formatter/type-check settings, and GitHub Actions matrix include Python 3.10 while retaining the newer-version CI checks.
+
+Update (2026-05-19): overload cluster solving was split into focused modules without intentional behavior or diagnostic-label changes. `tomht_cluster_overload.py` now holds the public solve entry/logging surface, `tomht_cluster_split_policy.py` holds split trigger and link-selection policy seams, `tomht_cluster_overload_greedy.py` holds the default `greedy_partition` strategy, `tomht_cluster_overload_conditional.py` holds the reference `conditional_exact` strategy, and `tomht_cluster_overload_common.py` holds shared solver mechanics. Temporary private compatibility re-exports from the entry module were removed; internal users import helpers from their owning modules.
 
 ---
 
@@ -110,7 +112,11 @@ Important extracted modules include:
 - `tomht_births.py` for internal-birth residual/candidate handling,
 - `tomht_external_starts.py` for external-start validation/insertion,
 - `tomht_clustering.py` for live-conflict cluster construction,
-- `tomht_cluster_overload.py` for direct cluster solving plus internal overload split modes,
+- `tomht_cluster_overload.py` for overload-aware cluster solve entry and `OVERLOAD_SPLIT` logging,
+- `tomht_cluster_overload_common.py` for shared overload-solve data structures, exact-solver bridging, filtering, recombination, and feasibility helpers,
+- `tomht_cluster_split_policy.py` for overload split triggering and weak-link binary split selection,
+- `tomht_cluster_overload_greedy.py` for the default `greedy_partition` overload strategy,
+- `tomht_cluster_overload_conditional.py` for the reference `conditional_exact` overload strategy,
 - `tomht_cluster_rebuild.py` for cluster option materialization, snapshot assembly, and MAP merge,
 - `tomht_pruning.py` for post-solve supported-leaf pruning and MAP-only N-scan pruning,
 - `tomht_lifecycle.py` for confirmation, score deletion, miss/deleter lifecycle, and live-MAP filtering,
@@ -489,6 +495,14 @@ there is no current-scan unused-detection affine offset.
 If a cluster exceeds `overload_split_projected_combination_threshold`, rebuild
 keeps the original cluster as the public unit of work and applies one of the
 configured overload split solution modes internally.
+
+Implementation layout: the public entry/logging surface is
+`tomht_cluster_overload.py`; split trigger and split-link selection live in
+`tomht_cluster_split_policy.py`; shared exact-solver bridge, filtering,
+recombination, cache/accumulator structures, and feasibility helpers live in
+`tomht_cluster_overload_common.py`; the default greedy strategy lives in
+`tomht_cluster_overload_greedy.py`; and the conditional-exact reference strategy
+lives in `tomht_cluster_overload_conditional.py`.
 
 `TOMHTParams.overload_split_solution_mode="greedy_partition"` is the default
 operational overload fallback. It is sound but approximate:
