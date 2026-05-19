@@ -86,3 +86,7 @@ replay_compare_timing:
 .PHONY: replay_update_baseline
 replay_update_baseline:
 	$(PYTHON) replay/standard_replay_regression.py update
+
+.PHONY: tomht_release_export
+tomht_release_export:
+	$(PYTHON) tools/export_tomht_release.py
