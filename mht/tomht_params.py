@@ -16,7 +16,7 @@ class TOMHTParams:
 
     Stable operational controls:
     - per-leaf local branching and local frontier safety-valves,
-    - whole-track miss termination after N-scan pruning,
+    - track-tree miss termination after N-scan pruning,
     - MAP-only N-scan pruning window,
     - optional debug/stat visibility toggles.
 
@@ -32,12 +32,12 @@ class TOMHTParams:
     # The high default keeps this in a tractability guardrail role, not as the
     # primary pruning mechanism.
     max_leaves_per_track_tree: int | None = 500
-    # Base miss threshold used by node-native post-N-scan whole-track lifecycle.
-    # Effective threshold uses an N-scan-aware floor (see helper below).
+    # Base miss threshold used by the default post-N-scan deleter.
+    # Effective threshold uses an N-scan-aware floor (see lifecycle helper).
     max_missed: int = 5
-    # Whole-track candidate-leaf selection mode applied after N-scan pruning.
-    # This controls which leaves are evaluated for lifecycle termination in both
-    # lanes (node-native and optional Stone Soup deleter lane).
+    # Candidate-leaf selection mode applied after N-scan pruning. This controls
+    # which leaves are evaluated by the configured deleter, including the default
+    # miss-count deleter and custom Stone Soup deleters.
     # - "all_active_leaves": terminate only if all active leaves exceed threshold
     # - "map_leaf": terminate if MAP leaf exceeds threshold
     # - "global_k_leaves": terminate if all retained rebuilt-global leaves exceed

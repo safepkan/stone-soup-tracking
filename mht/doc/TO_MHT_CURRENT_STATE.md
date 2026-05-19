@@ -12,6 +12,8 @@ Update (2026-05-18): the project now targets Python >=3.10 for ISAC integration 
 
 Update (2026-05-19): overload cluster solving was split into focused modules without intentional behavior or diagnostic-label changes. `tomht_cluster_overload.py` now holds the public solve entry/logging surface, `tomht_cluster_split_policy.py` holds split trigger and link-selection policy seams, `tomht_cluster_overload_greedy.py` holds the default `greedy_partition` strategy, `tomht_cluster_overload_conditional.py` holds the reference `conditional_exact` strategy, and `tomht_cluster_overload_common.py` holds shared solver mechanics. Temporary private compatibility re-exports from the entry module were removed; internal users import helpers from their owning modules.
 
+Update (2026-05-19): non-score deletion now resolves to one configured deleter. If `TOMHTTracker(..., deleter=...)` is omitted, TOMHT creates an internal miss-count deleter from `TOMHTParams` using the existing effective threshold; if a custom Stone Soup deleter is supplied, it replaces that default. Score-based deletion still runs independently, and `TRACK_LIFECYCLE` reason labels remain `score`, `miss`, and `deleter`.
+
 ---
 
 ## Bottom line
@@ -119,7 +121,7 @@ Important extracted modules include:
 - `tomht_cluster_overload_conditional.py` for the reference `conditional_exact` overload strategy,
 - `tomht_cluster_rebuild.py` for cluster option materialization, snapshot assembly, and MAP merge,
 - `tomht_pruning.py` for post-solve supported-leaf pruning and MAP-only N-scan pruning,
-- `tomht_lifecycle.py` for confirmation, score deletion, miss/deleter lifecycle, and live-MAP filtering,
+- `tomht_lifecycle.py` for confirmation, score deletion, configured deleter deletion, and live-MAP filtering,
 - `tomht_output.py` for publication policy, public-ID assignment, and output reconstruction,
 - `tomht_stats.py` for scan stats, timing breakdowns, and reporting,
 - `tomht_utils.py` for TOMHT-specific deterministic utility helpers,
@@ -201,7 +203,7 @@ The current runtime pipeline is:
 7. post-solve prune each cluster tree frontier to leaves supported by retained rebuilt globals,
 8. merge cluster MAP selections into a full-scan MAP global,
 9. apply MAP-only N-scan pruning on explicit trees,
-10. apply whole-track lifecycle: sticky confirmation, then score deletion plus either native miss lifecycle or optional Stone Soup deleter,
+10. apply whole-track lifecycle: sticky confirmation, then score deletion plus the configured deleter,
 11. update sticky output-publication state for MAP-selected live trees,
 12. reclaim unreachable node storage,
 13. build/store scan stats and return published MAP output tracks.
@@ -340,16 +342,22 @@ delete tree if max(active_leaf.accumulated_log_score) <= logit(track_deletion_ex
 
 Default deletion probability is `0.01`.
 
-Score deletion always runs. In addition, TOMHT uses one non-score deletion lane:
+Score deletion always runs. In addition, TOMHT runs one configured deleter:
 
-- without a custom deleter: native miss-count lifecycle,
-- with a custom Stone Soup deleter: deleter lane replaces the native miss lane.
+- without a custom deleter: an internal miss-count deleter resolved from params,
+- with a custom Stone Soup deleter: the custom deleter replaces that default.
 
-The native miss threshold uses an N-scan-aware floor:
+The default miss-count threshold uses an N-scan-aware floor:
 
 ```text
 effective_miss_threshold = max(max_missed, ns_scan_window + 1)
 ```
+
+The default miss-count deleter is intentionally minimal: it reads reconstructed
+track `metadata["missed_count"]`, applies the effective threshold, and has no
+sensor/context awareness. Custom Stone Soup deleters remain the path for
+field-of-view exit, lifetime limits, sensor/context-aware invalidity, or
+application-specific deletion.
 
 `TRACK_LIFECYCLE` diagnostics report deletion reason groups (`score`, `miss`, `deleter`).
 

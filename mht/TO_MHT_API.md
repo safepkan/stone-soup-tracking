@@ -304,15 +304,15 @@ caller-owned start generators.
 
 The deleter is optional.
 
-If provided, it is used as a Stone Soup whole-track deletion hook after N-scan
-pruning. Score-based deletion still runs even when a deleter is configured. The
-deleter is a domain-specific hook for rules such as field-of-view exit, lifetime
-limits, or application-specific invalidity checks.
+If provided, it is used as a Stone Soup deletion hook after N-scan pruning.
+Score-based deletion still runs even when a deleter is configured. The deleter
+is a domain-specific hook for rules such as field-of-view exit, lifetime limits,
+or application-specific invalidity checks.
 
-If no deleter is supplied, TOMHT applies a built-in successive-miss-count
-lane (described in §9). That built-in lane is intentionally minimal and
-has no awareness of sensor identity or scan context, so a custom deleter
-is the recommended path as soon as deletion logic needs to be sensor- or
+If no deleter is supplied, TOMHT resolves an internal successive-miss-count
+deleter from `TOMHTParams`. The default miss-count deleter is intentionally
+minimal and has no awareness of sensor identity or scan context, so a custom
+deleter is the recommended path as soon as deletion logic needs to be sensor- or
 context-aware.
 
 ### `detection_probability_model`
@@ -872,14 +872,16 @@ score over active leaves after N-scan pruning.
 
 Deletion removes the whole track tree.
 
-Score-based deletion always runs. In addition, TOMHT uses one of two
-non-score deletion lanes:
+Score-based deletion always runs. In addition, TOMHT runs one configured
+deleter:
 
-- without a custom Stone Soup deleter, TOMHT applies the native miss-count lane;
-- with a custom Stone Soup deleter, the deleter lane replaces the native
-  miss-count lane.
+- without a custom Stone Soup deleter, TOMHT resolves the default internal
+  miss-count deleter from `TOMHTParams`;
+- with a custom Stone Soup deleter, TOMHT uses that deleter instead of the
+  default miss-count deleter.
 
-The native miss-count threshold is not raw `max_missed`; it uses an N-scan-aware floor:
+The default miss-count threshold is not raw `max_missed`; it uses an
+N-scan-aware floor:
 
 ```text
 effective_miss_threshold = max(max_missed, ns_scan_window + 1)
@@ -888,14 +890,14 @@ effective_miss_threshold = max(max_missed, ns_scan_window + 1)
 This avoids deleting a whole tree before the N-scan machinery has had enough
 history to commit safely.
 
-The native lane is intentionally minimal — it counts every miss equally,
-with no awareness of sensor identity, geometry, or scan context. In
-particular, a track predicted to be outside a sensor's field of view will
-accumulate misses that count toward the threshold even though the sensor
-could not have detected the target. Any sensor- or context-aware deletion
-logic should go in a custom Stone Soup deleter, which is the recommended
-path as soon as deletion needs to depend on more than a successive-miss
-count.
+The default miss-count deleter reads TOMHT's reconstructed track
+`metadata["missed_count"]` and counts every miss equally, with no awareness of
+sensor identity, geometry, or scan context. In particular, a track predicted to
+be outside a sensor's field of view will accumulate misses that count toward the
+threshold even though the sensor could not have detected the target. Any
+sensor- or context-aware deletion logic should go in a custom Stone Soup
+deleter, which is the recommended path for field-of-view exit, lifetime limits,
+sensor/context-aware invalidity, or application-specific deletion.
 
 ### Publication
 

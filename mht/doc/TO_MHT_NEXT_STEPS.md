@@ -43,6 +43,12 @@ promoted root. Historical-conflict relaxation has been removed from the runtime
 path; overload splitting now preserves original-cluster feasibility in both
 greedy and conditional-exact modes.
 
+Update (2026-05-19): implemented lifecycle cleanup so post-N-scan non-score
+deletion is one configured deleter path. The default configuration
+resolves an internal miss-count deleter from params, while a custom Stone Soup
+deleter replaces that default. Score deletion remains independent and still
+OR-composes with the configured deleter result.
+
 The following pieces should be treated as the current foundation, not reopened casually:
 
 - track trees are the persistent frontier,
@@ -55,6 +61,8 @@ The following pieces should be treated as the current foundation, not reopened c
 - confirmation, deletion, and publication are separate tree-level concepts,
 - standard output publishes confirmed tracks by default,
 - score-based whole-tree deletion is active,
+- the default deleter is the internal miss-count deleter resolved from params,
+  unless a custom Stone Soup deleter is supplied,
 - DPM support is the caller-facing hook for dynamic `P_D` / clutter density,
 - the tracker is now mostly an orchestrator delegating pipeline phases to modules.
 

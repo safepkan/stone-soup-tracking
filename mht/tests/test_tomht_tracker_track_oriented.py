@@ -35,6 +35,11 @@ from mht.tomht_cluster_rebuild import (
     rebuild_cluster_globals,
 )
 from mht.tomht_cluster_solver_factory import make_cluster_solver
+from mht.tomht_lifecycle import (
+    TOMHTMissCountDeleter,
+    effective_track_miss_threshold,
+    resolve_deleter_with_metadata,
+)
 from mht.tomht_pruning import apply_post_solve_supported_leaf_pruning
 from mht.tomht_scoring import (
     ConstantDetectionProbabilityModel,
@@ -242,6 +247,32 @@ class _MetadataMissCountDeleter(Deleter):
         return misses >= int(self.threshold)
 
 
+class _RecordingMetadataMissCountDeleter(_MetadataMissCountDeleter):
+    if sys.version_info >= (3, 14):
+        track_ids = Property(list, default=None, doc="Recorded candidate track IDs.")
+        missed_counts = Property(
+            list, default=None, doc="Recorded candidate missed counts."
+        )
+    else:
+        track_ids: list[object] | None = Property(
+            default=None, doc="Recorded candidate track IDs."
+        )
+        missed_counts: list[int] | None = Property(
+            default=None, doc="Recorded candidate missed counts."
+        )
+
+    def check_for_deletion(self, track: Track, **kwargs) -> bool:
+        del kwargs
+        if self.track_ids is None:
+            self.track_ids = []
+        if self.missed_counts is None:
+            self.missed_counts = []
+        self.track_ids.append(track.id)
+        missed_count = int(track.metadata["missed_count"])
+        self.missed_counts.append(missed_count)
+        return missed_count >= int(self.threshold)
+
+
 def _state(x: float, timestamp: datetime.datetime) -> GaussianState:
     return GaussianState(
         [x, 0.0, x, 0.0],
@@ -343,15 +374,18 @@ def _run_post_n_scan_lifecycle(
     *,
     timestamp: datetime.datetime,
     map_global: GlobalHypothesis | None = None,
+    cluster_snapshots: list[ClusterRebuildSnapshot] | None = None,
 ) -> GlobalHypothesis:
     if map_global is None:
         map_global = tracker._last_map_global
+    if cluster_snapshots is None:
+        cluster_snapshots = []
     scan_index = (
         0 if tracker._last_scan_index is None else int(tracker._last_scan_index)
     )
     filtered = tracker._apply_post_n_scan_track_lifecycle(
         map_global=map_global,
-        cluster_snapshots=[],
+        cluster_snapshots=cluster_snapshots,
         scan_index=scan_index,
         timestamp=timestamp,
     )
@@ -438,6 +472,56 @@ def _single_track_rebuild_snapshot(
         evaluated_combinations=len(rebuilt_globals),
         overload_split_origin_cluster_id=overload_split_origin_cluster_id,
     )
+
+
+def _tracker_with_two_miss_candidate_leaves(
+    *,
+    mode: str,
+    deleter: Deleter | None = None,
+) -> tuple[
+    TOMHTTracker,
+    datetime.datetime,
+    list[TrackHypothesisNode],
+    GlobalHypothesis,
+    list[ClusterRebuildSnapshot],
+]:
+    timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+    tracker = _build_tracker(
+        hypothesiser=_ScriptedHypothesiser(),
+        updater=_ScriptedUpdater(),
+        deleter=deleter,
+        params=TOMHTParams(
+            max_missed=1,
+            ns_scan_window=0,
+            track_miss_termination_mode=mode,
+            debug_display_scan_stats=False,
+            debug_display_hypotheses=False,
+            debug_display_births=False,
+            collect_stats=False,
+        ),
+    )
+    tracker.update_tracker(timestamp, [])
+    tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+    leaves = _replace_active_leaves_with_scores(
+        tracker,
+        track_id=0,
+        scores=[10.0, 9.0],
+        timestamp=timestamp,
+    )
+    leaves[0].missed_count = 1
+    leaves[1].missed_count = 0
+    map_global = GlobalHypothesis(
+        leaf_nodes_by_track_id={0: leaves[0]},
+        log_weight=float(leaves[0].accumulated_log_score),
+    )
+    cluster_snapshots = [
+        _single_track_rebuild_snapshot(
+            track_id=0,
+            supported_leaves=[leaves[0]],
+            overload_split_origin_cluster_id=None,
+        )
+    ]
+    return tracker, timestamp, leaves, map_global, cluster_snapshots
 
 
 def _tracker_with_manual_frontier() -> tuple[TOMHTTracker, list[TrackHypothesisNode]]:
@@ -1907,6 +1991,161 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertIn("deleter=_MetadataMissCountDeleter", log_stream.getvalue())
         self.assertIn("score:[0]", log_stream.getvalue())
 
+    def test_default_deleter_uses_effective_miss_threshold(self) -> None:
+        params = TOMHTParams(max_missed=1, ns_scan_window=3)
+
+        self.assertEqual(4, effective_track_miss_threshold(params=params))
+        resolved = resolve_deleter_with_metadata(params=params, deleter=None)
+
+        self.assertIsInstance(resolved.deleter, TOMHTMissCountDeleter)
+        self.assertEqual("miss", resolved.reason)
+        self.assertEqual(4, resolved.miss_threshold)
+        self.assertTrue(
+            resolved.deleter.check_for_deletion(
+                Track(init_metadata={"missed_count": 4})
+            )
+        )
+        self.assertFalse(
+            resolved.deleter.check_for_deletion(
+                Track(init_metadata={"missed_count": 3})
+            )
+        )
+
+    def test_default_miss_deleter_reports_miss_reason(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                max_missed=1,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+        leaf = _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[10.0],
+        )[0]
+        leaf.missed_count = 1
+
+        log_stream = io.StringIO()
+        with contextlib.redirect_stdout(log_stream):
+            _run_post_n_scan_lifecycle(tracker, timestamp=timestamp)
+
+        log_output = log_stream.getvalue()
+        self.assertIn("TRACK_LIFECYCLE", log_output)
+        self.assertIn("miss_threshold=1", log_output)
+        self.assertIn("reasons=miss:[0]", log_output)
+        self.assertNotIn("deleter=", log_output)
+
+    def test_custom_deleter_reports_deleter_reason(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            deleter=_MetadataMissCountDeleter(threshold=1),
+            params=TOMHTParams(
+                max_missed=999,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+        leaf = _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[10.0],
+        )[0]
+        leaf.missed_count = 1
+
+        log_stream = io.StringIO()
+        with contextlib.redirect_stdout(log_stream):
+            _run_post_n_scan_lifecycle(tracker, timestamp=timestamp)
+
+        log_output = log_stream.getvalue()
+        self.assertIn("TRACK_LIFECYCLE", log_output)
+        self.assertIn("deleter=_MetadataMissCountDeleter", log_output)
+        self.assertIn("reasons=deleter:[0]", log_output)
+        self.assertNotIn("miss_threshold=", log_output)
+
+    def test_track_miss_mode_controls_default_miss_deleter_candidates(self) -> None:
+        cases = [
+            ("map_leaf", True),
+            ("global_k_leaves", True),
+            ("all_active_leaves", False),
+        ]
+
+        for mode, expected_deleted in cases:
+            with self.subTest(mode=mode):
+                (
+                    tracker,
+                    timestamp,
+                    _,
+                    map_global,
+                    cluster_snapshots,
+                ) = _tracker_with_two_miss_candidate_leaves(mode=mode)
+
+                with contextlib.redirect_stdout(io.StringIO()):
+                    _run_post_n_scan_lifecycle(
+                        tracker,
+                        timestamp=timestamp,
+                        map_global=map_global,
+                        cluster_snapshots=cluster_snapshots,
+                    )
+
+                if expected_deleted:
+                    self.assertEqual({}, tracker.track_trees_by_track_id)
+                else:
+                    self.assertIn(0, tracker.track_trees_by_track_id)
+
+    def test_track_miss_mode_controls_custom_deleter_candidates(self) -> None:
+        cases = [
+            ("map_leaf", True, [1]),
+            ("global_k_leaves", True, [1]),
+            ("all_active_leaves", False, [1, 0]),
+        ]
+
+        for mode, expected_deleted, expected_misses in cases:
+            with self.subTest(mode=mode):
+                deleter = _RecordingMetadataMissCountDeleter(threshold=1)
+                (
+                    tracker,
+                    timestamp,
+                    _,
+                    map_global,
+                    cluster_snapshots,
+                ) = _tracker_with_two_miss_candidate_leaves(
+                    mode=mode,
+                    deleter=deleter,
+                )
+
+                with contextlib.redirect_stdout(io.StringIO()):
+                    _run_post_n_scan_lifecycle(
+                        tracker,
+                        timestamp=timestamp,
+                        map_global=map_global,
+                        cluster_snapshots=cluster_snapshots,
+                    )
+
+                self.assertEqual(expected_misses, deleter.missed_counts)
+                self.assertEqual([0] * len(expected_misses), deleter.track_ids)
+                if expected_deleted:
+                    self.assertEqual({}, tracker.track_trees_by_track_id)
+                else:
+                    self.assertIn(0, tracker.track_trees_by_track_id)
+
     def test_score_deletion_does_not_reuse_public_ids(self) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
         tracker = _build_tracker(
@@ -2020,7 +2259,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertEqual({}, tracker.track_trees_by_track_id)
         self.assertEqual(set(), tracker.tracks)
 
-    def test_configured_deleter_lane_overrides_native_max_missed_policy(self) -> None:
+    def test_configured_deleter_replaces_default_miss_policy(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
         t1 = t0 + datetime.timedelta(seconds=1)
 
@@ -2049,7 +2288,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         leaf_id = next(iter(tracker.track_trees_by_track_id[0].active_leaf_node_ids))
         self.assertEqual(1, tracker._nodes_by_id[leaf_id].missed_count)
 
-    def test_configured_deleter_lane_can_delete_tracks(self) -> None:
+    def test_configured_deleter_can_delete_tracks(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
         t1 = t0 + datetime.timedelta(seconds=1)
 

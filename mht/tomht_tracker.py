@@ -78,9 +78,11 @@ from .tomht_model import (
     TrackTree,
 )
 from .tomht_lifecycle import (
+    DeleterWithMetadata,
     apply_post_n_scan_track_lifecycle,
     apply_score_based_track_confirmation,
     internal_track_id_for_deleter_candidate,
+    resolve_deleter_with_metadata,
 )
 from .tomht_output import (
     apply_output_publication,
@@ -152,9 +154,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     9. Apply MAP-only N-scan tree pruning: root promotion, committed states,
        active leaves, and disagreement stats.
     10. Apply whole-track lifecycle: sticky score-based confirmation, then
-        post-N-scan termination. Score deletion always runs; node-native miss
-        policy is used by default, and an optional Stone Soup deleter can replace
-        the miss lane as a domain-specific hook.
+        post-N-scan termination. Score deletion always runs; TOMHT resolves an
+        internal miss-count deleter by default, and an optional Stone Soup
+        deleter can replace that default as a domain-specific hook.
     11. Update sticky output-publication state for MAP-selected live trees.
     12. Keep last-scan debug snapshots and return published MAP output tracks.
 
@@ -251,10 +253,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         initiator : Initiator | None
             Optional initiator for internal birth track creation.
         deleter : Deleter | None
-            Optional Stone Soup deleter used for post-N-scan whole-track
-            termination decisions. When provided, deleter-based lifecycle
-            supersedes node-native miss-threshold lifecycle, but score-based
-            deletion still runs.
+            Optional Stone Soup deleter used for post-N-scan tree deletion
+            decisions. When omitted, TOMHT resolves an internal miss-count
+            deleter from ``params``. Score-based deletion always runs.
         params : TOMHTParams
             Tracker configuration.
         params_overrides : Mapping[str, Any] | None
@@ -290,6 +291,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         params = apply_params_overrides(params, params_overrides)
         self.params = params
+        self._deleter_with_metadata: DeleterWithMetadata = (
+            resolve_deleter_with_metadata(params=params, deleter=deleter)
+        )
         self._hypothesiser = self._resolve_hypothesiser(params=params)
 
         self._external_start_initial_log_delta: float = (
@@ -934,7 +938,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         scan_index: int,
         timestamp: datetime.datetime,
     ) -> GlobalHypothesis:
-        """Apply post-N-scan whole-track lifecycle using the configured lane."""
+        """Apply post-N-scan whole-track lifecycle using the configured deleter."""
         del scan_index  # reserved for potential future diagnostics.
         return apply_post_n_scan_track_lifecycle(
             tree_store=self._tree_store,
@@ -942,7 +946,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             cluster_snapshots=cluster_snapshots,
             params=self.params,
             deletion_log_odds_threshold=self._track_deletion_log_odds_threshold,
-            deleter=self.deleter,
+            deleter_with_metadata=self._deleter_with_metadata,
             output_track_id_for_deleter=internal_track_id_for_deleter_candidate,
             timestamp=timestamp,
         )
