@@ -266,6 +266,14 @@ and must satisfy the following constraints for each track leaf and scan:
   of a custom hypothesiser's output. `params.mahalanobis_gate_threshold`
   is consumed only by the tracker-owned default and has no effect when a
   custom hypothesiser is supplied.
+- **The input `track` carries TOMHT metadata.** During local expansion,
+  TOMHT reconstructs a Stone Soup `Track` for the active leaf and populates
+  metadata such as `internal_track_id`, `public_track_id`,
+  `lifecycle_state`, `publication_state`, `age`, `hits`, and
+  `missed_count`. Advanced custom hypothesisers may use this metadata,
+  including lifecycle state, to implement confirmation-state-dependent gates
+  or other sensor-specific policy. The tracker-owned default hypothesiser
+  does not currently vary gates by confirmation state.
 - **A `predictor` attribute is exposed for tracker wiring.** The
   hypothesiser must expose a `predictor` attribute — typically a Stone
   Soup `Property`, as in the default implementation — that the tracker
@@ -1120,8 +1128,8 @@ Practical signs of miscalibration:
 - tracks die when leaving sensor coverage:
   - make `P_D` state/context-dependent and return near zero outside coverage,
 - too many false tentative tracks:
-  - tune initiator priors, confirmation threshold, birth guards, and publication
-    gates,
+  - tune initiator priors, confirmation threshold, birth caps/guards, and
+    publication gates,
 - too few published tracks:
   - lower confirmation/publication thresholds or increase initial priors,
 - real tracks get deleted too quickly:
@@ -1132,7 +1140,7 @@ Practical signs of miscalibration:
 
 Non-score safety valves include:
 
-- `max_children_per_track`,
+- `max_children_per_leaf`,
 - `max_leaves_per_track_tree`,
 - `max_births_per_scan`,
 - birth load guards,
@@ -1140,6 +1148,12 @@ Non-score safety valves include:
 - and N-scan window.
 
 These are tractability controls, not replacements for a coherent scoring model.
+`max_children_per_leaf` is a per-active-leaf local branching cap.
+`max_births_per_scan` defaults to `10` and remains a guardrail. Birth load
+guards default to disabled and should be set only for scenario-specific
+emergency load control. Confirmation-state-dependent gating is best handled in
+a custom hypothesiser using TOMHT track metadata, not by adding policy to the
+tracker-owned default hypothesiser.
 
 Calibration scale example:
 
@@ -1227,14 +1241,20 @@ important public parameters by purpose.
 
 These controls are implementation safety valves and are subject to revision:
 
-- `max_children_per_track`
-- `max_leaves_per_track_tree`
-- `max_births_per_scan`
-- birth load guards
+- `max_children_per_leaf`: per-active-leaf local branching cap. It limits
+  retained hit/miss continuation candidates from each expanded leaf, not from
+  the whole track tree.
+- `max_leaves_per_track_tree`: optional pre-solve per-tree leaf cap.
+- `max_births_per_scan`: default `10`; a deterministic internal-birth cap and
+  still a guardrail, not a substitute for initiator-side quality control.
+- `birth_skip_if_active_trees_above` and
+  `birth_skip_if_active_leaves_above`: disabled by default (`None`) and
+  available as scenario-specific emergency load guards.
 - `max_global_hypotheses`
 - `max_projected_cluster_combinations`
 - `overload_split_enabled`
-- `overload_split_projected_combination_threshold`
+- `overload_split_projected_combination_threshold`: still conservative and a
+  future review item; this cleanup does not change its default.
 - `overload_split_max_edge_removals_per_cluster`
 - `overload_split_solution_mode`: `"greedy_partition"` by default for the
   operational sound-but-approximate overload fallback, or

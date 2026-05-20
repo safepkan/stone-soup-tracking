@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, overload-split mode work, and overload-solver module split completed through **2026-05-19**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, overload-split mode work, overload-solver module split, and small expansion/frontier API cleanup completed through **2026-05-20**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -13,6 +13,8 @@ Update (2026-05-18): the project now targets Python >=3.10 for ISAC integration 
 Update (2026-05-19): overload cluster solving was split into focused modules without intentional behavior or diagnostic-label changes. `tomht_cluster_overload.py` now holds the public solve entry/logging surface, `tomht_cluster_split_policy.py` holds split trigger and link-selection policy seams, `tomht_cluster_overload_greedy.py` holds the default `greedy_partition` strategy, `tomht_cluster_overload_conditional.py` holds the reference `conditional_exact` strategy, and `tomht_cluster_overload_common.py` holds shared solver mechanics. Temporary private compatibility re-exports from the entry module were removed; internal users import helpers from their owning modules.
 
 Update (2026-05-19): non-score deletion now resolves to one configured deleter. If `TOMHTTracker(..., deleter=...)` is omitted, TOMHT creates an internal miss-count deleter from `TOMHTParams` using the existing effective threshold; if a custom Stone Soup deleter is supplied, it replaces that default. Score-based deletion still runs independently, and `TRACK_LIFECYCLE` reason labels remain `score`, `miss`, and `deleter`.
+
+Update (2026-05-20): the local branching cap is now named `max_children_per_leaf`, matching the implementation's per-active-leaf behavior. `max_births_per_scan` now defaults to `10`. Internal-birth load guards default to disabled (`None`) and remain available as scenario-specific emergency controls. The overload split threshold is unchanged and remains a future review item.
 
 ---
 
@@ -91,7 +93,7 @@ The tracker has a narrow distance-hypothesiser seam:
 - detection hypotheses must reference original detections from the current scan,
 - detection-hypothesis distance must be `NLL = -log p(z|x)` in measurement space, without detection-probability or clutter-density factors.
 
-Default local association is tracker-owned `TrackerOwnedNLLDistanceHypothesiser`. It uses non-squared Mahalanobis-threshold gating via `mahalanobis_gate_threshold` and emits NLL distances. Custom hypothesisers are allowed but must satisfy the stricter contract above.
+Default local association is tracker-owned `TrackerOwnedNLLDistanceHypothesiser`. It uses non-squared Mahalanobis-threshold gating via `mahalanobis_gate_threshold` and emits NLL distances. Custom hypothesisers are allowed but must satisfy the stricter contract above. The reconstructed `Track` passed to a custom hypothesiser carries TOMHT metadata including internal/public IDs, lifecycle state, publication state, age, hits, and miss count; confirmation-state-dependent gating is currently best handled there, not by adding policy to the default hypothesiser.
 
 The split is explicit:
 
@@ -310,7 +312,7 @@ The tracker does not own generic single-detection state initialization. Even one
 
 Internal-start roots use `TOMHTParams.initiator_start_initial_existence_probability` by default, again with optional metadata override using log-odds or probability.
 
-Internal-birth candidate validity is now initiator-owned. The tracker no longer applies state-layout-specific position/covariance sanity checks. Remaining internal-start controls are capping, deterministic ordering, and load guardrails. Deterministic ranking is a safety valve; if `max_births_per_scan` routinely fires, the better fix is usually initiator-side filtering or candidate confidence metadata rather than relying on TOMHT's fallback ordering.
+Internal-birth candidate validity is now initiator-owned. The tracker no longer applies state-layout-specific position/covariance sanity checks. Remaining internal-start controls are capping, deterministic ordering, and optional load guardrails. `max_births_per_scan` defaults to `10`; it is still a guardrail. `birth_skip_if_active_trees_above` and `birth_skip_if_active_leaves_above` default to disabled (`None`) and are available for scenario-specific emergency use. Deterministic ranking is a safety valve; if `max_births_per_scan` routinely fires, the better fix is usually initiator-side filtering or candidate confidence metadata rather than relying on TOMHT's fallback ordering.
 
 ### Residual detections
 
@@ -461,6 +463,9 @@ Local expansion is distance-hypothesis driven:
 - always preserve a miss alternative,
 - apply optional per-tree local leaf cap.
 
+The local child cap is `max_children_per_leaf`, a per-active-leaf branching
+cap rather than a whole-track-tree cap.
+
 `max_leaves_per_track_tree` remains a pre-solve safety valve rather than the main pruning semantics.
 
 ### Local-association math kernel
@@ -578,10 +583,10 @@ Default `ns_scan_window` remains `6`.
 The explicit approximation/safety mechanisms are:
 
 1. overload cluster splitting,
-2. internal birth load guards,
+2. optional internal birth load guards,
 3. pre-solve local leaf caps.
 
-These are pragmatic robustness/tractability mechanisms and remain conceptually provisional. They should be revisited as expansion-volume and frontier-control work proceeds.
+These are pragmatic robustness/tractability mechanisms and remain conceptually provisional. Birth load guards default to disabled. The overload split projected-combination threshold remains conservative and is still a future review item. These controls should be revisited as expansion-volume and frontier-control work proceeds.
 
 ---
 
@@ -663,7 +668,7 @@ Now that scores are coherent, broader score/frontier pruning can be reconsidered
 
 ### 3. Internal birth ranking and capping
 
-Internal birth candidate selection is now state-layout agnostic, but its ranking/capping remains heuristic. Covariance trace is only a weak fallback quality proxy. If caps fire often, initiator-side filtering or candidate confidence metadata is likely more important than improving the fallback metric.
+Internal birth candidate selection is now state-layout agnostic, but its ranking/capping remains heuristic. `max_births_per_scan=10` is the default cap and still a guardrail. The active-tree/active-leaf birth load guards default to disabled and should be used only for scenario-specific emergency control. Covariance trace is only a weak fallback quality proxy. If caps fire often, initiator-side filtering or candidate confidence metadata is likely more important than improving the fallback metric.
 
 ### 4. Approximation semantics
 

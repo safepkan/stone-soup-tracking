@@ -243,13 +243,13 @@ class ParamsOverrideJsonLoadTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             json_path = Path(tmp_dir) / "params_overrides.json"
             json_path.write_text(
-                json.dumps({"max_children_per_track": 2, "debug_display_births": True}),
+                json.dumps({"max_children_per_leaf": 2, "debug_display_births": True}),
                 encoding="utf-8",
             )
 
             loaded = load_params_overrides_json(json_path)
 
-            self.assertEqual(2, loaded["max_children_per_track"])
+            self.assertEqual(2, loaded["max_children_per_leaf"])
             self.assertTrue(loaded["debug_display_births"])
 
     def test_load_params_overrides_json_rejects_non_object(self) -> None:

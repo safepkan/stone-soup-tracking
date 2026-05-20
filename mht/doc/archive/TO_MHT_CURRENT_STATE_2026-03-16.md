@@ -42,7 +42,7 @@ Supporting concepts:
 
 - Parameters in `TOMHTParams` (examples):
   - `max_global_hypotheses: int` (beam width)
-  - `max_children_per_track: int`
+  - `max_children_per_leaf: int`
   - `max_missed: int`
   - `birth_log_penalty: float`
   - `unused_det_log_penalty: float`
@@ -83,7 +83,7 @@ The `step()` method roughly does:
    - Score each hypothesis via the `ScoringModel` (currently **beta-ratio v1.5** only):
        - Hit: `log(betai) - log(beta0) + log(1 - P_D * P_G)`.
        - Miss: same common term `log(1 - P_D * P_G)`.
-     - Prune to at most `max_children_per_track`, ensuring that at least one miss is kept if present.
+     - Prune to at most `max_children_per_leaf`, ensuring that at least one miss is kept if present.
      - Build `ChildCandidate` objects for each kept hypothesis:
        - `child_track`: a copy of the parent track with:
          - either prediction appended (miss) or update appended (hit),

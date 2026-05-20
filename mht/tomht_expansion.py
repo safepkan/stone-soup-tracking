@@ -133,7 +133,7 @@ def candidate_from_distance_hypothesis(
 def candidates_for_track_leaf(
     *,
     leaf_node: TrackHypothesisNode,
-    public_track_id: object | None,
+    tree: TrackTree,
     ctx: ScanContext,
     hypothesiser: Hypothesiser,
     updater: Updater,
@@ -144,7 +144,12 @@ def candidates_for_track_leaf(
     expansion_call_stats: ExpansionCallStats,
 ) -> list[LocalChildCandidate]:
     """Build retained local continuation candidates for one active leaf."""
-    track = reconstruct_track_from_leaf_node(leaf_node)
+    track = reconstruct_track_from_leaf_node(
+        leaf_node,
+        lifecycle_state=tree.lifecycle_state,
+        publication_state=tree.publication_state,
+        public_track_id=tree.public_track_id,
+    )
     hypothesise_start_ns = start_timer()
     raw_hypotheses = hypothesiser.hypothesise(track, ctx.detections, ctx.timestamp)
     expansion_call_stats.hypothesise_calls += 1
@@ -160,7 +165,7 @@ def candidates_for_track_leaf(
     local_log_deltas = scoring_model.score_track_hypotheses(
         hypotheses=hypotheses,
         ctx=ctx,
-        track_id=public_track_id,
+        track_id=tree.public_track_id,
     )
     if len(local_log_deltas) != len(hypotheses):
         raise RuntimeError(
@@ -197,7 +202,7 @@ def candidates_for_track_leaf(
         )
 
     sorted_rows = sorted(scored_rows, key=_sort_key, reverse=True)
-    kept_rows = sorted_rows[: params.max_children_per_track]
+    kept_rows = sorted_rows[: params.max_children_per_leaf]
     kept_row_indices = {row_index for row_index, _ in kept_rows}
     if miss_row_index not in kept_row_indices:
         kept_rows.append(scored_rows[miss_row_index])
@@ -274,7 +279,7 @@ def expand_one_track_tree(
         leaf = nodes_by_id[leaf_id]
         candidates = candidates_for_track_leaf(
             leaf_node=leaf,
-            public_track_id=tree.public_track_id,
+            tree=tree,
             ctx=ctx,
             hypothesiser=hypothesiser,
             updater=updater,

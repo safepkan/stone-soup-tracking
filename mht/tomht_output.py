@@ -125,7 +125,13 @@ def output_track_metadata_from_leaf_node(
     return metadata
 
 
-def reconstruct_track_from_leaf_node(leaf_node: TrackHypothesisNode) -> Track:
+def reconstruct_track_from_leaf_node(
+    leaf_node: TrackHypothesisNode,
+    *,
+    lifecycle_state: TrackLifecycleState | None = None,
+    publication_state: TrackPublicationState | None = None,
+    public_track_id: object | None = None,
+) -> Track:
     """
     Reconstruct a Stone Soup Track compatibility view from node ancestry.
 
@@ -134,7 +140,14 @@ def reconstruct_track_from_leaf_node(leaf_node: TrackHypothesisNode) -> Track:
     """
     lineage = lineage_from_leaf_node(leaf_node)
     tr = Track([node.state for node in lineage], id=int(leaf_node.track_id))
-    tr.metadata.update(output_track_metadata_from_leaf_node(leaf_node))
+    tr.metadata.update(
+        output_track_metadata_from_leaf_node(
+            leaf_node,
+            lifecycle_state=lifecycle_state,
+            publication_state=publication_state,
+            public_track_id=public_track_id,
+        )
+    )
     return tr
 
 

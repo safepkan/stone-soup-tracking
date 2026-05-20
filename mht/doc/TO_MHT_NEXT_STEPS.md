@@ -30,6 +30,8 @@ This is substantially better than earlier phases, but the shape is unchanged: mo
 
 The next improvement is therefore likely to come from reducing how much expansion work we ask the local association path to do, not only from making each individual association call faster.
 
+Update (2026-05-20): small expansion/frontier API cleanup is implemented. The local branching parameter is now `max_children_per_leaf` to reflect its per-active-leaf behavior; `max_births_per_scan` defaults to `10`; active-tree/active-leaf internal-birth load guards default to disabled and remain scenario-specific emergency controls. The overload split projected-combination threshold is unchanged and remains a future review item.
+
 ---
 
 ## Current baseline to preserve
@@ -97,7 +99,7 @@ Some controls affect tracking semantics directly. Others are safety valves to ke
 This phase should make that distinction explicit. Candidate controls include:
 
 - local association gate size,
-- `max_children_per_track`,
+- `max_children_per_leaf`,
 - `max_leaves_per_track_tree`,
 - post-solve supported-leaf pruning,
 - N-scan pruning,
@@ -129,7 +131,12 @@ The latest timing shows `expand_hypothesise_ms` dominates `expand_ms`. Investiga
 - whether all active leaves need a full hypothesiser call each scan,
 - whether some leaf groups share enough prediction/gating work to reuse more,
 - whether confirmed/tentative state can drive expansion budgets,
+- whether confirmation-state-dependent gates are useful in a custom
+  hypothesiser using TOMHT track metadata,
 - whether detection count or gate behavior explains high-tail scans.
+
+Do not add tentative-vs-confirmed gate policy to the tracker-owned default
+hypothesiser until there is evidence it should be a default behavior.
 
 Parallelization is a future axis, but not the first tool for this phase. First understand and reduce unnecessary work.
 
@@ -252,6 +259,7 @@ Internal-birth capping is not the main expansion bottleneck, but it remains a he
 Keep on the review list:
 
 - how often `max_births_per_scan` fires,
+- whether scenario-specific birth load guards are needed in high-load runs,
 - whether initiator output quality/confidence metadata is available,
 - whether `existence_probability` / `existence_log_odds` should influence candidate ordering,
 - whether cap firing indicates the initiator should filter more aggressively upstream.

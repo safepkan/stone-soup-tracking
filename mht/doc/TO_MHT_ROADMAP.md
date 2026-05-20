@@ -136,6 +136,7 @@ This topic includes:
 
 - candidate ranking/capping behavior,
 - whether `max_births_per_scan` is firing routinely,
+- whether scenario-specific birth load guards are needed, since they default to disabled,
 - whether candidate confidence metadata should have a stronger role,
 - residual detection policy,
 - false-start observability,
@@ -150,7 +151,7 @@ Current pragmatic mechanisms include:
 
 - overload cluster splitting,
 - local leaf caps,
-- internal birth load guards.
+- optional internal birth load guards.
 
 These are explicit and useful but not conceptually final.
 

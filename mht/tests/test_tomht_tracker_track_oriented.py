@@ -104,6 +104,24 @@ class _ScriptedHypothesiser:
         return MultipleHypothesis(out, normalise=False)
 
 
+class _RecordingMetadataHypothesiser(_ScriptedHypothesiser):
+    """Scripted hypothesiser that records TOMHT track metadata at expansion."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.track_metadata: list[dict[str, object]] = []
+
+    def hypothesise(
+        self,
+        track: Track,
+        detections: Iterable[Detection],
+        timestamp: datetime.datetime,
+        **kwargs,
+    ) -> MultipleHypothesis:
+        self.track_metadata.append(dict(track.metadata))
+        return super().hypothesise(track, detections, timestamp, **kwargs)
+
+
 class _ScriptedPredictingHypothesiser(_ScriptedHypothesiser):
     """Scripted hypotheses that build fresh per-scan prediction states."""
 
@@ -800,6 +818,27 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
 
         tree_snapshot = tracker.get_track_tree_snapshot()
         self.assertEqual({0, 1}, set(tree_snapshot.keys()))
+
+    def test_custom_hypothesiser_receives_tomht_track_metadata(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _RecordingMetadataHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        tracker.update_tracker(t1, [])
+
+        self.assertEqual(1, len(hypothesiser.track_metadata))
+        metadata = hypothesiser.track_metadata[0]
+        self.assertEqual(0, metadata["internal_track_id"])
+        self.assertEqual(0, metadata["public_track_id"])
+        self.assertEqual("confirmed", metadata["lifecycle_state"])
+        self.assertEqual("published", metadata["publication_state"])
 
     def test_track_tree_committed_detection_keys_start_empty(self) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)

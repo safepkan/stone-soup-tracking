@@ -27,7 +27,7 @@ class TOMHTParams:
     """
 
     # Local expansion / lifecycle controls.
-    max_children_per_track: int = 5
+    max_children_per_leaf: int = 5
     # Optional pre-solve per-tree frontier cap used only as a safety valve.
     # The high default keeps this in a tractability guardrail role, not as the
     # primary pruning mechanism.
@@ -116,10 +116,12 @@ class TOMHTParams:
     # same measurement-space units. The tracker keeps that as parameter-choice
     # guidance rather than adding beta_NT as a core parameter.
     initiator_start_initial_existence_probability: float = 0.8
-    max_births_per_scan: int = 2
-    # Birth load guards: skip births once frontier growth is already high.
-    birth_skip_if_active_trees_above: int | None = 40
-    birth_skip_if_active_leaves_above: int | None = 200
+    max_births_per_scan: int = 10
+    # Optional birth load guards: skip births once frontier growth is already
+    # high. Disabled by default; set scenario-specific values only when this
+    # emergency safety valve is wanted.
+    birth_skip_if_active_trees_above: int | None = None
+    birth_skip_if_active_leaves_above: int | None = None
 
     # Debug / instrumentation toggles.
     debug_display_detections: bool = False

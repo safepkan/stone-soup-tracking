@@ -265,15 +265,23 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     TOMHTParams(**overrides)
 
+    def test_expansion_and_birth_guardrail_defaults(self) -> None:
+        params = TOMHTParams()
+
+        self.assertEqual(5, params.max_children_per_leaf)
+        self.assertEqual(10, params.max_births_per_scan)
+        self.assertIsNone(params.birth_skip_if_active_trees_above)
+        self.assertIsNone(params.birth_skip_if_active_leaves_above)
+
     def test_constructor_applies_params_overrides(self) -> None:
         tracker = _build_tracker_with_overrides(
             {
-                "max_children_per_track": 3,
+                "max_children_per_leaf": 3,
                 "debug_display_births": True,
             }
         )
 
-        self.assertEqual(3, tracker.params.max_children_per_track)
+        self.assertEqual(3, tracker.params.max_children_per_leaf)
         self.assertTrue(tracker.params.debug_display_births)
         self.assertFalse(tracker.params.debug_display_scan_stats)
 
