@@ -24,6 +24,7 @@ dev = [
   "Flake8-pyproject==1.2.4",
   "mypy==2.1.0",
   "pytest==9.0.3",
+  "snakeviz==2.2.2",
   "nbformat==5.10.4",
   "pandas-stubs==2.3.3.260113",
   "types-defusedxml==0.7.0.20260504",

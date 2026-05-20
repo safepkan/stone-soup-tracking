@@ -114,6 +114,37 @@ source venv/bin/activate
 python replay/standard_replay_regression.py compare --timing-report
 ```
 
+## Standard Replay Profiling
+
+Capture a `cProfile` profile for the standard replay with:
+
+```bash
+make replay_profile
+```
+
+The profiling target runs the single-file `python.pipeline.mcap_replay` command
+directly, because profiling the batch wrapper would mostly measure subprocess
+waiting. It writes artifacts under `replay/outputs/profiles/`:
+
+- `standard_replay_mcap_replay_400.prof`
+- `standard_replay_mcap_replay_400.log`
+- `standard_replay_mcap_replay_400.log.timing_summary.log`
+- `standard_replay_mcap_replay_400.replayed.mcap`
+
+Open the profile in SnakeViz with:
+
+```bash
+make replay_profile_snakeviz
+```
+
+Useful overrides:
+
+```bash
+make replay_profile REPLAY_REPO=/path/to/l2-sp
+make replay_profile REPLAY_PROFILE_MAX_CPIS=100
+make replay_profile_snakeviz SNAKEVIZ_PORT=8091
+```
+
 If replay logs do not contain `SUMMARY timing ...` lines, the timing report
 automatically derives aggregate summaries from `SCAN_TIMING*` and
 `SCAN_MEMORY` lines.

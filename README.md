@@ -29,6 +29,8 @@ The `Makefile` provides a few convenience targets:
   (use only when baseline updates are intentionally approved).
 - `make replay_compare` runs heavyweight standard-replay regression against versioned baselines.
 - `make replay_compare_timing` runs replay comparison and also prints timing-summary diff from raw logs.
+- `make replay_profile` runs the standard replay through `cProfile` and writes artifacts under `replay/outputs/profiles/`.
+- `make replay_profile_snakeviz` opens the latest standard replay profile in SnakeViz.
 - `make replay_update_baseline` refreshes standard-replay baselines
   (use only when baseline updates are intentionally approved).
 - `make tomht_release_export` replaces the sibling `../stonesoup-tomht/mht`

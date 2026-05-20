@@ -19,6 +19,18 @@ VENV_PYTHON ?= $(shell \
 	fi)
 PYTHON := ./$(ENV)/bin/python
 PIP := ./$(ENV)/bin/pip
+REPLAY_REPO ?= $(CURDIR)/../l2-sp
+REPLAY_VENV ?= $(REPLAY_REPO)/venv
+REPLAY_INPUT ?= $(CURDIR)/replay/inputs/cpi_replay_2025-12-10_173948.mcap
+REPLAY_PROFILE_MAX_CPIS ?= 400
+REPLAY_PROFILE_DIR ?= $(CURDIR)/replay/outputs/profiles
+REPLAY_PROFILE_NAME ?= standard_replay_mcap_replay_$(REPLAY_PROFILE_MAX_CPIS)
+REPLAY_PROFILE_PATH ?= $(REPLAY_PROFILE_DIR)/$(REPLAY_PROFILE_NAME).prof
+REPLAY_PROFILE_LOG ?= $(REPLAY_PROFILE_DIR)/$(REPLAY_PROFILE_NAME).log
+REPLAY_PROFILE_MCAP ?= $(REPLAY_PROFILE_DIR)/$(REPLAY_PROFILE_NAME).replayed.mcap
+REPLAY_PROFILE_EXTRA_ARGS ?=
+SNAKEVIZ_HOST ?= 127.0.0.1
+SNAKEVIZ_PORT ?= 8090
 
 .PHONY: setup_venv
 setup_venv:
@@ -86,6 +98,20 @@ replay_expansion_frontier:
 .PHONY: replay_compare_timing
 replay_compare_timing:
 	$(PYTHON) replay/standard_replay_regression.py compare --timing-report
+
+.PHONY: replay_profile
+replay_profile:
+	mkdir -p "$(REPLAY_PROFILE_DIR)"
+	cd "$(REPLAY_REPO)" && . "$(REPLAY_VENV)/bin/activate" && XDG_CACHE_HOME=/tmp/.cache MPLCONFIGDIR=/tmp/mplconfig MPLBACKEND=Agg TOMHT_NO_SHOW=1 python -m cProfile -o "$(REPLAY_PROFILE_PATH)" -m python.pipeline.mcap_replay "$(REPLAY_INPUT)" -o "$(REPLAY_PROFILE_MCAP)" --force --include-tracker --tracker-type stonesoup-mht --max-cpis "$(REPLAY_PROFILE_MAX_CPIS)" $(REPLAY_PROFILE_EXTRA_ARGS) > "$(REPLAY_PROFILE_LOG)" 2>&1
+	. "$(ENV)/bin/activate" && python replay/timing_summary_from_log.py "$(REPLAY_PROFILE_LOG)"
+	@echo "[profile] profile: $(REPLAY_PROFILE_PATH)"
+	@echo "[profile] log: $(REPLAY_PROFILE_LOG)"
+	@echo "[profile] timing summary: $(REPLAY_PROFILE_LOG).timing_summary.log"
+	@echo "[profile] replayed MCAP: $(REPLAY_PROFILE_MCAP)"
+
+.PHONY: replay_profile_snakeviz
+replay_profile_snakeviz:
+	. "$(ENV)/bin/activate" && snakeviz -H "$(SNAKEVIZ_HOST)" -p "$(SNAKEVIZ_PORT)" "$(REPLAY_PROFILE_PATH)"
 
 .PHONY: replay_update_baseline
 replay_update_baseline:
