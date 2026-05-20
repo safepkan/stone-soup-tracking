@@ -368,9 +368,6 @@ def run_tomht(
         params = TOMHTParams(
             prob_detect=config.prob_detect,
             clutter_density=config.clutter_density,
-            max_children_per_leaf=5,
-            max_missed=5,
-            mahalanobis_gate_threshold=4.292,
         )
     else:
         initiator = (
@@ -385,10 +382,6 @@ def run_tomht(
         params = TOMHTParams(
             prob_detect=config.prob_detect,
             clutter_density=config.clutter_density,
-            max_global_hypotheses=10,
-            max_children_per_leaf=3,
-            max_missed=5,
-            mahalanobis_gate_threshold=3.035,
         )
     tracker = TOMHTTracker(
         updater=updater,

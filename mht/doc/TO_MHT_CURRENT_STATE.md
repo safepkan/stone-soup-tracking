@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, overload-split mode work, overload-solver module split, and small expansion/frontier API cleanup completed through **2026-05-20**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, and smoke-runner parameter reset completed through **2026-05-20**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -15,6 +15,8 @@ Update (2026-05-19): overload cluster solving was split into focused modules wit
 Update (2026-05-19): non-score deletion now resolves to one configured deleter. If `TOMHTTracker(..., deleter=...)` is omitted, TOMHT creates an internal miss-count deleter from `TOMHTParams` using the existing effective threshold; if a custom Stone Soup deleter is supplied, it replaces that default. Score-based deletion still runs independently, and `TRACK_LIFECYCLE` reason labels remain `score`, `miss`, and `deleter`.
 
 Update (2026-05-20): the local branching cap is now named `max_children_per_leaf`, matching the implementation's per-active-leaf behavior. `max_births_per_scan` now defaults to `10`. Internal-birth load guards default to disabled (`None`) and remain available as scenario-specific emergency controls. The overload split threshold is unchanged and remains a future review item.
+
+Update (2026-05-20): the two smoke scenario runners now construct `TOMHTParams` from the scenario's nominal `prob_detect` and `clutter_density` only. Older scenario-specific TOMHT overrides for local branching, global storage, miss threshold, and gating were removed after visual inspection showed better output track quality with the current scoring/lifecycle stack and nominal scenario parameters.
 
 ---
 
