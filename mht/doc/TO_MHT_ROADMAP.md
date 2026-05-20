@@ -1,12 +1,20 @@
 # TO-MHT Roadmap
 
-This roadmap is forward-looking, but it starts from the tracker's current real baseline after the track-oriented transition, exact-solver work, local-association ownership work, scoring/lifecycle/publication cleanup, DPM/API additions, and module-extraction cleanup.
+This roadmap is forward-looking, but it starts from the current tracker baseline
+after the track-oriented transition, exact-solver work, local-association
+ownership, NLL/DPM scoring, lifecycle/publication cleanup, overload-split
+soundness work, expansion/frontier API cleanup, smoke-runner reset, and module
+extraction.
 
-The core question is no longer "how do we make this a true TO-MHT?" The tracker is now a practical track-oriented implementation. The more relevant question is:
+The core question is no longer "how do we make this a true TO-MHT?" The tracker
+is now a practical track-oriented implementation. The more relevant question is:
 
-> given the current persistent-tree architecture, exact solver seam, coherent scoring/lifecycle semantics, and replay bottlenecks, what should be improved next?
+> given the current persistent-tree architecture, coherent scoring/lifecycle
+> semantics, sound overload handling, and integration API, which practical
+> runtime, quality, and integration topics should be improved next?
 
-This roadmap is a **priority map and topic grouping document**, not a fixed execution order.
+This roadmap is a **priority map and topic grouping document**, not a fixed
+execution order.
 
 ---
 
@@ -17,8 +25,10 @@ The tracker now has:
 - explicit persistent `TrackTree` / `TrackHypothesisNode` state,
 - `TrackTreeStore` owning persistent tree/node/ID bookkeeping,
 - per-scan rebuilt globals from current leaf frontiers,
-- full-history `(scan_index, det_index)` exclusivity semantics,
-- post-solve supported-leaf pruning,
+- live unresolved `(scan_index, det_index)` exclusivity semantics, with
+  committed history removed from active conflict checks,
+- post-solve supported-leaf pruning for every retained feasible original-cluster
+  snapshot,
 - MAP-only N-scan pruning directly on explicit trees,
 - committed-prefix output history restoration,
 - exact-one-of `predictor` or `hypothesiser` constructor semantics,
@@ -28,13 +38,19 @@ The tracker now has:
 - explicit external/internal start lanes with existence priors,
 - metadata support for `existence_log_odds` and `existence_probability`,
 - sticky tree confirmation,
-- score-based whole-track deletion,
+- score-based whole-tree deletion,
+- one configured non-score deleter path, with an internal miss-count deleter as
+  the default and custom Stone Soup deleters replacing that default,
 - sticky output publication and dense publication-time public IDs,
 - an explicit solver-facing exact cluster-solver contract,
 - `branch_and_bound` as the default exact cluster backend,
 - `exhaustive` retained as exact reference/fallback,
 - `ortools` retained as experimental exact backend,
-- per-scan timing-phase instrumentation,
+- sound overload splitting internal to one original-cluster solve, with
+  `greedy_partition` as the default operational mode and `conditional_exact` as
+  a reference / higher-compute mode,
+- per-scan timing-phase instrumentation and expansion/frontier usefulness
+  counters,
 - smoke/replay output and timing baselines,
 - a dedicated API/integration guide.
 
@@ -44,9 +60,13 @@ The tracker is no longer blocked on:
 - the original exhaustive solver bottleneck,
 - the PDA/beta-oriented local-association path,
 - basic score/lifecycle semantics,
+- overload-split soundness,
 - or the monolithic tracker class shape.
 
-The main runtime bottleneck is now best interpreted as **local expansion volume**.
+The known remaining performance attention is best interpreted as **local
+expansion and object-boundary cost**. Standard replay still spends most time in
+hypothesiser calls, but the current replay/smoke workloads are no longer blocked
+by frontier growth or exact cluster solving.
 
 ---
 
@@ -59,6 +79,8 @@ Future work should preserve the current understandable structure:
 - trees/leaves are persistent state,
 - globals are rebuilt per scan,
 - exact solving lives behind a solver seam,
+- overload splitting is an explicit sound approximation/fallback inside one
+  original cluster solve,
 - scoring is additive and interpretable,
 - lifecycle/publication are tree-level concepts,
 - output tracks are public views of internal MAP-selected trees,
@@ -74,9 +96,32 @@ The preferred style remains:
 4. compare smoke/replay output and timing,
 5. decide the next step from evidence.
 
-This matters especially for expansion-volume work, where pruning can easily change tracking quality.
+This matters especially for pruning/frontier work, where apparently safe local
+rules can change tracking quality.
 
-### 2.3 Keep semantics separate
+### 2.3 Keep normal operation distinct from guardrails
+
+The normal frontier-control stack is now coherent:
+
+1. local association gating,
+2. per-active-leaf local branching through `max_children_per_leaf`, with the
+   miss alternative preserved,
+3. K-best feasible cluster solve,
+4. post-solve supported-leaf pruning,
+5. MAP-only N-scan pruning,
+6. score deletion plus the configured deleter,
+7. sticky publication gating.
+
+Guardrails and approximation/safety mechanisms are separate:
+
+- optional pre-solve per-tree leaf cap,
+- internal-birth cap and optional birth load guards,
+- overload split fallback,
+- optional hard projected-cluster-combination cap.
+
+Future work should avoid disguising emergency caps as semantic pruning.
+
+### 2.4 Keep semantics separate
 
 Avoid mixing concepts that are now cleanly separated:
 
@@ -85,95 +130,127 @@ Avoid mixing concepts that are now cleanly separated:
 - publication controls output visibility,
 - DPM calibrates local evidence,
 - initiators own state initialization and candidate validity,
-- solver exactness is per rebuilt cluster/subcluster, while overload splitting is an explicit guardrail.
+- custom hypothesisers own sensor-specific local association and gating,
+- solver exactness is per rebuilt cluster, while overload splitting is an
+  explicit sound approximation/fallback.
 
-### 2.4 Treat docs as part of the handoff
+### 2.5 Treat docs as part of the handoff
 
-`CURRENT_STATE`, `NEXT_STEPS`, `ROADMAP`, and `TO_MHT_API.md` should continue to track the implementation. The API guide is especially important for ISAC-style integration discussions.
+`CURRENT_STATE`, `NEXT_STEPS`, `ROADMAP`, and `TO_MHT_API.md` should continue to
+track the implementation. The API guide is especially important for ISAC-style
+integration discussions.
 
 ---
 
 ## 3. Main topic groups
 
-### A. Local expansion volume reduction / pre-expansion control
+### A. Local expansion and object-boundary optimization
 
-This is now the clearest immediate performance topic.
-
-The solver phase and local-association math cleanup moved the bottleneck. Timing instrumentation points to local expansion / hypothesis generation, especially the number of active leaves that require expansion.
+This remains the clearest performance topic, but the near-term framing has
+changed: current scenarios are not blocked by frontier growth, while profiling
+still shows local expansion as the dominant runtime component.
 
 This topic includes:
 
 - profiling how many leaves are expanded per scan,
 - identifying which expanded leaves later matter,
 - measuring expansion cost by tree/lifecycle/publication state,
-- reducing the number of leaves that require full hypothesiser work,
-- revisiting local child generation/retention controls,
-- considering score/frontier-aware pre-expansion filters,
-- clarifying semantic pruning vs tractability caps,
-- reviewing overload-split pruning behavior when clusters grow large.
-
-This is the strongest candidate for the next major technical branch.
+- reducing the number of leaves that require full hypothesiser work when there
+  is evidence this is safe,
+- profiling Stone Soup `Track` reconstruction call sites,
+- considering a tracker-owned default-hypothesiser fast path that avoids full
+  history reconstruction,
+- considering lightweight internal track views for internal/default paths,
+- preserving full Stone Soup `Track` reconstruction for public output and
+  debug/inspection,
+- only later considering opt-in lightweight views for custom hypothesisers or
+  deleters.
 
 ### B. Frontier / score-based pruning
 
-Now that score semantics are coherent, broader pruning can be considered more safely.
+Now that score semantics are coherent, broader score/frontier pruning can be
+considered more safely, but should still start as diagnostics.
 
 This topic includes:
 
-- score-based leaf/frontier pruning,
+- score-relative leaf/frontier diagnostics,
 - lifecycle-aware expansion budgets,
-- whether confirmed and tentative trees deserve different resource treatment,
-- how deletion thresholds, publication state, and active frontier pruning should interact,
-- avoiding premature loss of hypotheses that could reconnect through later measurements.
+- whether tentative and confirmed trees deserve different resource treatment,
+- whether low-score leaves far below the best leaf in a tree ever survive into
+  retained top-K/MAP hypotheses,
+- how deletion thresholds, publication state, and active frontier pruning should
+  interact,
+- safeguards against losing hypotheses that could reconnect through later
+  measurements.
 
-This belongs close to expansion-volume work, but should be introduced carefully.
+### C. Overload split policy and difficulty signals
 
-### C. Internal birth / existence / candidate quality
+The soundness problem is addressed. Both overload modes now return feasible
+original-cluster globals, and supported-leaf pruning applies uniformly.
 
-Internal births are cleaner than before but still heuristic in their tractability controls.
+Future overload work is about policy and quality rather than restoring
+correctness:
+
+- improve the decision of when a cluster solve is actually too hard,
+- replace or supplement projected Cartesian product with better difficulty
+  signals,
+- consider conflict graph density, cut-key structure, score concentration, and
+  branch-and-bound search behavior,
+- compare `greedy_partition` and `conditional_exact` on quality-sensitive or
+  ID-switch-heavy scans,
+- refine greedy ownership if broader scenarios expose quality issues.
+
+### D. Internal birth / existence / candidate quality
+
+Internal births are cleaner than before but still heuristic in their
+tractability controls.
 
 This topic includes:
 
 - candidate ranking/capping behavior,
 - whether `max_births_per_scan` is firing routinely,
-- whether scenario-specific birth load guards are needed, since they default to disabled,
+- whether scenario-specific birth load guards are needed, since they default to
+  disabled,
 - whether candidate confidence metadata should have a stronger role,
 - residual detection policy,
 - false-start observability,
 - interplay between start priors, confirmation, publication, and deletion,
 - target swapping / track jumping review.
 
-For external-start-only integrations this is less urgent, but it remains important for the general tracker path.
+For external-start-only integrations this is less urgent, but it remains
+important for the general tracker path and for running MHT on recorded data with
+internal initiators.
 
-### D. Approximation semantics and guardrails
+### E. Output continuity and tracking quality
 
-Current pragmatic mechanisms include:
-
-- overload cluster splitting,
-- local leaf caps,
-- optional internal birth load guards.
-
-These are explicit and useful but not conceptually final.
+The tracker is now stable enough to support a more meaningful quality review.
+Observed output issues such as occasional ID switching or MAP-leaf switching
+should be treated as a separate output-continuity topic rather than mixed into
+frontier-control work.
 
 This topic includes:
 
-- documenting/validating when each approximation is acceptable,
-- whether overload-split clusters should participate in supported-leaf pruning differently,
-- how guardrails should interact with future score/frontier pruning.
+- ID switching / target-jump analysis,
+- publication-side continuity policies,
+- possible stitching across track-tree fragments,
+- smoothing or hysteresis for MAP-leaf changes within a published tree,
+- false-start and false-publication review,
+- broader scenario visualization and metrics.
 
-### E. Integration / API / operational hardening
+### F. Integration / API / operational hardening
 
 This is ongoing supporting work:
 
 - gather ISAC/API feedback,
 - preserve Stone Soup compatibility,
+- keep Python 3.10 compatibility healthy,
 - keep parameter override workflows practical,
 - maintain smoke/replay baselines,
 - keep backend parity tests healthy,
 - improve docs as implementation stabilizes,
 - ensure external-start and DPM integration remain ergonomic.
 
-### F. Parallelization / orchestration
+### G. Parallelization / orchestration
 
 Parallel local expansion is a real future axis, but not the next default move.
 
@@ -182,119 +259,138 @@ When addressed, it should be:
 - opt-in,
 - deterministic,
 - separated behind an orchestration abstraction,
-- able to support sequential, tracker-owned parallel, and external/custom orchestration modes,
+- able to support sequential, tracker-owned parallel, and external/custom
+  orchestration modes,
 - compatible with ISAC needs without depending on ISAC internals.
 
 ---
 
 ## 4. Rough priority picture
 
-### Highest-leverage near-term area
+### Highest-leverage near-term candidates
 
-1. **Local expansion volume reduction / pre-expansion control**
+The next deeper branch should be chosen from integration feedback and broader
+scenario runs. The strongest current candidates are:
 
-This should be the next primary phase unless new integration feedback changes the priority.
+1. **Local expansion / object-boundary profiling and optimization**
+2. **Output continuity / ID-switching review**
+3. **Internal birth / existence quality review** for non-ISAC/general tracker use
 
-### Important near-term companions
+### Important supporting areas
 
-These should be considered during the expansion-volume phase, but do not necessarily define separate phases:
+These should travel with the deeper work rather than define standalone phases:
 
-- score/frontier pruning,
-- lifecycle-aware expansion policies,
-- expansion observability,
-- approximation semantics around overload and pruning,
-- birth ranking/capping observations if they affect expansion pressure.
-
-### Important but probably not first
-
-- internal birth/existence quality review,
-- target swapping / track-jumping audit,
-- broader output-quality tuning,
-- more detailed parameter tuning guidance.
+- score/frontier diagnostics,
+- overload split difficulty-signal review,
+- additional scenario validation,
+- smoke/replay baseline maintenance,
+- small API/doc clarifications from integrator feedback.
 
 ### Later / lower priority
+
+These still matter, but do not currently define the main next move:
 
 - local-expansion parallelization,
 - richer external-start scheduling before first update,
 - deeper solver backend experimentation,
-- extensive packaging/handoff polish beyond near-term API docs,
+- broad packaging/handoff polish beyond near-term API docs,
 - large-scale refactors not tied to a substantive technical branch.
 
 ---
 
-## 5. Recommended next branch: expansion-volume-first
+## 5. Recommended next branch candidates
 
-### Focus
-
-Characterize and reduce expansion volume:
-
-- how many leaves are expanded,
-- which trees/leaves dominate expensive scans,
-- which expanded leaves survive or influence retained globals,
-- how expansion volume relates to lifecycle/publication state,
-- which low-score or low-quality frontiers can be safely deprioritized or pruned,
-- what controls are semantic vs emergency caps.
-
-### Why this is attractive
-
-- Exact cluster solving is no longer the main bottleneck.
-- Local-association kernel optimizations have already delivered meaningful wins.
-- Remaining replay tails appear driven by expansion volume.
-- The scoring/lifecycle work now gives us interpretable scores to use for pruning or selective expansion.
-- The tracker is now modular enough that expansion work can be targeted.
-
-### What to avoid initially
-
-Do not start with broad, aggressive pruning. First characterize:
-
-- active leaf counts,
-- expansion attempts,
-- expansion result usefulness,
-- retained-vs-pruned leaves,
-- lifecycle/publication distribution of expensive expansions,
-- output quality changes under candidate policies.
-
----
-
-## 6. Secondary branch: quality / birth / existence review
-
-This remains high-value, especially for general tracker behavior.
+### Option 1: Profiling-guided local expansion cleanup
 
 Focus:
 
-- false starts,
-- internal birth candidate cap behavior,
-- start priors and metadata confidence,
-- score deletion and publication thresholds,
-- target swapping / track jumping,
-- smoke/replay quality inspection.
+- preserve current frontier semantics,
+- add/inspect finer profiling around internal `Track` reconstruction,
+- avoid full-history reconstruction where internal/default code only needs the
+  current leaf state plus metadata,
+- consider a default-hypothesiser fast path,
+- re-profile standard replay and at least one additional scenario.
+
+Why this is attractive:
+
+- hypothesiser calls remain the dominant cost,
+- object-boundary overhead is visible but not yet isolated,
+- this can improve runtime without introducing new pruning semantics.
+
+What to avoid initially:
+
+- changing custom component behavior by default,
+- exposing lightweight-track API knobs before internal profiling proves the
+  benefit,
+- replacing public output reconstruction with anything other than full tracks.
+
+### Option 2: Broader scenario validation and quality review
+
+Focus:
+
+- run more recorded/synthetic scenarios,
+- compare smoke/replay/ISAC-style behavior,
+- inspect ID switching, target jumping, false starts, and false publications,
+- decide whether output continuity or birth quality is the next real pain point.
+
+Why this is attractive:
+
+- current standard replay is no longer sufficient to infer the next major
+  blocker,
+- smoke scenarios now run well with nominal parameters,
+- ISAC feedback may change priorities.
+
+### Option 3: Overload difficulty-signal review
+
+Focus:
+
+- leave `greedy_partition` as the default sound operational fallback,
+- evaluate when exact branch-and-bound can solve large projected clusters
+  cheaply,
+- design a better split trigger than projected Cartesian combinations alone,
+- preserve the current soundness invariant that downstream sees feasible
+  original-cluster globals only.
 
 Why it may wait:
 
-- current outputs are usable enough for continued runtime work,
-- the external-start-only ISAC path is less dependent on internal birth behavior,
-- the most visible runtime bottleneck is still expansion volume.
+- the current overload path is practical on standard replay,
+- the low threshold still exercises the code path,
+- no current scenario shows overload as an active blocker.
 
-This branch may follow expansion-volume work or be interleaved if expansion analysis shows births are a major volume driver.
+### Option 4: Birth/existence-focused branch
+
+Focus:
+
+- internal initiator quality,
+- candidate confidence metadata,
+- birth cap firing frequency,
+- false-start and publication interaction,
+- recorded-data runs that require internal starts.
+
+Why it may wait:
+
+- ISAC integration is external-start-only,
+- recent defaults are now less restrictive,
+- broader scenario evidence should drive the next birth-specific changes.
 
 ---
 
-## 7. What belongs together
+## 6. What belongs together
 
-### Expansion-volume work should include
+### Local expansion/object-boundary work should include
 
-- per-scan and per-tree expansion volume characterization,
-- leaf usefulness analysis,
-- lifecycle/publication-aware expansion statistics,
-- pre-expansion pruning or prioritization experiments,
-- review of local child-retention controls,
-- validation against smoke/replay baselines.
+- profiling and characterization of expensive expansion scans,
+- per-call-site timing for `Track` reconstruction,
+- default-hypothesiser fast-path experiments,
+- validation that custom hypothesiser behavior remains unchanged,
+- smoke/replay timing and output comparison.
 
 ### Score/frontier pruning work should include
 
 - clear interpretation of score thresholds,
 - relationship to confirmation/deletion/publication,
 - impact on N-scan pruning and post-solve supported-leaf pruning,
+- diagnostics before pruning,
 - safeguards against losing reconnectable hypotheses.
 
 ### Birth/existence work should include
@@ -305,24 +401,33 @@ This branch may follow expansion-volume work or be interleaved if expansion anal
 - residual policy review,
 - false-start and target-jump inspection.
 
-### Approximation work should include
+### Overload/approximation work should include
 
-- overload split semantics,
-- supported-leaf pruning behavior for split clusters,
-- interaction with future score/frontier pruning.
+- split trigger and weak-link policy review,
+- comparison of exact B&B vs greedy split cost,
+- comparison of `greedy_partition` and `conditional_exact` quality,
+- preservation of the feasible-original-cluster invariant.
+
+### Output-continuity work should include
+
+- ID switch metrics and visualization,
+- MAP-leaf switch analysis,
+- publication-side smoothing/hysteresis options,
+- clear separation from internal scoring and pruning semantics.
 
 ### Parallelization work should include
 
-- opt-in orchestration design,
-- deterministic result merging,
-- clear ownership boundary between tracker and custom/external parallel execution,
-- timing and reproducibility validation.
+- opt-in runtime behavior only,
+- a clean orchestration abstraction above hypothesiser execution,
+- room for sequential, tracker-owned parallel, and external/custom parallel
+  modes,
+- strong determinism/validation expectations.
 
 ---
 
-## 8. Practical notes from the current checkpoint
+## 7. Practical notes from the current checkpoint
 
-### 8.1 Solver phase succeeded
+### 7.1 Solver phase succeeded
 
 The solver work produced:
 
@@ -334,7 +439,7 @@ The solver work produced:
 
 Exact cluster solving is not the urgent blocker it was earlier.
 
-### 8.2 Local-association/scoring phase succeeded
+### 7.2 Local-association/scoring phase succeeded
 
 The local-association and scoring work produced:
 
@@ -344,14 +449,16 @@ The local-association and scoring work produced:
 - DPM abstraction for dynamic `P_D` and clutter density,
 - documented scoring unit contract.
 
-The current baseline is good enough to support expansion-volume work.
+The current baseline is good enough to support future pruning and integration
+work.
 
-### 8.3 Lifecycle/publication phase succeeded
+### 7.3 Lifecycle/publication phase succeeded
 
 The tracker now has:
 
 - sticky confirmation,
 - score-based deletion,
+- one configured non-score deleter path,
 - sticky publication,
 - confirmed-only default output,
 - public vs internal ID split,
@@ -359,32 +466,73 @@ The tracker now has:
 
 This gives future score/frontier controls a meaningful interpretation.
 
-### 8.4 API guide is ready for review
+### 7.4 Overload/frontier phase removed the current blocker
 
-`TO_MHT_API.md` is good enough to share with integrators. Feedback may lead to small API/doc adjustments, but it should not block the next internal technical phase unless it reveals a real integration issue.
+The overload/frontier work produced:
+
+- live conflict keys that exclude committed history,
+- removal of historical relaxation,
+- sound overload solving with feasible original-cluster globals downstream,
+- uniform supported-leaf pruning for overload-solved clusters,
+- `greedy_partition` as a practical default,
+- `conditional_exact` as a reference/higher-compute mode,
+- focused overload modules and split policy seams.
+
+This does not mean expansion is solved universally, but the standard replay and
+smoke workloads no longer show the previous frontier-control blocker.
+
+### 7.5 Smoke scenario reset improved the baseline demonstration
+
+The smoke runners now use the scenario's nominal `prob_detect` and
+`clutter_density` instead of old hand-tuned TOMHT overrides. Visual inspection
+showed better output quality with the current scoring/lifecycle/overload stack,
+so the smoke scenarios now better represent the current tracker rather than early
+tuning artifacts.
+
+### 7.6 Profiling refined the next performance question
+
+Profiling confirms that hypothesiser calls dominate standard replay. It also
+shows non-negligible overhead from creating full Stone Soup `Track` objects and
+accessing Stone Soup attributes. Future work should determine how much of this
+can be avoided in internal/default paths without changing the public Stone Soup
+component boundary.
 
 ---
 
-## 9. Near-term execution style
+## 8. Near-term execution style
 
-The immediate workflow should be:
+The immediate workflow should likely be:
 
-1. replace `NEXT_STEPS` with a focused expansion-volume phase plan,
-2. start with analysis/instrumentation rather than pruning changes,
-3. identify candidate volume controls,
-4. implement one conservative control at a time,
-5. compare smoke/replay output and timing,
-6. decide whether to continue volume work or switch to quality/birth review.
+1. use ISAC feedback and broader scenario runs to choose the next real branch,
+2. keep smoke/replay baselines healthy,
+3. use profiling before adding new pruning rules,
+4. prefer internal/default-path optimizations before exposing new API knobs,
+5. implement one conservative change at a time,
+6. compare output quality and timing before continuing.
+
+This avoids prematurely mixing expansion optimization, output continuity, birth
+quality, and parallelization design into one branch.
 
 ---
 
-## 10. Near-term priority summary
+## 9. Near-term priority summary
 
 At this checkpoint:
 
 1. The track-oriented architecture is stable enough to treat as baseline.
 2. Branch-and-bound solved the immediate exact-solver bottleneck.
-3. NLL/DPM scoring and score-based lifecycle are coherent enough for pruning work.
-4. API and integration assumptions are now documented.
-5. The tracker is modular enough for targeted subsystem work.
-6. The next main technical phase should return to **local expansion volume / frontier control**.
+3. NLL/DPM scoring and score-based lifecycle are coherent enough for future
+   score/frontier work.
+4. Overload splitting is now sound and practical; the previous frontier-control
+   blocker is not active on current replay/smoke workloads.
+5. Local expansion remains the main profiling hotspot, with both hypothesiser
+   calls and Stone Soup object-boundary overhead worth watching.
+6. Internal birth/existence quality and output continuity remain important but
+   should be driven by broader scenario evidence.
+7. Parallelization should stay a later, explicit, opt-in architectural topic.
+
+In other words: the tracker is in a good place for integration feedback and
+broader scenario validation. The next technical branch should be selected from
+that evidence, with local expansion/object-boundary optimization, output
+continuity, overload difficulty policy, and internal birth quality as the main
+candidates.

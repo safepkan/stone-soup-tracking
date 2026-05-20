@@ -6,17 +6,7 @@ This document describes the tracker as it exists after the track-oriented TO-MHT
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
-The long dated update stack from the previous version has been consolidated into the main text below. The main result of the most recent phase is that scoring, start priors, confirmation, publication, deletion, public IDs, and API documentation now have a coherent interpretation. This puts the tracker in a good position to return to expansion-volume work.
-
-Update (2026-05-18): the project now targets Python >=3.10 for ISAC integration compatibility. The repo metadata, formatter/type-check settings, and GitHub Actions matrix include Python 3.10 while retaining the newer-version CI checks.
-
-Update (2026-05-19): overload cluster solving was split into focused modules without intentional behavior or diagnostic-label changes. `tomht_cluster_overload.py` now holds the public solve entry/logging surface, `tomht_cluster_split_policy.py` holds split trigger and link-selection policy seams, `tomht_cluster_overload_greedy.py` holds the default `greedy_partition` strategy, `tomht_cluster_overload_conditional.py` holds the reference `conditional_exact` strategy, and `tomht_cluster_overload_common.py` holds shared solver mechanics. Temporary private compatibility re-exports from the entry module were removed; internal users import helpers from their owning modules.
-
-Update (2026-05-19): non-score deletion now resolves to one configured deleter. If `TOMHTTracker(..., deleter=...)` is omitted, TOMHT creates an internal miss-count deleter from `TOMHTParams` using the existing effective threshold; if a custom Stone Soup deleter is supplied, it replaces that default. Score-based deletion still runs independently, and `TRACK_LIFECYCLE` reason labels remain `score`, `miss`, and `deleter`.
-
-Update (2026-05-20): the local branching cap is now named `max_children_per_leaf`, matching the implementation's per-active-leaf behavior. `max_births_per_scan` now defaults to `10`. Internal-birth load guards default to disabled (`None`) and remain available as scenario-specific emergency controls. The overload split threshold is unchanged and remains a future review item.
-
-Update (2026-05-20): the two smoke scenario runners now construct `TOMHTParams` from the scenario's nominal `prob_detect` and `clutter_density` only. Older scenario-specific TOMHT overrides for local branching, global storage, miss threshold, and gating were removed after visual inspection showed better output track quality with the current scoring/lifecycle stack and nominal scenario parameters.
+The long dated update stack from the previous version has been consolidated into the main text below. The recent scoring/start/lifecycle/API work gave the tracker coherent score semantics and a usable integration boundary. The subsequent expansion/frontier pass removed the main known frontier-control blocker by making overload splitting sound, restoring uniform supported-leaf pruning, and cleaning up expansion-related defaults.
 
 ---
 
@@ -51,7 +41,7 @@ The implementation is currently:
 - on a clearer scoring/lifecycle/publication baseline than the earlier PDA/beta-oriented path,
 - and substantially less monolithic after the module extraction work.
 
-The main remaining practical runtime weakness is no longer exact cluster solving. With branch-and-bound as the default backend and the local-association math path cleaned up, the primary replay bottleneck remains **local expansion / hypothesis generation**, especially the number of active leaves that require full expansion.
+The main remaining profiling hotspot is no longer exact cluster solving. With branch-and-bound as the default backend, overload splitting on a sound footing, and the local-association math path cleaned up, standard replay time is still dominated by **local expansion / hypothesis generation**. Current replay/smoke workloads are no longer blocked by frontier growth, but broader scenario runs may still expose expansion-volume or object-reconstruction overheads.
 
 ---
 
@@ -582,13 +572,25 @@ Default `ns_scan_window` remains `6`.
 
 ### Approximation / safety-net mechanisms
 
+The normal frontier-control stack is now coherent:
+
+1. local association gating in the configured hypothesiser,
+2. per-active-leaf local branching through `max_children_per_leaf`, with the miss alternative always preserved,
+3. K-best feasible cluster solve over current leaves,
+4. post-solve supported-leaf pruning to retained rebuilt globals,
+5. MAP-only N-scan pruning,
+6. score deletion plus the configured deleter,
+7. sticky publication gating.
+
 The explicit approximation/safety mechanisms are:
 
 1. overload cluster splitting,
-2. optional internal birth load guards,
-3. pre-solve local leaf caps.
+2. optional pre-solve per-tree leaf cap through `max_leaves_per_track_tree`,
+3. internal-birth cap through `max_births_per_scan`,
+4. optional internal-birth load guards,
+5. optional hard projected-cluster-combination cap.
 
-These are pragmatic robustness/tractability mechanisms and remain conceptually provisional. Birth load guards default to disabled. The overload split projected-combination threshold remains conservative and is still a future review item. These controls should be revisited as expansion-volume and frontier-control work proceeds.
+These are pragmatic robustness/tractability mechanisms and remain conceptually provisional. Birth load guards default to disabled. The overload split projected-combination threshold remains conservative and is still a future review item; it is a useful current smoke/replay exercise path, not a final difficulty predictor.
 
 ---
 
@@ -622,11 +624,11 @@ Per-scan and summary instrumentation reports include:
 - memory/node counts,
 - phase timing breakdown.
 
-Expansion timing is split into hypothesiser and updater call counts/times, which has been useful for identifying local expansion as the remaining bottleneck.
+Expansion timing is split into hypothesiser and updater call counts/times, which has been useful for identifying local expansion as the remaining bottleneck. Profiling also shows a non-negligible amount of time in Stone Soup `Track` reconstruction and object-attribute access. Public output and debug/inspection still legitimately need full reconstructed tracks, but internal paths such as default local expansion and default miss-count deletion may eventually benefit from lighter leaf-local views.
 
 ### Regression status
 
-Smoke and replay regression harnesses are now in place for both output and timing comparisons. Baselines have been updated for the scoring/lifecycle/publication and birth-cleanup changes.
+Smoke and replay regression harnesses are now in place for both output and timing comparisons. Baselines have been updated for the scoring/lifecycle/publication changes, overload-split default, expansion/frontier parameter cleanup, and smoke-runner reset to nominal scenario scoring parameters.
 Focused MHT unit tests are available through `make mht_tests`, which runs `pytest mht/tests`.
 
 ---
@@ -660,31 +662,35 @@ The following are solid enough to treat as the current base architecture:
 
 ## What remains provisional / future-work territory
 
-### 1. Local expansion volume
+### 1. Local expansion and object-boundary cost
 
-This is the main near-term runtime target. The likely win is reducing how many active leaves require full expansion, not only optimizing the cost of one `hypothesise()` call.
+Local expansion remains the main profiling hotspot, but it is no longer an active blocker on the standard replay/smoke workloads. Future work should distinguish true expansion volume from per-leaf overhead. Profiling shows hypothesiser calls dominate, but also shows non-negligible overhead from reconstructing full Stone Soup `Track` objects and accessing Stone Soup attributes. A future pass should profile reconstruction call sites separately and consider default-hypothesiser fast paths or lightweight internal track views while preserving full Stone Soup tracks for public output/debug and default compatibility for custom components.
 
 ### 2. Frontier and score-based pruning
 
-Now that scores are coherent, broader score/frontier pruning can be reconsidered. It should be approached carefully to avoid deleting useful hypotheses prematurely.
+Now that scores are coherent, broader score/frontier pruning can be reconsidered. It should be approached carefully and preferably first as diagnostics: score-relative leaf gaps, tentative-vs-confirmed frontier volume, and whether low-score leaves ever appear in retained top-K/MAP hypotheses.
 
 ### 3. Internal birth ranking and capping
 
-Internal birth candidate selection is now state-layout agnostic, but its ranking/capping remains heuristic. `max_births_per_scan=10` is the default cap and still a guardrail. The active-tree/active-leaf birth load guards default to disabled and should be used only for scenario-specific emergency control. Covariance trace is only a weak fallback quality proxy. If caps fire often, initiator-side filtering or candidate confidence metadata is likely more important than improving the fallback metric.
+Internal birth candidate selection is now state-layout agnostic, but its ranking/capping remains heuristic. `max_births_per_scan=10` is the default cap and still a guardrail. The active-tree/active-leaf birth load guards default to disabled and should be used only for scenario-specific emergency control. Covariance trace is only a weak fallback quality proxy. If caps fire often, initiator-side filtering or candidate confidence metadata is likely more important than improving the fallback metric. This is not urgent for the external-start-only ISAC path, but it matters for general recorded-data runs.
 
-### 4. Approximation semantics
+### 4. Overload difficulty and approximation policy
 
-Overload splitting remains active but is not conceptually final. Its interaction with future pruning/volume controls should be reviewed separately.
+Overload splitting is now sound and practical, with `greedy_partition` as the operational default and `conditional_exact` retained as a reference mode. The remaining open question is not soundness but policy: the projected Cartesian product threshold is a crude difficulty signal from the exhaustive-solver era. A future pass should compare exact branch-and-bound difficulty, conflict graph structure, score concentration, and split quality before changing the trigger.
 
-### 5. Tracking quality / false-start / target-jump review
+### 5. Tracking quality / false-start / ID-switch review
 
-The tracker is now stable enough to support a more meaningful output-quality review, but the next runtime bottleneck still points first toward expansion volume.
+The tracker is now stable enough to support a more meaningful output-quality review. Occasional ID switching / MAP-leaf switching remains a separate output-continuity topic. Future work may include output stitching, ID smoothing across MAP flips, or publication-side continuity policies, but this should not be mixed into the current frontier-control baseline.
 
-### 6. Parallelization / orchestration
+### 6. Confirmation-state-dependent gating
 
-Parallel local expansion remains a plausible future axis, but should be opt-in and architecturally explicit. It should not be mixed into the next expansion-volume phase by default.
+The reconstructed `Track` passed to custom hypothesisers now carries TOMHT lifecycle metadata, so custom hypothesisers can implement tighter tentative-track gates or other confirmation-state-dependent policies. The tracker-owned default hypothesiser still uses one threshold; adding separate tentative/confirmed defaults should wait for scenario evidence.
 
-### 7. API feedback
+### 7. Parallelization / orchestration
+
+Parallel local expansion remains a plausible future axis, but should be opt-in and architecturally explicit. It should not be mixed into smaller profiling/object-boundary cleanup by default.
+
+### 8. API feedback
 
 `TO_MHT_API.md` is good enough to share for review. Integration feedback may drive small API or documentation adjustments.
 
@@ -698,6 +704,7 @@ This checkpoint should be understood as:
 - with coherent scoring/start/lifecycle/publication semantics,
 - with a clean enough API story for integration discussion,
 - with a thin tracker orchestrator and extracted phase modules,
-- and with remaining replay runtime pressure concentrated mainly in local expansion volume.
+- with overload/frontier control no longer blocking the standard replay/smoke workloads,
+- and with remaining performance attention focused on local expansion, Stone Soup object-boundary overhead, and broader-scenario validation.
 
-The scoring/birth/confirmation/publication phase can be treated as complete. The next technical phase should return to local expansion volume and frontier-control work from this stronger baseline.
+The scoring/birth/confirmation/publication phase can be treated as complete, and the current expansion/frontier phase can be treated as mostly wrapped for the known scenarios. The next technical branch should be chosen from integration feedback, broader recorded-data runs, and profiling evidence rather than assuming another immediate pruning mechanism is needed.
