@@ -36,6 +36,8 @@ The `Makefile` provides a few convenience targets:
 - `make tomht_release_export` replaces the sibling `../stonesoup-tomht/mht`
   snapshot and appends a `RELEASE_HISTORY.md` entry with this repo's current
   commit.
+- `make tomht_release_export_commit` does the same export and commits it in the
+  release repo.
 
 You can select a different environment by passing `ENV` (default is `venv`):
 
@@ -59,12 +61,25 @@ release snapshot:
 make tomht_release_export
 ```
 
+Use `make tomht_release_export_commit` to also create the matching release
+commit in the external repo.
+
 The helper refuses to run if either repo has uncommitted or untracked changes.
 It copies `mht/` to the sibling `../stonesoup-tomht` checkout, excluding the
 internal `mht/doc/` and `mht/docs/` documentation folders, and appends a dated
 entry to `RELEASE_HISTORY.md`. To intentionally export a dirty source snapshot,
 run `source venv/bin/activate && python tools/export_tomht_release.py --allow-dirty`;
 the recorded source commit gets a `-dirty` suffix.
+
+Pass `--commit` to also commit the exported snapshot in the release repo with a
+message like:
+
+```text
+Release 2026-05-20
+
+Snapshot from stone-soup-tracking b3a6370d3822c86fe40bb27cfe6c1cf9c0980fcd.
+Release notes are in RELEASE_HISTORY.md.
+```
 
 ## TO-MHT Snapshot Install
 

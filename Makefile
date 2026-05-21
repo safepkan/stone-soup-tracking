@@ -120,3 +120,7 @@ replay_update_baseline:
 .PHONY: tomht_release_export
 tomht_release_export:
 	$(PYTHON) tools/export_tomht_release.py
+
+.PHONY: tomht_release_export_commit
+tomht_release_export_commit:
+	$(PYTHON) tools/export_tomht_release.py --commit

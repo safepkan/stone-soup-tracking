@@ -106,6 +106,17 @@ def release_entry(release_date: str, source_ref: str, notes: Sequence[str]) -> s
     return "\n".join(lines)
 
 
+def release_commit_body(source_ref: str) -> str:
+    return (
+        f"Snapshot from stone-soup-tracking {source_ref}.\n"
+        f"Release notes are in {RELEASE_LOG_NAME}."
+    )
+
+
+def release_commit_message(release_date: str, source_ref: str) -> str:
+    return f"Release {release_date}\n\n{release_commit_body(source_ref)}"
+
+
 def append_release_entry(
     release_log: Path,
     release_date: str,
@@ -165,7 +176,31 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help="Print the planned export without modifying the release repo.",
     )
+    parser.add_argument(
+        "--commit",
+        action="store_true",
+        help=(
+            "Commit the exported mht/ snapshot and RELEASE_HISTORY.md update "
+            "in the release repo."
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def commit_release_export(dest_repo: Path, release_date: str, source_ref: str) -> str:
+    git_output(dest_repo, "add", "--all", "--", "mht", RELEASE_LOG_NAME)
+    if not git_status(dest_repo):
+        raise ExportError("Export produced no destination changes to commit.")
+
+    git_output(
+        dest_repo,
+        "commit",
+        "-m",
+        f"Release {release_date}",
+        "-m",
+        release_commit_body(source_ref),
+    )
+    return git_output(dest_repo, "rev-parse", "HEAD")
 
 
 def run_export(args: argparse.Namespace) -> None:
@@ -206,6 +241,10 @@ def run_export(args: argparse.Namespace) -> None:
         print(f"Release log:      {release_log}")
         print(f"Files to export:  {len(files)}")
         print(f"Would replace:    {dest_mht}")
+        if args.commit:
+            print("Would commit with message:")
+            for line in release_commit_message(args.date, source_ref).splitlines():
+                print(f"  {line}")
         print("Dry run only; no files changed.")
         return
 
@@ -215,7 +254,11 @@ def run_export(args: argparse.Namespace) -> None:
     print(f"Exported {len(files)} file(s) to {dest_mht}")
     print(f"Updated {release_log}")
     print(f"Recorded source commit {source_ref}")
-    print(f"Review with: git -C {dest_repo} status --short")
+    if args.commit:
+        release_commit = commit_release_export(dest_repo, args.date, source_ref)
+        print(f"Committed release repo at {release_commit}")
+    else:
+        print(f"Review with: git -C {dest_repo} status --short")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
