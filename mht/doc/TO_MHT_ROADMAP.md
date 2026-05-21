@@ -3,8 +3,8 @@
 This roadmap is forward-looking, but it starts from the current tracker baseline
 after the track-oriented transition, exact-solver work, local-association
 ownership, NLL/DPM scoring, lifecycle/publication cleanup, overload-split
-soundness work, expansion/frontier API cleanup, smoke-runner reset, and module
-extraction.
+soundness work, expansion/frontier API cleanup, object-boundary cleanup,
+smoke-runner reset, and module extraction.
 
 The core question is no longer "how do we make this a true TO-MHT?" The tracker
 is now a practical track-oriented implementation. The more relevant question is:
@@ -33,6 +33,8 @@ The tracker now has:
 - committed-prefix output history restoration,
 - exact-one-of `predictor` or `hypothesiser` constructor semantics,
 - a narrow distance-hypothesiser seam for local association,
+- default internal fast paths that avoid Stone Soup `Track` reconstruction when
+  history is not needed, gated by `TOMHTParams` flags,
 - NLL/LLR-based scoring via `NLLScoringModel`,
 - `DetectionProbabilityModel` for dynamic `P_D` and clutter density,
 - explicit external/internal start lanes with existence priors,
@@ -49,8 +51,8 @@ The tracker now has:
 - sound overload splitting internal to one original-cluster solve, with
   `greedy_partition` as the default operational mode and `conditional_exact` as
   a reference / higher-compute mode,
-- per-scan timing-phase instrumentation and expansion/frontier usefulness
-  counters,
+- per-scan timing-phase instrumentation, explicit reconstruction counters, and
+  expansion/frontier usefulness counters,
 - smoke/replay output and timing baselines,
 - a dedicated API/integration guide.
 
@@ -63,10 +65,13 @@ The tracker is no longer blocked on:
 - overload-split soundness,
 - or the monolithic tracker class shape.
 
-The known remaining performance attention is best interpreted as **local
-expansion and object-boundary cost**. Standard replay still spends most time in
-hypothesiser calls, but the current replay/smoke workloads are no longer blocked
-by frontier growth or exact cluster solving.
+The accepted object-boundary cleanup removed avoidable default-path Stone Soup
+`Track` reconstruction: standard replay now reports zero expansion/deleter
+reconstruction calls on the default paths. The known remaining performance
+attention is best interpreted as **local expansion and scenario-quality work**.
+Standard replay still spends most time in expansion/hypothesiser work, while the
+current replay/smoke workloads are no longer blocked by object-boundary
+reconstruction, frontier growth, or exact cluster solving.
 
 ---
 
@@ -144,11 +149,13 @@ integration discussions.
 
 ## 3. Main topic groups
 
-### A. Local expansion and object-boundary optimization
+### A. Local expansion and default-hypothesiser profiling
 
 This remains the clearest performance topic, but the near-term framing has
 changed: current scenarios are not blocked by frontier growth, while profiling
-still shows local expansion as the dominant runtime component.
+still shows local expansion/hypothesiser work as the dominant runtime
+component. The narrow object-boundary cleanup is complete for the current
+default internal paths.
 
 This topic includes:
 
@@ -157,14 +164,13 @@ This topic includes:
 - measuring expansion cost by tree/lifecycle/publication state,
 - reducing the number of leaves that require full hypothesiser work when there
   is evidence this is safe,
-- profiling Stone Soup `Track` reconstruction call sites,
-- considering a tracker-owned default-hypothesiser fast path that avoids full
-  history reconstruction,
-- considering lightweight internal track views for internal/default paths,
+- deeper default-hypothesiser math/kernel profiling,
+- validating whether expansion volume rather than inner-kernel cost is the next
+  practical limiter,
 - preserving full Stone Soup `Track` reconstruction for public output and
   debug/inspection,
-- only later considering opt-in lightweight views for custom hypothesisers or
-  deleters.
+- preserving full Stone Soup `Track` reconstruction for custom hypothesisers
+  and custom deleters.
 
 ### B. Frontier / score-based pruning
 
@@ -272,9 +278,11 @@ When addressed, it should be:
 The next deeper branch should be chosen from integration feedback and broader
 scenario runs. The strongest current candidates are:
 
-1. **Local expansion / object-boundary profiling and optimization**
-2. **Output continuity / ID-switching review**
-3. **Internal birth / existence quality review** for non-ISAC/general tracker use
+1. **Deeper default-hypothesiser math/kernel profiling**
+2. **Expansion volume / which leaves matter**
+3. **Broader scenario quality validation**
+4. **Output continuity / ID-switching review**
+5. **Internal birth / existence quality review** for non-ISAC/general tracker use
 
 ### Important supporting areas
 
@@ -305,16 +313,15 @@ These still matter, but do not currently define the main next move:
 Focus:
 
 - preserve current frontier semantics,
-- add/inspect finer profiling around internal `Track` reconstruction,
-- avoid full-history reconstruction where internal/default code only needs the
-  current leaf state plus metadata,
-- consider a default-hypothesiser fast path,
+- add/inspect finer profiling inside the tracker-owned default hypothesiser,
+- distinguish inner math/kernel cost from expansion volume,
+- inspect which expanded leaves later matter,
 - re-profile standard replay and at least one additional scenario.
 
 Why this is attractive:
 
 - hypothesiser calls remain the dominant cost,
-- object-boundary overhead is visible but not yet isolated,
+- object-boundary reconstruction is no longer the primary default-path concern,
 - this can improve runtime without introducing new pruning semantics.
 
 What to avoid initially:
@@ -377,11 +384,11 @@ Why it may wait:
 
 ## 6. What belongs together
 
-### Local expansion/object-boundary work should include
+### Local expansion profiling work should include
 
 - profiling and characterization of expensive expansion scans,
-- per-call-site timing for `Track` reconstruction,
-- default-hypothesiser fast-path experiments,
+- deeper default-hypothesiser math/kernel timing,
+- expansion-volume analysis and which leaves later matter,
 - validation that custom hypothesiser behavior remains unchanged,
 - smoke/replay timing and output comparison.
 
@@ -525,14 +532,14 @@ At this checkpoint:
    score/frontier work.
 4. Overload splitting is now sound and practical; the previous frontier-control
    blocker is not active on current replay/smoke workloads.
-5. Local expansion remains the main profiling hotspot, with both hypothesiser
-   calls and Stone Soup object-boundary overhead worth watching.
+5. Local expansion remains the main profiling hotspot; default-path Stone Soup
+   object-boundary reconstruction has been addressed.
 6. Internal birth/existence quality and output continuity remain important but
    should be driven by broader scenario evidence.
 7. Parallelization should stay a later, explicit, opt-in architectural topic.
 
 In other words: the tracker is in a good place for integration feedback and
 broader scenario validation. The next technical branch should be selected from
-that evidence, with local expansion/object-boundary optimization, output
-continuity, overload difficulty policy, and internal birth quality as the main
-candidates.
+that evidence, with deeper default-hypothesiser profiling, expansion-volume
+analysis, broader scenario validation, output continuity, overload difficulty
+policy, and internal birth quality as the main candidates.
