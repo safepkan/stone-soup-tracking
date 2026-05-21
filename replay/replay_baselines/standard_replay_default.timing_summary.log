@@ -1,21 +1,28 @@
-SUMMARY_FROM_SCANS timing scan_wall_ms count=302 med=9.463 mean=11.886 p65=14.365 p80=20.136 p90=25.094 p95=28.413 max=38.611
-SUMMARY_FROM_SCANS timing_phase prep_ctx_ms count=302 med=0.014 p65=0.017 p80=0.021 p90=0.022 p95=0.025 max=0.034
-SUMMARY_FROM_SCANS timing_phase pre_expand_validate_ms count=302 med=0.001 p65=0.002 p80=0.002 p90=0.002 p95=0.002 max=0.008
-SUMMARY_FROM_SCANS timing_phase expand_ms count=302 med=8.156 p65=11.828 p80=16.562 p90=21.094 p95=24.702 max=31.103
-SUMMARY_FROM_SCANS timing_phase expand_hypothesise_ms count=302 med=6.989 p65=9.777 p80=13.715 p90=17.209 p95=20.081 max=25.462
+SUMMARY_FROM_SCANS timing scan_wall_ms count=302 med=9.131 mean=11.545 p65=13.706 p80=19.314 p90=24.391 p95=27.501 max=38.268
+SUMMARY_FROM_SCANS timing_phase prep_ctx_ms count=302 med=0.014 p65=0.018 p80=0.021 p90=0.024 p95=0.027 max=0.043
+SUMMARY_FROM_SCANS timing_phase pre_expand_validate_ms count=302 med=0.002 p65=0.002 p80=0.002 p90=0.003 p95=0.003 max=0.009
+SUMMARY_FROM_SCANS timing_phase expand_ms count=302 med=8.155 p65=11.777 p80=16.819 p90=21.113 p95=25.166 max=31.315
+SUMMARY_FROM_SCANS timing_phase expand_hypothesise_ms count=302 med=7.003 p65=9.935 p80=13.760 p90=17.251 p95=20.582 max=25.673
 SUMMARY_FROM_SCANS timing_phase expand_track_reconstruct_ms count=302 med=0.000 p65=0.000 p80=0.000 p90=0.000 p95=0.000 max=0.000
-SUMMARY_FROM_SCANS timing_phase expand_update_ms count=302 med=0.750 p65=1.157 p80=1.853 p90=2.383 p95=2.801 max=3.694
-SUMMARY_FROM_SCANS timing_phase expand_other_ms count=302 med=0.649 p65=0.912 p80=1.271 p90=1.645 p95=1.907 max=2.376
-SUMMARY_FROM_SCANS timing_phase post_expand_prune_validate_ms count=302 med=0.003 p65=0.003 p80=0.003 p90=0.003 p95=0.003 max=0.007
-SUMMARY_FROM_SCANS timing_phase births_ms count=302 med=0.015 p65=0.025 p80=0.122 p90=0.162 p95=0.203 max=0.560
-SUMMARY_FROM_SCANS timing_phase cluster_build_solve_ms count=302 med=0.541 p65=0.858 p80=1.327 p90=1.856 p95=3.452 max=12.121
-SUMMARY_FROM_SCANS timing_phase post_solve_prune_ms count=302 med=0.018 p65=0.021 p80=0.025 p90=0.029 p95=0.031 max=0.040
+SUMMARY_FROM_SCANS timing_phase expand_update_ms count=302 med=0.736 p65=1.153 p80=1.831 p90=2.398 p95=2.773 max=3.824
+SUMMARY_FROM_SCANS timing_phase expand_other_ms count=302 med=0.647 p65=0.930 p80=1.306 p90=1.642 p95=1.932 max=2.415
+SUMMARY_FROM_SCANS timing_phase post_expand_prune_validate_ms count=302 med=0.003 p65=0.003 p80=0.003 p90=0.004 p95=0.005 max=0.007
+SUMMARY_FROM_SCANS timing_phase births_ms count=302 med=0.017 p65=0.027 p80=0.147 p90=0.178 p95=0.218 max=0.406
+SUMMARY_FROM_SCANS timing_phase cluster_build_solve_ms count=302 med=0.540 p65=0.871 p80=1.374 p90=1.876 p95=3.734 max=11.974
+SUMMARY_FROM_SCANS timing_phase post_solve_prune_ms count=302 med=0.018 p65=0.022 p80=0.026 p90=0.030 p95=0.032 max=0.038
 SUMMARY_FROM_SCANS timing_phase map_merge_ms count=302 med=0.001 p65=0.002 p80=0.002 p90=0.002 p95=0.002 max=0.003
-SUMMARY_FROM_SCANS timing_phase nscan_lifecycle_ms count=302 med=0.451 p65=0.692 p80=1.087 p90=1.267 p95=1.486 max=9.968
-SUMMARY_FROM_SCANS timing_phase cleanup_ms count=302 med=0.054 p65=0.075 p80=0.099 p90=0.126 p95=0.137 max=0.252
-SUMMARY_FROM_SCANS timing_phase other_ms count=302 med=0.002 p65=0.002 p80=0.002 p90=0.002 p95=0.002 max=0.003
+SUMMARY_FROM_SCANS timing_phase nscan_prune_ms count=302 med=0.072 p65=0.093 p80=0.110 p90=0.127 p95=0.140 max=0.280
+SUMMARY_FROM_SCANS timing_phase lifecycle_ms count=302 med=0.021 p65=0.026 p80=0.031 p90=0.038 p95=0.046 max=0.669
+SUMMARY_FROM_SCANS timing_phase lifecycle_deleter_track_reconstruct_ms count=302 med=0.000 p65=0.000 p80=0.000 p90=0.000 p95=0.000 max=0.000
+SUMMARY_FROM_SCANS timing_phase lifecycle_deleter_check_ms count=302 med=0.002 p65=0.003 p80=0.003 p90=0.003 p95=0.004 max=0.006
+SUMMARY_FROM_SCANS timing_phase lifecycle_other_ms count=302 med=0.019 p65=0.023 p80=0.028 p90=0.034 p95=0.042 max=0.668
+SUMMARY_FROM_SCANS timing_phase publication_ms count=302 med=0.025 p65=0.050 p80=0.086 p90=0.124 p95=0.157 max=0.274
+SUMMARY_FROM_SCANS timing_phase cleanup_ms count=302 med=0.054 p65=0.075 p80=0.104 p90=0.137 p95=0.159 max=0.279
+SUMMARY_FROM_SCANS timing_phase other_ms count=302 med=0.002 p65=0.002 p80=0.002 p90=0.003 p95=0.003 max=0.019
 SUMMARY_FROM_SCANS timing_counter expand_hypothesise_calls count=302 med=47.5 mean=52.10 max=153.0 sum=15733
 SUMMARY_FROM_SCANS timing_counter expand_track_reconstruct_calls count=302 med=0.0 mean=0.00 max=0.0 sum=0
 SUMMARY_FROM_SCANS timing_counter expand_default_state_fast_path_calls count=302 med=47.5 mean=52.10 max=153.0 sum=15733
 SUMMARY_FROM_SCANS timing_counter expand_update_calls count=302 med=33.0 mean=45.82 max=165.0 sum=13837
-SUMMARY_FROM_SCANS memory nodes_count=302 nodes_med=168.0 nodes_max=440 maxrss_count=302 maxrss_final=291.5 maxrss_peak=291.5
+SUMMARY_FROM_SCANS timing_counter lifecycle_deleter_track_reconstruct_calls count=302 med=0.0 mean=0.00 max=0.0 sum=0
+SUMMARY_FROM_SCANS timing_counter lifecycle_default_miss_deleter_fast_path_calls count=302 med=7.0 mean=7.87 max=21.0 sum=2377
+SUMMARY_FROM_SCANS memory nodes_count=302 nodes_med=168.0 nodes_max=440 maxrss_count=302 maxrss_final=288.4 maxrss_peak=288.4
