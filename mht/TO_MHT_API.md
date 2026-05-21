@@ -320,9 +320,14 @@ or application-specific invalidity checks.
 
 If no deleter is supplied, TOMHT resolves an internal successive-miss-count
 deleter from `TOMHTParams`. The default miss-count deleter is intentionally
-minimal and has no awareness of sensor identity or scan context, so a custom
-deleter is the recommended path as soon as deletion logic needs to be sensor- or
-context-aware.
+minimal: TOMHT checks selected leaf `missed_count` directly and has no awareness
+of sensor identity or scan context. A custom deleter is the recommended path as
+soon as deletion logic needs to be sensor- or context-aware; custom Stone Soup
+deleters still receive full reconstructed `Track` objects. The default direct
+check is an internal optimization gated by
+`TOMHTParams.enable_default_miss_deleter_fast_path`, which defaults to `True`;
+disabling it restores the reconstructed-`Track` path for profiling/debug
+comparison.
 
 ### `detection_probability_model`
 
@@ -899,13 +904,16 @@ effective_miss_threshold = max(max_missed, ns_scan_window + 1)
 This avoids deleting a whole tree before the N-scan machinery has had enough
 history to commit safely.
 
-The default miss-count deleter reads TOMHT's reconstructed track
-`metadata["missed_count"]` and counts every miss equally, with no awareness of
-sensor identity, geometry, or scan context. In particular, a track predicted to
-be outside a sensor's field of view will accumulate misses that count toward the
-threshold even though the sensor could not have detected the target. Any
-sensor- or context-aware deletion logic should go in a custom Stone Soup
-deleter, which is the recommended path for field-of-view exit, lifetime limits,
+With `TOMHTParams.enable_default_miss_deleter_fast_path=True` (default), the
+default miss-count deleter checks TOMHT's selected leaf `missed_count` directly
+and counts every miss equally, with no awareness of sensor identity, geometry,
+or scan context. If the flag is disabled, the same default deleter is evaluated
+through the normal reconstructed-`Track` path for profiling/debug comparison.
+In particular, a track predicted to be outside a sensor's field of view will
+accumulate misses that count toward the threshold even though the sensor could
+not have detected the target. Any sensor- or context-aware deletion logic should
+go in a custom Stone Soup deleter, which still receives a full reconstructed
+`Track` and is the recommended path for field-of-view exit, lifetime limits,
 sensor/context-aware invalidity, or application-specific deletion.
 
 ### Publication

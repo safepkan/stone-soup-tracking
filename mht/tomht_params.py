@@ -36,6 +36,10 @@ class TOMHTParams:
     # can expand from the current leaf state without reconstructing Track
     # history. Custom hypothesisers still receive normal Stone Soup Tracks.
     enable_default_hypothesiser_state_fast_path: bool = True
+    # Internal profiling/debug switch: the tracker-owned default miss-count
+    # deleter can check leaf metadata directly without reconstructing Track
+    # history. Custom deleters still receive normal Stone Soup Tracks.
+    enable_default_miss_deleter_fast_path: bool = True
     # Base miss threshold used by the default post-N-scan deleter.
     # Effective threshold uses an N-scan-aware floor (see lifecycle helper).
     max_missed: int = 5

@@ -202,7 +202,18 @@ The current runtime pipeline is:
 12. reclaim unreachable node storage,
 13. build/store scan stats and return published MAP output tracks.
 
-Timing instrumentation still groups N-scan, lifecycle, and publication into the broader `nscan_lifecycle_ms` phase. That is acceptable for now because timing is not currently the bottleneck in those steps, and avoiding log-format churn has been useful.
+Timing instrumentation reports separate top-level `nscan_prune_ms`,
+`lifecycle_ms`, and `publication_ms` phases. Lifecycle deleter timings such as
+`lifecycle_deleter_track_reconstruct_ms`, `lifecycle_deleter_check_ms`, and
+`lifecycle_other_ms` are nested components of `lifecycle_ms`, following the same
+pattern as the expansion subphase timings.
+
+The accepted object-boundary cleanup phase keeps Stone Soup `Track`
+reconstruction at the public/custom boundary while avoiding it on internal
+default paths that do not need history. Standard replay now reports zero
+`expand_track_reconstruct_calls` for the tracker-owned default hypothesiser
+path and zero `lifecycle_deleter_track_reconstruct_calls` for the default
+miss-count deleter path.
 
 ---
 
@@ -347,11 +358,15 @@ The default miss-count threshold uses an N-scan-aware floor:
 effective_miss_threshold = max(max_missed, ns_scan_window + 1)
 ```
 
-The default miss-count deleter is intentionally minimal: it reads reconstructed
-track `metadata["missed_count"]`, applies the effective threshold, and has no
-sensor/context awareness. Custom Stone Soup deleters remain the path for
-field-of-view exit, lifetime limits, sensor/context-aware invalidity, or
-application-specific deletion.
+The default miss-count deleter is intentionally minimal: with
+`TOMHTParams.enable_default_miss_deleter_fast_path=True` (default), TOMHT checks
+the selected leaf `missed_count` directly against the effective threshold and
+does not reconstruct a Stone Soup `Track` for this default path. If the flag is
+disabled, the default deleter uses the normal reconstructed-`Track` path for
+profiling/debug comparison. It has no sensor/context awareness. Custom Stone
+Soup deleters still replace the default miss-count deleter and receive a full
+reconstructed `Track`, and remain the path for field-of-view exit, lifetime
+limits, sensor/context-aware invalidity, or application-specific deletion.
 
 `TRACK_LIFECYCLE` diagnostics report deletion reason groups (`score`, `miss`, `deleter`).
 
@@ -473,7 +488,11 @@ The tracker-owned default hypothesiser includes conservative optimizations:
   `TOMHTParams.enable_default_hypothesiser_state_fast_path`,
 - Cholesky-based Mahalanobis/NLL evaluation.
 
-These changes improved expansion timing, but the next likely leverage is expansion volume rather than further inner-kernel cleanup alone.
+These changes removed avoidable reconstruction overhead on the default path.
+The latest replay timing still shows expansion/hypothesiser work as the dominant
+hotspot, so the next likely leverage is either deeper default-hypothesiser
+math/kernel profiling or reducing expansion volume by understanding which
+leaves matter.
 
 ### Clustering
 
@@ -671,9 +690,16 @@ The following are solid enough to treat as the current base architecture:
 
 ## What remains provisional / future-work territory
 
-### 1. Local expansion and object-boundary cost
+### 1. Local expansion profiling and volume
 
-Local expansion remains the main profiling hotspot, but it is no longer an active blocker on the standard replay/smoke workloads. Future work should distinguish true expansion volume from per-leaf overhead. Profiling shows hypothesiser calls dominate, but also shows non-negligible overhead from reconstructing full Stone Soup `Track` objects and accessing Stone Soup attributes. A future pass should profile reconstruction call sites separately and consider default-hypothesiser fast paths or lightweight internal track views while preserving full Stone Soup tracks for public output/debug and default compatibility for custom components.
+Local expansion remains the main profiling hotspot, but it is no longer an
+active blocker on the standard replay/smoke workloads. The narrow default-path
+object-boundary cleanup is complete: internal default hypothesiser/deleter paths
+avoid Stone Soup `Track` reconstruction where history is not needed, while
+custom components and public/debug output still receive full reconstructed
+tracks. Future work should distinguish inner default-hypothesiser math/kernel
+cost from expansion volume and should inspect which expanded leaves later
+matter.
 
 ### 2. Frontier and score-based pruning
 
@@ -697,7 +723,9 @@ The reconstructed `Track` passed to custom hypothesisers now carries TOMHT lifec
 
 ### 7. Parallelization / orchestration
 
-Parallel local expansion remains a plausible future axis, but should be opt-in and architecturally explicit. It should not be mixed into smaller profiling/object-boundary cleanup by default.
+Parallel local expansion remains a plausible future axis, but should be opt-in
+and architecturally explicit. It should not be mixed into smaller profiling
+cleanup by default.
 
 ### 8. API feedback
 
@@ -714,6 +742,7 @@ This checkpoint should be understood as:
 - with a clean enough API story for integration discussion,
 - with a thin tracker orchestrator and extracted phase modules,
 - with overload/frontier control no longer blocking the standard replay/smoke workloads,
-- and with remaining performance attention focused on local expansion, Stone Soup object-boundary overhead, and broader-scenario validation.
+- and with remaining performance attention focused on local expansion,
+  broader-scenario validation, output continuity, and birth quality.
 
 The scoring/birth/confirmation/publication phase can be treated as complete, and the current expansion/frontier phase can be treated as mostly wrapped for the known scenarios. The next technical branch should be chosen from integration feedback, broader recorded-data runs, and profiling evidence rather than assuming another immediate pruning mechanism is needed.

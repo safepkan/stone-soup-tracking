@@ -1,6 +1,6 @@
 # TO-MHT Next Steps
 
-## Implemented profiling-guided cleanup
+## Completed object-boundary cleanup phase
 
 - Implemented the first narrow object-boundary optimization for local expansion:
   the tracker-owned `TrackerOwnedNLLDistanceHypothesiser` now has a
@@ -14,5 +14,34 @@
   `expand_track_reconstruct_calls`, `expand_track_reconstruct_ms`, and
   `expand_default_state_fast_path_calls` are now reported so reconstruction
   overhead no longer has to be inferred from `expand_other_ms`.
+- Implemented the next narrow object-boundary cleanup for lifecycle deletion:
+  the resolved default internal miss-count deleter now checks leaf
+  `missed_count` directly instead of reconstructing a full Stone Soup `Track`.
+  Custom Stone Soup deleters still replace that default and still receive a
+  full reconstructed `Track` built from the committed prefix plus unresolved
+  lineage. Lifecycle deleter reconstruction/check counters are now surfaced in
+  scan timing output.
+- Added `TOMHTParams.enable_default_miss_deleter_fast_path` as a default-on
+  profiling/debug gate for the internal miss-count fast path. Scan timing now
+  splits the old broad N-scan/lifecycle/publication bucket into
+  `nscan_prune_ms`, `lifecycle_ms`, and `publication_ms`; lifecycle deleter
+  reconstruction/check timings are nested under `lifecycle_ms`.
+- Accepted replay timing for this phase shows the default paths now avoid
+  Stone Soup `Track` reconstruction where history is not needed:
+  `expand_track_reconstruct_calls=0` and
+  `lifecycle_deleter_track_reconstruct_calls=0` on standard replay, while
+  `expand_default_state_fast_path_calls` and
+  `lifecycle_default_miss_deleter_fast_path_calls` account for the default
+  internal fast-path work. Public output/debug reconstruction remains
+  full-history where appropriate.
 
-## Next architectural subphase to be defined
+## Candidate next work
+
+The next subphase should be chosen from the current evidence rather than
+assuming another object-boundary cleanup will dominate:
+
+- deeper default-hypothesiser math/kernel profiling,
+- expansion volume / which leaves matter,
+- broader scenario quality validation,
+- output continuity / ID switching,
+- internal birth quality.

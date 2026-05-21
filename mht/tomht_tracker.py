@@ -79,6 +79,7 @@ from .tomht_model import (
 )
 from .tomht_lifecycle import (
     DeleterWithMetadata,
+    LifecycleDeleterStats,
     apply_post_n_scan_track_lifecycle,
     apply_score_based_track_confirmation,
     internal_track_id_for_deleter_candidate,
@@ -489,15 +490,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         frontier_after_n_scan_pruning = frontier_stage_counts_for_store(
             tree_store=self._tree_store
         )
+        nscan_prune_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
 
         # 7) Whole-track lifecycle: sticky score-based confirmation,
         # then post-N-scan termination policy.
+        lifecycle_deleter_stats = LifecycleDeleterStats()
         self._apply_score_based_track_confirmation()
         map_global = self._apply_post_n_scan_track_lifecycle(
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
             scan_index=scan_index,
             timestamp=ctx.timestamp,
+            lifecycle_deleter_stats=lifecycle_deleter_stats,
         )
         self._maybe_validate_pruning_feasibility(
             stage="post_n_scan_pruning",
@@ -506,6 +511,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         frontier_after_lifecycle = frontier_stage_counts_for_store(
             tree_store=self._tree_store
         )
+        lifecycle_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
 
         # 8) Sticky output publication state for MAP-selected live trees.
         self._apply_output_publication(map_global)
@@ -519,7 +526,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         # Keep one full-scan MAP global in compatibility slot for old inspection paths.
         self._last_map_global = map_global
         self.global_hypotheses = [map_global]
-        nscan_lifecycle_ms = elapsed_ms(phase_start_ns)
+        publication_ms = elapsed_ms(phase_start_ns)
         phase_start_ns = start_timer()
 
         # 9) Reclaim node storage not reachable from surviving roots/leaves/commitments.
@@ -577,7 +584,19 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             cluster_build_and_solve_ms=float(cluster_build_and_solve_ms),
             post_solve_prune_ms=float(post_solve_prune_ms),
             map_merge_ms=float(map_merge_ms),
-            nscan_lifecycle_ms=float(nscan_lifecycle_ms),
+            nscan_prune_ms=float(nscan_prune_ms),
+            lifecycle_ms=float(lifecycle_ms),
+            lifecycle_deleter_track_reconstruct_calls=int(
+                lifecycle_deleter_stats.track_reconstruct_calls
+            ),
+            lifecycle_deleter_track_reconstruct_ms=ns_to_ms(
+                lifecycle_deleter_stats.track_reconstruct_wall_ns
+            ),
+            lifecycle_default_miss_deleter_fast_path_calls=int(
+                lifecycle_deleter_stats.default_miss_fast_path_calls
+            ),
+            lifecycle_deleter_check_ms=ns_to_ms(lifecycle_deleter_stats.check_wall_ns),
+            publication_ms=float(publication_ms),
             cleanup_ms=float(cleanup_ms),
         )
 
@@ -944,6 +963,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         cluster_snapshots: list[ClusterRebuildSnapshot],
         scan_index: int,
         timestamp: datetime.datetime,
+        lifecycle_deleter_stats: LifecycleDeleterStats | None = None,
     ) -> GlobalHypothesis:
         """Apply post-N-scan whole-track lifecycle using the configured deleter."""
         del scan_index  # reserved for potential future diagnostics.
@@ -956,6 +976,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             deleter_with_metadata=self._deleter_with_metadata,
             output_track_id_for_deleter=internal_track_id_for_deleter_candidate,
             timestamp=timestamp,
+            lifecycle_deleter_stats=lifecycle_deleter_stats,
         )
 
     # =========================================================================

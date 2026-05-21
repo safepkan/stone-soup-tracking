@@ -38,11 +38,15 @@ from mht.tomht_cluster_rebuild import (
 from mht.tomht_cluster_solver_factory import make_cluster_solver
 from mht.tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from mht.tomht_lifecycle import (
+    LifecycleDeleterStats,
     TOMHTMissCountDeleter,
     effective_track_miss_threshold,
     resolve_deleter_with_metadata,
 )
-from mht.tomht_output import reconstruct_track_from_leaf_node
+from mht.tomht_output import (
+    reconstruct_track_from_committed_prefix_and_leaf_node,
+    reconstruct_track_from_leaf_node,
+)
 from mht.tomht_pruning import apply_post_solve_supported_leaf_pruning
 from mht.tomht_scoring import (
     ConstantDetectionProbabilityModel,
@@ -290,12 +294,24 @@ class _RecordingMetadataMissCountDeleter(_MetadataMissCountDeleter):
         missed_counts = Property(
             list, default=None, doc="Recorded candidate missed counts."
         )
+        track_state_counts = Property(
+            list, default=None, doc="Recorded candidate track state counts."
+        )
+        track_is_track = Property(
+            list, default=None, doc="Recorded candidate Track type checks."
+        )
     else:
         track_ids: list[object] | None = Property(
             default=None, doc="Recorded candidate track IDs."
         )
         missed_counts: list[int] | None = Property(
             default=None, doc="Recorded candidate missed counts."
+        )
+        track_state_counts: list[int] | None = Property(
+            default=None, doc="Recorded candidate track state counts."
+        )
+        track_is_track: list[bool] | None = Property(
+            default=None, doc="Recorded candidate Track type checks."
         )
 
     def check_for_deletion(self, track: Track, **kwargs) -> bool:
@@ -304,9 +320,15 @@ class _RecordingMetadataMissCountDeleter(_MetadataMissCountDeleter):
             self.track_ids = []
         if self.missed_counts is None:
             self.missed_counts = []
+        if self.track_state_counts is None:
+            self.track_state_counts = []
+        if self.track_is_track is None:
+            self.track_is_track = []
         self.track_ids.append(track.id)
         missed_count = int(track.metadata["missed_count"])
         self.missed_counts.append(missed_count)
+        self.track_state_counts.append(len(track.states))
+        self.track_is_track.append(isinstance(track, Track))
         return missed_count >= int(self.threshold)
 
 
@@ -412,6 +434,7 @@ def _run_post_n_scan_lifecycle(
     timestamp: datetime.datetime,
     map_global: GlobalHypothesis | None = None,
     cluster_snapshots: list[ClusterRebuildSnapshot] | None = None,
+    lifecycle_deleter_stats: LifecycleDeleterStats | None = None,
 ) -> GlobalHypothesis:
     if map_global is None:
         map_global = tracker._last_map_global
@@ -425,6 +448,7 @@ def _run_post_n_scan_lifecycle(
         cluster_snapshots=cluster_snapshots,
         scan_index=scan_index,
         timestamp=timestamp,
+        lifecycle_deleter_stats=lifecycle_deleter_stats,
     )
     tracker._last_map_global = filtered
     tracker.global_hypotheses = [filtered]
@@ -2173,6 +2197,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
             hypothesiser=_ScriptedHypothesiser(),
             updater=_ScriptedUpdater(),
             params=TOMHTParams(
+                enable_default_miss_deleter_fast_path=True,
                 max_missed=1,
                 ns_scan_window=0,
                 debug_display_scan_stats=False,
@@ -2200,6 +2225,154 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertIn("miss_threshold=1", log_output)
         self.assertIn("reasons=miss:[0]", log_output)
         self.assertNotIn("deleter=", log_output)
+
+    def test_default_miss_deleter_fast_path_deletes_without_reconstruction(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                enable_default_miss_deleter_fast_path=True,
+                max_missed=1,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+        leaf = _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[10.0],
+        )[0]
+        leaf.missed_count = 1
+
+        lifecycle_stats = LifecycleDeleterStats()
+        with (
+            mock.patch(
+                "mht.tomht_lifecycle."
+                "reconstruct_track_from_committed_prefix_and_leaf_node",
+                side_effect=AssertionError(
+                    "default miss deleter should not reconstruct Track"
+                ),
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            _run_post_n_scan_lifecycle(
+                tracker,
+                timestamp=timestamp,
+                lifecycle_deleter_stats=lifecycle_stats,
+            )
+
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertEqual(0, lifecycle_stats.track_reconstruct_calls)
+        self.assertEqual(0, lifecycle_stats.track_reconstruct_wall_ns)
+        self.assertEqual(1, lifecycle_stats.default_miss_fast_path_calls)
+        self.assertGreaterEqual(lifecycle_stats.check_wall_ns, 0)
+
+    def test_default_miss_deleter_flag_false_uses_reconstructed_track(
+        self,
+    ) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                enable_default_miss_deleter_fast_path=False,
+                max_missed=1,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+        leaf = _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[10.0],
+        )[0]
+        leaf.missed_count = 1
+
+        lifecycle_stats = LifecycleDeleterStats()
+        with (
+            mock.patch(
+                "mht.tomht_lifecycle."
+                "reconstruct_track_from_committed_prefix_and_leaf_node",
+                wraps=reconstruct_track_from_committed_prefix_and_leaf_node,
+            ) as reconstruct_mock,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            _run_post_n_scan_lifecycle(
+                tracker,
+                timestamp=timestamp,
+                lifecycle_deleter_stats=lifecycle_stats,
+            )
+
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertEqual(1, reconstruct_mock.call_count)
+        self.assertEqual(1, lifecycle_stats.track_reconstruct_calls)
+        self.assertGreaterEqual(lifecycle_stats.track_reconstruct_wall_ns, 0)
+        self.assertEqual(0, lifecycle_stats.default_miss_fast_path_calls)
+        self.assertGreaterEqual(lifecycle_stats.check_wall_ns, 0)
+
+    def test_score_deletion_still_runs_with_default_miss_fast_path(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        tracker = _build_tracker(
+            hypothesiser=_ScriptedHypothesiser(),
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                enable_default_miss_deleter_fast_path=True,
+                track_deletion_existence_probability=0.01,
+                max_missed=999,
+                ns_scan_window=0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+        leaf = _set_track_active_leaf_scores(
+            tracker,
+            track_id=0,
+            scores=[_logit(0.005)],
+        )[0]
+        leaf.missed_count = 0
+
+        lifecycle_stats = LifecycleDeleterStats()
+        log_stream = io.StringIO()
+        with (
+            mock.patch(
+                "mht.tomht_lifecycle."
+                "reconstruct_track_from_committed_prefix_and_leaf_node",
+                side_effect=AssertionError(
+                    "default miss deleter should not reconstruct Track"
+                ),
+            ),
+            contextlib.redirect_stdout(log_stream),
+        ):
+            _run_post_n_scan_lifecycle(
+                tracker,
+                timestamp=timestamp,
+                lifecycle_deleter_stats=lifecycle_stats,
+            )
+
+        self.assertEqual({}, tracker.track_trees_by_track_id)
+        self.assertIn("score:[0]", log_stream.getvalue())
+        self.assertEqual(0, lifecycle_stats.track_reconstruct_calls)
+        self.assertEqual(1, lifecycle_stats.default_miss_fast_path_calls)
 
     def test_custom_deleter_reports_deleter_reason(self) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
@@ -2235,6 +2408,65 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertIn("deleter=_MetadataMissCountDeleter", log_output)
         self.assertIn("reasons=deleter:[0]", log_output)
         self.assertNotIn("miss_threshold=", log_output)
+
+    def test_custom_deleter_gets_full_track_and_reconstruction_stats(self) -> None:
+        timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        for fast_path_flag in (True, False):
+            with self.subTest(fast_path_flag=fast_path_flag):
+                deleter = _RecordingMetadataMissCountDeleter(threshold=99)
+                tracker = _build_tracker(
+                    hypothesiser=_ScriptedHypothesiser(),
+                    updater=_ScriptedUpdater(),
+                    deleter=deleter,
+                    params=TOMHTParams(
+                        enable_default_miss_deleter_fast_path=fast_path_flag,
+                        max_missed=1,
+                        ns_scan_window=0,
+                        debug_display_scan_stats=False,
+                        debug_display_hypotheses=False,
+                        debug_display_births=False,
+                        collect_stats=False,
+                    ),
+                )
+
+                tracker.update_tracker(timestamp, [])
+                tracker.add_external_starts(timestamp, [_track_start(0.0, timestamp)])
+                tree = tracker.track_trees_by_track_id[0]
+                tree.committed_states = [
+                    _state(-1.0, timestamp - datetime.timedelta(seconds=1))
+                ]
+                leaf = _set_track_active_leaf_scores(
+                    tracker,
+                    track_id=0,
+                    scores=[10.0],
+                )[0]
+                leaf.missed_count = 1
+
+                lifecycle_stats = LifecycleDeleterStats()
+                with (
+                    mock.patch(
+                        "mht.tomht_lifecycle."
+                        "reconstruct_track_from_committed_prefix_and_leaf_node",
+                        wraps=reconstruct_track_from_committed_prefix_and_leaf_node,
+                    ) as reconstruct_mock,
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    _run_post_n_scan_lifecycle(
+                        tracker,
+                        timestamp=timestamp,
+                        lifecycle_deleter_stats=lifecycle_stats,
+                    )
+
+                self.assertIn(0, tracker.track_trees_by_track_id)
+                self.assertEqual(1, reconstruct_mock.call_count)
+                self.assertEqual([0], deleter.track_ids)
+                self.assertEqual([1], deleter.missed_counts)
+                self.assertEqual([2], deleter.track_state_counts)
+                self.assertEqual([True], deleter.track_is_track)
+                self.assertEqual(1, lifecycle_stats.track_reconstruct_calls)
+                self.assertGreaterEqual(lifecycle_stats.track_reconstruct_wall_ns, 0)
+                self.assertEqual(0, lifecycle_stats.default_miss_fast_path_calls)
+                self.assertGreaterEqual(lifecycle_stats.check_wall_ns, 0)
 
     def test_track_miss_mode_controls_default_miss_deleter_candidates(self) -> None:
         cases = [
@@ -2646,7 +2878,9 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
             + timings.cluster_build_and_solve_ms
             + timings.post_solve_prune_ms
             + timings.map_merge_ms
-            + timings.nscan_lifecycle_ms
+            + timings.nscan_prune_ms
+            + timings.lifecycle_ms
+            + timings.publication_ms
             + timings.cleanup_ms
         )
         self.assertGreaterEqual(timings.cluster_build_and_solve_ms, 0.0)
@@ -2656,11 +2890,25 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertGreaterEqual(timings.expand_track_reconstruct_ms, 0.0)
         self.assertGreaterEqual(timings.expand_default_state_fast_path_calls, 0)
         self.assertGreaterEqual(timings.expand_update_calls, 0)
+        self.assertGreaterEqual(timings.nscan_prune_ms, 0.0)
+        self.assertGreaterEqual(timings.lifecycle_ms, 0.0)
+        self.assertGreaterEqual(timings.lifecycle_deleter_track_reconstruct_calls, 0)
+        self.assertGreaterEqual(timings.lifecycle_deleter_track_reconstruct_ms, 0.0)
+        self.assertGreaterEqual(
+            timings.lifecycle_default_miss_deleter_fast_path_calls, 0
+        )
+        self.assertGreaterEqual(timings.lifecycle_deleter_check_ms, 0.0)
+        self.assertGreaterEqual(timings.publication_ms, 0.0)
         self.assertLessEqual(
             timings.expand_hypothesise_ms
             + timings.expand_track_reconstruct_ms
             + timings.expand_update_ms,
             timings.expand_ms + 1.0,
+        )
+        self.assertLessEqual(
+            timings.lifecycle_deleter_track_reconstruct_ms
+            + timings.lifecycle_deleter_check_ms,
+            timings.lifecycle_ms + 1.0,
         )
         self.assertLessEqual(
             phase_sum, tracker.last_scan_stats.scan_wall_ms + 1.0

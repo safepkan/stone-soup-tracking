@@ -98,7 +98,13 @@ class ScanTimingBreakdown:
     cluster_build_and_solve_ms: float = 0.0
     post_solve_prune_ms: float = 0.0
     map_merge_ms: float = 0.0
-    nscan_lifecycle_ms: float = 0.0
+    nscan_prune_ms: float = 0.0
+    lifecycle_ms: float = 0.0
+    lifecycle_deleter_track_reconstruct_calls: int = 0
+    lifecycle_deleter_track_reconstruct_ms: float = 0.0
+    lifecycle_default_miss_deleter_fast_path_calls: int = 0
+    lifecycle_deleter_check_ms: float = 0.0
+    publication_ms: float = 0.0
     cleanup_ms: float = 0.0
 
 
@@ -456,7 +462,9 @@ def print_scan_stats(
         + float(breakdown.cluster_build_and_solve_ms)
         + float(breakdown.post_solve_prune_ms)
         + float(breakdown.map_merge_ms)
-        + float(breakdown.nscan_lifecycle_ms)
+        + float(breakdown.nscan_prune_ms)
+        + float(breakdown.lifecycle_ms)
+        + float(breakdown.publication_ms)
         + float(breakdown.cleanup_ms)
     )
     phase_other_ms = max(float(scan_stats.scan_wall_ms) - phase_accounted_ms, 0.0)
@@ -465,6 +473,12 @@ def print_scan_stats(
         - float(breakdown.expand_hypothesise_ms)
         - float(breakdown.expand_track_reconstruct_ms)
         - float(breakdown.expand_update_ms),
+        0.0,
+    )
+    lifecycle_other_ms = max(
+        float(breakdown.lifecycle_ms)
+        - float(breakdown.lifecycle_deleter_track_reconstruct_ms)
+        - float(breakdown.lifecycle_deleter_check_ms),
         0.0,
     )
 
@@ -517,7 +531,18 @@ def print_scan_stats(
         f"cluster_build_solve_ms={breakdown.cluster_build_and_solve_ms:.3f} "
         f"post_solve_prune_ms={breakdown.post_solve_prune_ms:.3f} "
         f"map_merge_ms={breakdown.map_merge_ms:.3f} "
-        f"nscan_lifecycle_ms={breakdown.nscan_lifecycle_ms:.3f} "
+        f"nscan_prune_ms={breakdown.nscan_prune_ms:.3f} "
+        f"lifecycle_ms={breakdown.lifecycle_ms:.3f} "
+        "lifecycle_deleter_track_reconstruct_calls="
+        f"{breakdown.lifecycle_deleter_track_reconstruct_calls} "
+        "lifecycle_deleter_track_reconstruct_ms="
+        f"{breakdown.lifecycle_deleter_track_reconstruct_ms:.3f} "
+        "lifecycle_default_miss_deleter_fast_path_calls="
+        f"{breakdown.lifecycle_default_miss_deleter_fast_path_calls} "
+        "lifecycle_deleter_check_ms="
+        f"{breakdown.lifecycle_deleter_check_ms:.3f} "
+        f"lifecycle_other_ms={lifecycle_other_ms:.3f} "
+        f"publication_ms={breakdown.publication_ms:.3f} "
         f"cleanup_ms={breakdown.cleanup_ms:.3f} "
         f"other_ms={phase_other_ms:.3f}"
     )
@@ -680,7 +705,32 @@ def print_summary_stats(
     ]
     post_solve_prune_ms = [s.timing_breakdown.post_solve_prune_ms for s in stats]
     map_merge_ms = [s.timing_breakdown.map_merge_ms for s in stats]
-    nscan_lifecycle_ms = [s.timing_breakdown.nscan_lifecycle_ms for s in stats]
+    nscan_prune_ms = [s.timing_breakdown.nscan_prune_ms for s in stats]
+    lifecycle_ms = [s.timing_breakdown.lifecycle_ms for s in stats]
+    lifecycle_deleter_track_reconstruct_ms = [
+        s.timing_breakdown.lifecycle_deleter_track_reconstruct_ms for s in stats
+    ]
+    lifecycle_deleter_check_ms = [
+        s.timing_breakdown.lifecycle_deleter_check_ms for s in stats
+    ]
+    lifecycle_deleter_track_reconstruct_calls = [
+        float(s.timing_breakdown.lifecycle_deleter_track_reconstruct_calls)
+        for s in stats
+    ]
+    lifecycle_default_miss_deleter_fast_path_calls = [
+        float(s.timing_breakdown.lifecycle_default_miss_deleter_fast_path_calls)
+        for s in stats
+    ]
+    lifecycle_other_ms = [
+        max(
+            float(s.timing_breakdown.lifecycle_ms)
+            - float(s.timing_breakdown.lifecycle_deleter_track_reconstruct_ms)
+            - float(s.timing_breakdown.lifecycle_deleter_check_ms),
+            0.0,
+        )
+        for s in stats
+    ]
+    publication_ms = [s.timing_breakdown.publication_ms for s in stats]
     cleanup_ms = [s.timing_breakdown.cleanup_ms for s in stats]
     other_ms = [
         max(
@@ -694,7 +744,9 @@ def print_summary_stats(
                 + float(s.timing_breakdown.cluster_build_and_solve_ms)
                 + float(s.timing_breakdown.post_solve_prune_ms)
                 + float(s.timing_breakdown.map_merge_ms)
-                + float(s.timing_breakdown.nscan_lifecycle_ms)
+                + float(s.timing_breakdown.nscan_prune_ms)
+                + float(s.timing_breakdown.lifecycle_ms)
+                + float(s.timing_breakdown.publication_ms)
                 + float(s.timing_breakdown.cleanup_ms)
             ),
             0.0,
@@ -804,7 +856,19 @@ def print_summary_stats(
         f"med={median(cluster_build_and_solve_ms):.1f} p65={_percentile(cluster_build_and_solve_ms, 0.65):.1f} p80={_percentile(cluster_build_and_solve_ms, 0.80):.1f} p90={_percentile(cluster_build_and_solve_ms, 0.90):.1f} p95={_percentile(cluster_build_and_solve_ms, 0.95):.1f} max={max(cluster_build_and_solve_ms):.1f} "
         f"post_solve_prune_ms med={median(post_solve_prune_ms):.1f} p65={_percentile(post_solve_prune_ms, 0.65):.1f} p80={_percentile(post_solve_prune_ms, 0.80):.1f} p90={_percentile(post_solve_prune_ms, 0.90):.1f} p95={_percentile(post_solve_prune_ms, 0.95):.1f} max={max(post_solve_prune_ms):.1f} "
         f"map_merge_ms med={median(map_merge_ms):.1f} p65={_percentile(map_merge_ms, 0.65):.1f} p80={_percentile(map_merge_ms, 0.80):.1f} p90={_percentile(map_merge_ms, 0.90):.1f} p95={_percentile(map_merge_ms, 0.95):.1f} max={max(map_merge_ms):.1f} "
-        f"nscan_lifecycle_ms med={median(nscan_lifecycle_ms):.1f} p65={_percentile(nscan_lifecycle_ms, 0.65):.1f} p80={_percentile(nscan_lifecycle_ms, 0.80):.1f} p90={_percentile(nscan_lifecycle_ms, 0.90):.1f} p95={_percentile(nscan_lifecycle_ms, 0.95):.1f} max={max(nscan_lifecycle_ms):.1f} "
+        f"nscan_prune_ms med={median(nscan_prune_ms):.1f} p65={_percentile(nscan_prune_ms, 0.65):.1f} p80={_percentile(nscan_prune_ms, 0.80):.1f} p90={_percentile(nscan_prune_ms, 0.90):.1f} p95={_percentile(nscan_prune_ms, 0.95):.1f} max={max(nscan_prune_ms):.1f} "
+        f"lifecycle_ms med={median(lifecycle_ms):.1f} p65={_percentile(lifecycle_ms, 0.65):.1f} p80={_percentile(lifecycle_ms, 0.80):.1f} p90={_percentile(lifecycle_ms, 0.90):.1f} p95={_percentile(lifecycle_ms, 0.95):.1f} max={max(lifecycle_ms):.1f} "
+        "lifecycle_deleter_track_reconstruct_ms "
+        f"med={median(lifecycle_deleter_track_reconstruct_ms):.1f} p65={_percentile(lifecycle_deleter_track_reconstruct_ms, 0.65):.1f} p80={_percentile(lifecycle_deleter_track_reconstruct_ms, 0.80):.1f} p90={_percentile(lifecycle_deleter_track_reconstruct_ms, 0.90):.1f} p95={_percentile(lifecycle_deleter_track_reconstruct_ms, 0.95):.1f} max={max(lifecycle_deleter_track_reconstruct_ms):.1f} "
+        "lifecycle_deleter_track_reconstruct_calls "
+        f"med={median(lifecycle_deleter_track_reconstruct_calls):.1f} mean={_mean(lifecycle_deleter_track_reconstruct_calls):.2f} max={max(lifecycle_deleter_track_reconstruct_calls):.1f} "
+        "lifecycle_default_miss_deleter_fast_path_calls "
+        f"med={median(lifecycle_default_miss_deleter_fast_path_calls):.1f} mean={_mean(lifecycle_default_miss_deleter_fast_path_calls):.2f} max={max(lifecycle_default_miss_deleter_fast_path_calls):.1f} "
+        "lifecycle_deleter_check_ms "
+        f"med={median(lifecycle_deleter_check_ms):.1f} p65={_percentile(lifecycle_deleter_check_ms, 0.65):.1f} p80={_percentile(lifecycle_deleter_check_ms, 0.80):.1f} p90={_percentile(lifecycle_deleter_check_ms, 0.90):.1f} p95={_percentile(lifecycle_deleter_check_ms, 0.95):.1f} max={max(lifecycle_deleter_check_ms):.1f} "
+        "lifecycle_other_ms "
+        f"med={median(lifecycle_other_ms):.1f} p65={_percentile(lifecycle_other_ms, 0.65):.1f} p80={_percentile(lifecycle_other_ms, 0.80):.1f} p90={_percentile(lifecycle_other_ms, 0.90):.1f} p95={_percentile(lifecycle_other_ms, 0.95):.1f} max={max(lifecycle_other_ms):.1f} "
+        f"publication_ms med={median(publication_ms):.1f} p65={_percentile(publication_ms, 0.65):.1f} p80={_percentile(publication_ms, 0.80):.1f} p90={_percentile(publication_ms, 0.90):.1f} p95={_percentile(publication_ms, 0.95):.1f} max={max(publication_ms):.1f} "
         f"cleanup_ms med={median(cleanup_ms):.1f} p65={_percentile(cleanup_ms, 0.65):.1f} p80={_percentile(cleanup_ms, 0.80):.1f} p90={_percentile(cleanup_ms, 0.90):.1f} p95={_percentile(cleanup_ms, 0.95):.1f} max={max(cleanup_ms):.1f} "
         f"other_ms med={median(other_ms):.1f} p65={_percentile(other_ms, 0.65):.1f} p80={_percentile(other_ms, 0.80):.1f} p90={_percentile(other_ms, 0.90):.1f} p95={_percentile(other_ms, 0.95):.1f} max={max(other_ms):.1f}"
     )
