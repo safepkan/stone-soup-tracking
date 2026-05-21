@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, fields, replace
 from math import isfinite
 from typing import Any
@@ -179,18 +179,17 @@ class TOMHTParams:
 
     def _validate_publication_params(self) -> None:
         """Validate sticky output-publication gate controls."""
-        states_raw = self.publish_lifecycle_states
+        states_raw: object = self.publish_lifecycle_states
         if isinstance(states_raw, str):
             raise ValueError(
                 "publish_lifecycle_states must be an iterable of lifecycle states, "
                 "not a string."
             )
-        try:
-            states = tuple(states_raw)
-        except TypeError as exc:
+        if not isinstance(states_raw, Iterable):
             raise ValueError(
                 "publish_lifecycle_states must be an iterable of lifecycle states."
-            ) from exc
+            )
+        states = tuple(states_raw)
 
         valid_states = {"tentative", "confirmed"}
         invalid_states = sorted(set(states).difference(valid_states))

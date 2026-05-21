@@ -121,7 +121,8 @@ print_summary_stats()
 unpublished MAP-selected tracks.
 
 `get_map_hypothesis_snapshot()` exposes the internal MAP-selected leaf nodes for
-debugging and evaluation. It is not the public output boundary.
+debugging and evaluation. It always returns a snapshot; before any scan, that
+snapshot is the empty MAP. It is not the public output boundary.
 
 `print_summary_stats()` prints aggregate instrumentation collected in
 `ScanStats` when `collect_stats=True`.

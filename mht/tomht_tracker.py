@@ -657,10 +657,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             output_track_id_mapper=self._output_track_id_mapper,
         )
 
-    def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot | None:
+    def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot:
         """Return read-only node-native MAP state for inspection/debug."""
-        if self._last_map_global is None:
-            return None
         return MAPHypothesisSnapshot(
             log_weight=float(self._last_map_global.log_weight),
             leaf_nodes_by_track_id=MappingProxyType(
