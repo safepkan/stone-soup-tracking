@@ -17,9 +17,11 @@ from mht.tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 class _CountingPredictor:
     def __init__(self) -> None:
         self.calls: list[datetime.datetime | None] = []
+        self.priors: list[object] = []
 
     def predict(self, prior, timestamp=None, **kwargs) -> GaussianState:
-        del prior, kwargs
+        self.priors.append(prior)
+        del kwargs
         self.calls.append(timestamp)
         return GaussianState([0.0, 0.0], covar=np.eye(2), timestamp=timestamp)
 
@@ -74,6 +76,8 @@ class TOMHTHypothesiserMathHelpersTest(unittest.TestCase):
 
         self.assertGreaterEqual(len(hypotheses.single_hypotheses), 1)
         self.assertEqual([timestamp, other_timestamp], predictor.calls)
+        self.assertTrue(all(prior is track.state for prior in predictor.priors))
+        self.assertTrue(all(not isinstance(prior, Track) for prior in predictor.priors))
 
     def test_hypothesise_reuses_measurement_prediction_for_same_object_inputs(
         self,

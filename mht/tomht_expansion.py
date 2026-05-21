@@ -14,6 +14,7 @@ from stonesoup.types.multihypothesis import MultipleHypothesis
 from stonesoup.updater.base import Updater
 
 from .tomht_model import DetectionKey, ScanContext, TrackHypothesisNode, TrackTree
+from .tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from .tomht_output import reconstruct_track_from_leaf_node
 from .tomht_params import TOMHTParams
 from .tomht_scoring import ScoringModel
@@ -37,6 +38,9 @@ class ExpansionCallStats:
 
     hypothesise_calls: int = 0
     hypothesise_wall_ns: int = 0
+    track_reconstruct_calls: int = 0
+    track_reconstruct_wall_ns: int = 0
+    default_state_fast_path_calls: int = 0
     update_calls: int = 0
     update_wall_ns: int = 0
     expanded_leaf_count: int = 0
@@ -144,16 +148,37 @@ def candidates_for_track_leaf(
     expansion_call_stats: ExpansionCallStats,
 ) -> list[LocalChildCandidate]:
     """Build retained local continuation candidates for one active leaf."""
-    track = reconstruct_track_from_leaf_node(
-        leaf_node,
-        lifecycle_state=tree.lifecycle_state,
-        publication_state=tree.publication_state,
-        public_track_id=tree.public_track_id,
-    )
-    hypothesise_start_ns = start_timer()
-    raw_hypotheses = hypothesiser.hypothesise(track, ctx.detections, ctx.timestamp)
+    if params.enable_default_hypothesiser_state_fast_path and isinstance(
+        hypothesiser, TrackerOwnedNLLDistanceHypothesiser
+    ):
+        expansion_call_stats.default_state_fast_path_calls += 1
+        hypothesise_start_ns = start_timer()
+        raw_hypotheses = hypothesiser.hypothesise_from_state(
+            leaf_node.state,
+            ctx.detections,
+            ctx.timestamp,
+        )
+        expansion_call_stats.hypothesise_wall_ns += elapsed_ns(hypothesise_start_ns)
+    else:
+        reconstruct_start_ns = start_timer()
+        track = reconstruct_track_from_leaf_node(
+            leaf_node,
+            lifecycle_state=tree.lifecycle_state,
+            publication_state=tree.publication_state,
+            public_track_id=tree.public_track_id,
+        )
+        expansion_call_stats.track_reconstruct_calls += 1
+        expansion_call_stats.track_reconstruct_wall_ns += elapsed_ns(
+            reconstruct_start_ns
+        )
+        hypothesise_start_ns = start_timer()
+        raw_hypotheses = hypothesiser.hypothesise(
+            track,
+            ctx.detections,
+            ctx.timestamp,
+        )
+        expansion_call_stats.hypothesise_wall_ns += elapsed_ns(hypothesise_start_ns)
     expansion_call_stats.hypothesise_calls += 1
-    expansion_call_stats.hypothesise_wall_ns += elapsed_ns(hypothesise_start_ns)
     if not isinstance(raw_hypotheses, MultipleHypothesis):
         raise TypeError(
             "Distance hypothesiser must return stonesoup MultipleHypothesis."

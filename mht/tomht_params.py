@@ -32,6 +32,10 @@ class TOMHTParams:
     # The high default keeps this in a tractability guardrail role, not as the
     # primary pruning mechanism.
     max_leaves_per_track_tree: int | None = 500
+    # Internal profiling/debug switch: the tracker-owned default hypothesiser
+    # can expand from the current leaf state without reconstructing Track
+    # history. Custom hypothesisers still receive normal Stone Soup Tracks.
+    enable_default_hypothesiser_state_fast_path: bool = True
     # Base miss threshold used by the default post-N-scan deleter.
     # Effective threshold uses an N-scan-aware floor (see lifecycle helper).
     max_missed: int = 5

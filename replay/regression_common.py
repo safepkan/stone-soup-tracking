@@ -207,6 +207,7 @@ def _build_timing_summary_from_scan_lines(lines: list[str]) -> list[str]:
 
     wall_ms_samples: list[float] = []
     phase_samples_by_key: dict[str, list[float]] = {}
+    call_samples_by_key: dict[str, list[float]] = {}
     node_samples: list[float] = []
     maxrss_samples: list[float] = []
 
@@ -220,9 +221,10 @@ def _build_timing_summary_from_scan_lines(lines: list[str]) -> list[str]:
         if line.startswith("SCAN_TIMING_PHASES "):
             values = _parse_numeric_fields(line)
             for key, value in values.items():
-                if not key.endswith("_ms"):
-                    continue
-                phase_samples_by_key.setdefault(key, []).append(value)
+                if key.endswith("_ms"):
+                    phase_samples_by_key.setdefault(key, []).append(value)
+                elif key.endswith("_calls"):
+                    call_samples_by_key.setdefault(key, []).append(value)
             continue
         if line.startswith("SCAN_MEMORY "):
             values = _parse_numeric_fields(line)
@@ -260,6 +262,16 @@ def _build_timing_summary_from_scan_lines(lines: list[str]) -> list[str]:
             f"p90={_percentile(samples, 0.90):.3f} "
             f"p95={_percentile(samples, 0.95):.3f} "
             f"max={max(samples):.3f}"
+        )
+    for call_key in call_samples_by_key:
+        samples = call_samples_by_key[call_key]
+        summary_lines.append(
+            "SUMMARY_FROM_SCANS timing_counter "
+            f"{call_key} count={len(samples)} "
+            f"med={statistics.median(samples):.1f} "
+            f"mean={statistics.mean(samples):.2f} "
+            f"max={max(samples):.1f} "
+            f"sum={sum(samples):.0f}"
         )
     if node_samples or maxrss_samples:
         parts = ["SUMMARY_FROM_SCANS memory"]

@@ -7,6 +7,7 @@ import io
 from math import exp, log, log1p
 import sys
 import unittest
+from unittest import mock
 from typing import Iterable, cast
 
 import numpy as np
@@ -35,11 +36,13 @@ from mht.tomht_cluster_rebuild import (
     rebuild_cluster_globals,
 )
 from mht.tomht_cluster_solver_factory import make_cluster_solver
+from mht.tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from mht.tomht_lifecycle import (
     TOMHTMissCountDeleter,
     effective_track_miss_threshold,
     resolve_deleter_with_metadata,
 )
+from mht.tomht_output import reconstruct_track_from_leaf_node
 from mht.tomht_pruning import apply_post_solve_supported_leaf_pruning
 from mht.tomht_scoring import (
     ConstantDetectionProbabilityModel,
@@ -110,6 +113,7 @@ class _RecordingMetadataHypothesiser(_ScriptedHypothesiser):
     def __init__(self) -> None:
         super().__init__()
         self.track_metadata: list[dict[str, object]] = []
+        self.track_objects: list[Track] = []
 
     def hypothesise(
         self,
@@ -118,6 +122,7 @@ class _RecordingMetadataHypothesiser(_ScriptedHypothesiser):
         timestamp: datetime.datetime,
         **kwargs,
     ) -> MultipleHypothesis:
+        self.track_objects.append(track)
         self.track_metadata.append(dict(track.metadata))
         return super().hypothesise(track, detections, timestamp, **kwargs)
 
@@ -170,6 +175,20 @@ class _NoopPredictor:
     def predict(self, prior, timestamp=None, **kwargs):
         del prior, timestamp, kwargs
         raise RuntimeError("No prediction expected for scripted hypotheses")
+
+
+class _RecordingPriorPredictor:
+    def __init__(self) -> None:
+        self.priors: list[object] = []
+
+    def predict(self, prior, timestamp=None, **kwargs):
+        del kwargs
+        self.priors.append(prior)
+        return GaussianState(
+            state_vector=np.asarray(prior.state_vector, dtype=float).copy(),
+            covar=np.asarray(prior.covar, dtype=float).copy(),
+            timestamp=timestamp,
+        )
 
 
 class _ScriptedUpdater:
@@ -835,10 +854,108 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
 
         self.assertEqual(1, len(hypothesiser.track_metadata))
         metadata = hypothesiser.track_metadata[0]
+        self.assertEqual(1, len(hypothesiser.track_objects))
+        self.assertIsInstance(hypothesiser.track_objects[0], Track)
+        self.assertIsNotNone(tracker.last_scan_stats)
+        assert tracker.last_scan_stats is not None
+        timing = tracker.last_scan_stats.timing_breakdown
+        self.assertEqual(1, timing.expand_track_reconstruct_calls)
+        self.assertGreaterEqual(timing.expand_track_reconstruct_ms, 0.0)
+        self.assertEqual(0, timing.expand_default_state_fast_path_calls)
         self.assertEqual(0, metadata["internal_track_id"])
         self.assertEqual(0, metadata["public_track_id"])
         self.assertEqual("confirmed", metadata["lifecycle_state"])
         self.assertEqual("published", metadata["publication_state"])
+
+    def test_default_hypothesiser_expansion_skips_track_reconstruction(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+        predictor = _RecordingPriorPredictor()
+        tracker = TOMHTTracker(
+            predictor=predictor,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                max_missed=999,
+                enable_default_hypothesiser_state_fast_path=True,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        tree = tracker.track_trees_by_track_id[0]
+        leaf = tracker._nodes_by_id[next(iter(tree.active_leaf_node_ids))]
+
+        with mock.patch(
+            "mht.tomht_expansion.reconstruct_track_from_leaf_node",
+            side_effect=AssertionError(
+                "default hypothesiser should use state fast path"
+            ),
+        ):
+            tracker.update_tracker(t1, [])
+
+        self.assertEqual(1, len(predictor.priors))
+        self.assertIs(predictor.priors[0], leaf.state)
+        self.assertNotIsInstance(predictor.priors[0], Track)
+        self.assertIsNotNone(tracker.last_scan_stats)
+        assert tracker.last_scan_stats is not None
+        timing = tracker.last_scan_stats.timing_breakdown
+        self.assertEqual(0, timing.expand_track_reconstruct_calls)
+        self.assertEqual(0.0, timing.expand_track_reconstruct_ms)
+        self.assertEqual(1, timing.expand_default_state_fast_path_calls)
+
+    def test_default_hypothesiser_fast_path_flag_false_uses_track_api(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+        predictor = _RecordingPriorPredictor()
+        tracker = TOMHTTracker(
+            predictor=predictor,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                max_missed=999,
+                enable_default_hypothesiser_state_fast_path=False,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        tree = tracker.track_trees_by_track_id[0]
+        leaf = tracker._nodes_by_id[next(iter(tree.active_leaf_node_ids))]
+
+        with (
+            mock.patch(
+                "mht.tomht_expansion.reconstruct_track_from_leaf_node",
+                wraps=reconstruct_track_from_leaf_node,
+            ) as reconstruct_mock,
+            mock.patch.object(
+                TrackerOwnedNLLDistanceHypothesiser,
+                "hypothesise",
+                autospec=True,
+                side_effect=TrackerOwnedNLLDistanceHypothesiser.hypothesise,
+            ) as hypothesise_mock,
+        ):
+            tracker.update_tracker(t1, [])
+
+        self.assertEqual(1, reconstruct_mock.call_count)
+        self.assertEqual(1, hypothesise_mock.call_count)
+        hypothesise_args = hypothesise_mock.call_args.args
+        self.assertIsInstance(hypothesise_args[1], Track)
+        self.assertEqual(1, len(predictor.priors))
+        self.assertIs(predictor.priors[0], leaf.state)
+        self.assertNotIsInstance(predictor.priors[0], Track)
+        self.assertIsNotNone(tracker.last_scan_stats)
+        assert tracker.last_scan_stats is not None
+        timing = tracker.last_scan_stats.timing_breakdown
+        self.assertEqual(1, timing.expand_track_reconstruct_calls)
+        self.assertGreaterEqual(timing.expand_track_reconstruct_ms, 0.0)
+        self.assertEqual(0, timing.expand_default_state_fast_path_calls)
 
     def test_track_tree_committed_detection_keys_start_empty(self) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)
@@ -2535,9 +2652,14 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertGreaterEqual(timings.cluster_build_and_solve_ms, 0.0)
         self.assertGreaterEqual(timings.expand_ms, 0.0)
         self.assertGreaterEqual(timings.expand_hypothesise_calls, 0)
+        self.assertGreaterEqual(timings.expand_track_reconstruct_calls, 0)
+        self.assertGreaterEqual(timings.expand_track_reconstruct_ms, 0.0)
+        self.assertGreaterEqual(timings.expand_default_state_fast_path_calls, 0)
         self.assertGreaterEqual(timings.expand_update_calls, 0)
         self.assertLessEqual(
-            timings.expand_hypothesise_ms + timings.expand_update_ms,
+            timings.expand_hypothesise_ms
+            + timings.expand_track_reconstruct_ms
+            + timings.expand_update_ms,
             timings.expand_ms + 1.0,
         )
         self.assertLessEqual(
@@ -2718,6 +2840,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
             "trees_after_lifecycle=1 expanded=1 expanded_tentative=0 "
             "expanded_confirmed=1 child_candidates=3 children_created=3 "
             "children_retained=3 miss_children=1 detection_children=2 "
+            "track_reconstruct_calls=1 default_state_fast_path_calls=0 "
             "topk_supported=3 map_selected=1 unsupported_pruned=0",
             debug_lines[-1],
         )

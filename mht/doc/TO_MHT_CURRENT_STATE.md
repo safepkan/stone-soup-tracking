@@ -447,7 +447,8 @@ The OR-Tools CP-SAT backend remains experimental. It is exact under the current 
 
 Local expansion is distance-hypothesis driven:
 
-- reconstruct a compatibility `Track` for each active leaf,
+- reconstruct a compatibility `Track` for each active leaf unless the
+  tracker-owned default hypothesiser state fast path is enabled,
 - call the configured hypothesiser,
 - validate the returned hypotheses,
 - score hit/miss alternatives through `NLLScoringModel`,
@@ -468,6 +469,8 @@ The tracker-owned default hypothesiser includes conservative optimizations:
 - covariance-preparation reuse per call,
 - scan-time prediction reuse,
 - measurement-prediction reuse by object identity,
+- a default-enabled leaf-state entry point gated by
+  `TOMHTParams.enable_default_hypothesiser_state_fast_path`,
 - Cholesky-based Mahalanobis/NLL evaluation.
 
 These changes improved expansion timing, but the next likely leverage is expansion volume rather than further inner-kernel cleanup alone.
@@ -624,7 +627,13 @@ Per-scan and summary instrumentation reports include:
 - memory/node counts,
 - phase timing breakdown.
 
-Expansion timing is split into hypothesiser and updater call counts/times, which has been useful for identifying local expansion as the remaining bottleneck. Profiling also shows a non-negligible amount of time in Stone Soup `Track` reconstruction and object-attribute access. Public output and debug/inspection still legitimately need full reconstructed tracks, but internal paths such as default local expansion and default miss-count deletion may eventually benefit from lighter leaf-local views.
+Expansion timing is split into hypothesiser, updater, and local-expansion
+`Track` reconstruction call counts/times, plus default-hypothesiser state
+fast-path call counts. This avoids treating `expand_other_ms` as the only proxy
+for reconstruction overhead. Public output and debug/inspection still
+legitimately need full reconstructed tracks, but internal paths such as default
+local expansion and default miss-count deletion may eventually benefit from
+lighter leaf-local views.
 
 ### Regression status
 

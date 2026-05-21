@@ -15,6 +15,7 @@ from stonesoup.predictor.base import Predictor
 from stonesoup.types.detection import Detection, MissedDetection
 from stonesoup.types.hypothesis import SingleDistanceHypothesis
 from stonesoup.types.multihypothesis import MultipleHypothesis
+from stonesoup.types.state import State
 from stonesoup.types.track import Track
 from stonesoup.updater.base import Updater
 
@@ -93,6 +94,21 @@ class TrackerOwnedNLLDistanceHypothesiser(Hypothesiser):
         **kwargs,
     ) -> MultipleHypothesis:
         """Generate distance hypotheses for one track at one scan timestamp."""
+        return self.hypothesise_from_state(
+            track.state,
+            detections,
+            timestamp,
+            **kwargs,
+        )
+
+    def hypothesise_from_state(
+        self,
+        prior_state: State,
+        detections: Iterable[Detection],
+        timestamp,
+        **kwargs,
+    ) -> MultipleHypothesis:
+        """Generate distance hypotheses from the current prior state only."""
         gate_threshold_mahalanobis = float(self.mahalanobis_gate_threshold)
         if gate_threshold_mahalanobis <= 0.0:
             raise ValueError("mahalanobis_gate_threshold must be > 0.")
@@ -102,7 +118,9 @@ class TrackerOwnedNLLDistanceHypothesiser(Hypothesiser):
         prep_cache: _CovariancePrepCache | None = None
         meas_pred_cache: _MeasurementPredictionCache | None = None
 
-        scan_prediction = self.predictor.predict(track, timestamp=timestamp, **kwargs)
+        scan_prediction = self.predictor.predict(
+            prior_state, timestamp=timestamp, **kwargs
+        )
 
         # Miss hypothesis
         # Miss distance is a sentinel; tracker scoring computes miss score directly.
@@ -125,7 +143,7 @@ class TrackerOwnedNLLDistanceHypothesiser(Hypothesiser):
                 prediction = scan_prediction
             else:
                 prediction = self.predictor.predict(
-                    track, timestamp=detection_timestamp, **kwargs
+                    prior_state, timestamp=detection_timestamp, **kwargs
                 )
 
             # Get measurement prediction, with object-identity reuse

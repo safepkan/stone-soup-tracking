@@ -561,6 +561,15 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             expand_ms=float(expand_ms),
             expand_hypothesise_calls=int(expansion_call_stats.hypothesise_calls),
             expand_hypothesise_ms=ns_to_ms(expansion_call_stats.hypothesise_wall_ns),
+            expand_track_reconstruct_calls=int(
+                expansion_call_stats.track_reconstruct_calls
+            ),
+            expand_track_reconstruct_ms=ns_to_ms(
+                expansion_call_stats.track_reconstruct_wall_ns
+            ),
+            expand_default_state_fast_path_calls=int(
+                expansion_call_stats.default_state_fast_path_calls
+            ),
             expand_update_calls=int(expansion_call_stats.update_calls),
             expand_update_ms=ns_to_ms(expansion_call_stats.update_wall_ns),
             post_expand_prune_validate_ms=float(post_expand_prune_validate_ms),
