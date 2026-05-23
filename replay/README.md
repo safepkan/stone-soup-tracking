@@ -98,6 +98,17 @@ source venv/bin/activate
 python replay/standard_replay_regression.py run --expansion-frontier
 ```
 
+To run the standard replay with the l2-sp `StoneSoupMhtTracker` configured for
+3-D position estimates, use the dim-3 override:
+
+```bash
+source venv/bin/activate
+make replay_run_dim3
+```
+
+This uses `replay/overrides/tracker_dim_3.json` and writes the same latest
+artifact paths as the other standard replay `run` commands.
+
 Versioned golden baseline artifacts are stored in:
 
 - `replay/replay_baselines/standard_replay_default.raw.log`

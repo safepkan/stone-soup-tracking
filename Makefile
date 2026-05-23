@@ -29,6 +29,7 @@ REPLAY_PROFILE_PATH ?= $(REPLAY_PROFILE_DIR)/$(REPLAY_PROFILE_NAME).prof
 REPLAY_PROFILE_LOG ?= $(REPLAY_PROFILE_DIR)/$(REPLAY_PROFILE_NAME).log
 REPLAY_PROFILE_MCAP ?= $(REPLAY_PROFILE_DIR)/$(REPLAY_PROFILE_NAME).replayed.mcap
 REPLAY_PROFILE_EXTRA_ARGS ?=
+REPLAY_DIM3_OVERRIDE ?= $(CURDIR)/replay/overrides/tracker_dim_3.json
 SNAKEVIZ_HOST ?= 127.0.0.1
 SNAKEVIZ_PORT ?= 8090
 
@@ -90,6 +91,10 @@ replay_compare:
 .PHONY: replay_run
 replay_run:
 	$(PYTHON) replay/standard_replay_regression.py run
+
+.PHONY: replay_run_dim3
+replay_run_dim3:
+	$(PYTHON) replay/standard_replay_regression.py run --tracker-param-override-file "$(REPLAY_DIM3_OVERRIDE)"
 
 .PHONY: replay_expansion_frontier
 replay_expansion_frontier:
