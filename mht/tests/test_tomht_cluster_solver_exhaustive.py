@@ -29,7 +29,7 @@ def _leaf(
     )
 
 
-class TOMHTClusterSolverTest(unittest.TestCase):
+class TOMHTClusterSolverExhaustiveTest(unittest.TestCase):
     def test_conflicts_and_scores_match_current_objective(self) -> None:
         solver = ExhaustiveClusterSolver()
 

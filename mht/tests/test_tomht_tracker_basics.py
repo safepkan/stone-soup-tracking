@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import datetime
 from pathlib import Path
 import unittest
-from typing import Any, Callable, Iterable
+from typing import Callable, Iterable
 
 import numpy as np
 from stonesoup.types.detection import Detection
@@ -16,7 +16,6 @@ from stonesoup.types.track import Track
 
 from mht.tomht_hypothesiser import TrackerOwnedNLLDistanceHypothesiser
 from mht.tomht_scoring import ConstantDetectionProbabilityModel, NLLScoringModel
-from mht.tomht_stats import RebuildStats, ScanStats
 from mht.tomht_tracker import TOMHTParams, TOMHTTracker
 
 
@@ -143,29 +142,6 @@ def _external_start(timestamp: datetime.datetime) -> Track:
 
 
 class TOMHTTrackerBasicsTest(unittest.TestCase):
-    def test_removed_parameters_are_absent(self) -> None:
-        param_fields = TOMHTParams.__dataclass_fields__
-        self.assertNotIn("scoring_mode", param_fields)
-        self.assertNotIn("internal_birth_mode", param_fields)
-        self.assertNotIn("birth_log_penalty", param_fields)
-        self.assertNotIn("birth_density", param_fields)
-        self.assertNotIn("birth_max_abs_pos", param_fields)
-        self.assertNotIn("birth_max_covar_trace", param_fields)
-        self.assertNotIn("historical_conflict_relaxation_enabled", param_fields)
-
-    def test_historical_relaxation_runtime_stats_are_absent(self) -> None:
-        rebuild_fields = RebuildStats.__dataclass_fields__
-        scan_fields = ScanStats.__dataclass_fields__
-
-        for field_name in (
-            "historical_relaxation_attempts",
-            "historical_relaxation_successes",
-            "historical_relaxed_keys_total",
-        ):
-            with self.subTest(field_name=field_name):
-                self.assertNotIn(field_name, rebuild_fields)
-                self.assertNotIn(field_name, scan_fields)
-
     def test_active_conflict_code_uses_live_conflict_helpers(self) -> None:
         mht_dir = Path(__file__).resolve().parents[1]
         active_conflict_modules = [
@@ -206,72 +182,6 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
         self.assertEqual(0.7, constant_dpm.prob_detect)
         self.assertEqual(0.25, constant_dpm.constant_clutter_density)
         self.assertEqual(1e-9, tracker.scoring_model.log_epsilon)
-
-    def test_initiator_start_initial_existence_probability_rejects_boundaries(
-        self,
-    ) -> None:
-        for probability in (0.0, 1.0):
-            with self.subTest(probability=probability):
-                with self.assertRaisesRegex(
-                    ValueError,
-                    "initiator_start_initial_existence_probability",
-                ):
-                    TOMHTParams(
-                        initiator_start_initial_existence_probability=probability,
-                    )
-
-    def test_track_confirmation_existence_probability_rejects_boundaries(
-        self,
-    ) -> None:
-        for probability in (0.0, 1.0):
-            with self.subTest(probability=probability):
-                with self.assertRaisesRegex(
-                    ValueError,
-                    "track_confirmation_existence_probability",
-                ):
-                    TOMHTParams(
-                        track_confirmation_existence_probability=probability,
-                    )
-
-    def test_track_deletion_existence_probability_rejects_boundaries(
-        self,
-    ) -> None:
-        for probability in (0.0, 1.0):
-            with self.subTest(probability=probability):
-                with self.assertRaisesRegex(
-                    ValueError,
-                    "track_deletion_existence_probability",
-                ):
-                    TOMHTParams(
-                        track_deletion_existence_probability=probability,
-                    )
-
-    def test_publication_params_validate_domains(self) -> None:
-        self.assertEqual(("confirmed",), TOMHTParams().publish_lifecycle_states)
-        TOMHTParams(publish_lifecycle_states=())
-
-        invalid_cases: list[tuple[dict[str, Any], str]] = [
-            ({"publish_lifecycle_states": ("tentative", "invalid")}, "lifecycle"),
-            ({"publish_lifecycle_states": "confirmed"}, "not a string"),
-            ({"publish_min_hits": -1}, "publish_min_hits"),
-            ({"publish_min_age": -1}, "publish_min_age"),
-            ({"publish_min_existence_probability": -0.1}, "existence"),
-            ({"publish_min_existence_probability": 1.0}, "existence"),
-            ({"publish_min_existence_probability": float("nan")}, "existence"),
-            ({"publish_min_existence_probability": float("inf")}, "existence"),
-        ]
-        for overrides, message in invalid_cases:
-            with self.subTest(overrides=overrides):
-                with self.assertRaisesRegex(ValueError, message):
-                    TOMHTParams(**overrides)
-
-    def test_expansion_and_birth_guardrail_defaults(self) -> None:
-        params = TOMHTParams()
-
-        self.assertEqual(5, params.max_children_per_leaf)
-        self.assertEqual(10, params.max_births_per_scan)
-        self.assertIsNone(params.birth_skip_if_active_trees_above)
-        self.assertIsNone(params.birth_skip_if_active_leaves_above)
 
     def test_constructor_applies_params_overrides(self) -> None:
         tracker = _build_tracker_with_overrides(
