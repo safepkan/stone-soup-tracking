@@ -142,7 +142,7 @@ def internal_default_miss_count_deleter_deletes_leaf(
     return int(leaf_node.missed_count) >= int(deleter.threshold)
 
 
-def track_miss_termination_leaves(
+def track_deleter_decision_leaves(
     *,
     track_id: int,
     tree: TrackTree,
@@ -151,7 +151,7 @@ def track_miss_termination_leaves(
     map_global: GlobalHypothesis,
     cluster_snapshots: list[ClusterRebuildSnapshot],
 ) -> list[TrackHypothesisNode]:
-    """Return leaves to evaluate for configured deleter deletion."""
+    """Return leaves whose deleter decisions must all allow track termination."""
     nodes_by_id = tree_store.nodes_by_id
     root = nodes_by_id[tree.root_node_id]
 
@@ -319,7 +319,7 @@ def apply_post_n_scan_track_lifecycle(
     )
     track_trees_by_track_id = tree_store.track_trees_by_track_id
     for track_id, tree in sorted(track_trees_by_track_id.items()):
-        leaves = track_miss_termination_leaves(
+        decision_leaves = track_deleter_decision_leaves(
             track_id=track_id,
             tree=tree,
             tree_store=tree_store,
@@ -327,7 +327,7 @@ def apply_post_n_scan_track_lifecycle(
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
         )
-        if not leaves:
+        if not decision_leaves:
             continue
 
         leaf_delete_decisions: list[bool] = []
@@ -337,7 +337,7 @@ def apply_post_n_scan_track_lifecycle(
                 raise TypeError(
                     "Default miss fast path requires TOMHTMissCountDeleter."
                 )
-            for leaf in leaves:
+            for leaf in decision_leaves:
                 check_start_ns = start_timer()
                 should_delete = internal_default_miss_count_deleter_deletes_leaf(
                     deleter=default_deleter,
@@ -348,7 +348,7 @@ def apply_post_n_scan_track_lifecycle(
                 leaf_delete_decisions.append(should_delete)
         else:
             committed_states = list(tree.committed_states)
-            for leaf in leaves:
+            for leaf in decision_leaves:
                 reconstruct_start_ns = start_timer()
                 candidate_track = reconstruct_track_from_committed_prefix_and_leaf_node(
                     committed_states=committed_states,
