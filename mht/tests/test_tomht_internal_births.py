@@ -82,7 +82,7 @@ class TOMHTInternalBirthsIntegrationTest(unittest.TestCase):
         )
 
         tree = next(iter(tracker.track_trees_by_track_id.values()))
-        root = tracker._nodes_by_id[tree.root_node_id]
+        root = tracker.nodes_by_id[tree.root_node_id]
         expected_log_delta = _logit(0.7)
         self.assertEqual("internal_birth", root.root_source)
         self.assertEqual("tentative", tree.lifecycle_state)
@@ -122,7 +122,7 @@ class TOMHTInternalBirthsIntegrationTest(unittest.TestCase):
         tracker.update_tracker(timestamp, [_detection(1.0, 1.0, timestamp)])
 
         tree = next(iter(tracker.track_trees_by_track_id.values()))
-        root = tracker._nodes_by_id[tree.root_node_id]
+        root = tracker.nodes_by_id[tree.root_node_id]
         expected_log_delta = _logit(0.6)
         self.assertAlmostEqual(expected_log_delta, root.log_delta)
         self.assertAlmostEqual(expected_log_delta, root.accumulated_log_score)
@@ -222,7 +222,7 @@ class TOMHTInternalBirthsIntegrationTest(unittest.TestCase):
                 tracker.update_tracker(timestamp, [_detection(1.0, 1.0, timestamp)])
 
                 tree = next(iter(tracker.track_trees_by_track_id.values()))
-                root = tracker._nodes_by_id[tree.root_node_id]
+                root = tracker.nodes_by_id[tree.root_node_id]
                 expected_log_delta = _logit(0.8)
                 self.assertAlmostEqual(expected_log_delta, root.log_delta)
                 self.assertAlmostEqual(expected_log_delta, root.accumulated_log_score)

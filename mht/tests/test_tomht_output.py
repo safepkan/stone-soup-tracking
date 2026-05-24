@@ -377,7 +377,7 @@ class TOMHTOutputIntegrationTest(unittest.TestCase):
         tree = tracker.track_trees_by_track_id[0]
         self.assertEqual("published", tree.publication_state)
         for leaf_id in tree.active_leaf_node_ids:
-            tracker._nodes_by_id[leaf_id].accumulated_log_score = _logit(0.1)
+            tracker.nodes_by_id[leaf_id].accumulated_log_score = _logit(0.1)
 
         tracker._apply_output_publication(tracker._last_map_global)
 

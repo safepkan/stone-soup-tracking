@@ -741,26 +741,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
 
     # =========================================================================
-    # Compatibility Inspection Views
+    # Inspection Convenience Views
     # =========================================================================
 
     @property
-    def _nodes_by_id(self) -> dict[int, TrackHypothesisNode]:
-        """Compatibility view of the persistent node table owned by the store."""
+    def nodes_by_id(self) -> dict[int, TrackHypothesisNode]:
+        """Convenience view of the persistent node table owned by the store."""
         return self._tree_store.nodes_by_id
-
-    @_nodes_by_id.setter
-    def _nodes_by_id(self, value: dict[int, TrackHypothesisNode]) -> None:
-        self._tree_store.nodes_by_id = value
 
     @property
     def track_trees_by_track_id(self) -> dict[int, TrackTree]:
-        """Compatibility view of the persistent track-tree table owned by the store."""
+        """Convenience view of the persistent track-tree table owned by the store."""
         return self._tree_store.track_trees_by_track_id
-
-    @track_trees_by_track_id.setter
-    def track_trees_by_track_id(self, value: dict[int, TrackTree]) -> None:
-        self._tree_store.track_trees_by_track_id = value
 
     # =========================================================================
     # Constructor Helpers

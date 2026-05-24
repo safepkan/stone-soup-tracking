@@ -804,7 +804,7 @@ class TOMHTLifecycleIntegrationTest(unittest.TestCase):
 
         self.assertIn(0, tracker.track_trees_by_track_id)
         leaf_id = next(iter(tracker.track_trees_by_track_id[0].active_leaf_node_ids))
-        self.assertEqual(1, tracker._nodes_by_id[leaf_id].missed_count)
+        self.assertEqual(1, tracker.nodes_by_id[leaf_id].missed_count)
 
     def test_configured_deleter_can_delete_tracks(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
@@ -1021,7 +1021,7 @@ class TOMHTLifecycleIntegrationTest(unittest.TestCase):
 
         tree = tracker.track_trees_by_track_id[0]
         for leaf_id in tree.active_leaf_node_ids:
-            tracker._nodes_by_id[leaf_id].accumulated_log_score = _logit(0.1)
+            tracker.nodes_by_id[leaf_id].accumulated_log_score = _logit(0.1)
         tracker._apply_score_based_track_confirmation()
 
         self.assertEqual("confirmed", tree.lifecycle_state)

@@ -399,7 +399,7 @@ def _initiator_birth_root_for_metadata(
     tracker.update_tracker(timestamp, [_detection(1.0, 1.0, timestamp)])
 
     tree = next(iter(tracker.track_trees_by_track_id.values()))
-    return tracker._nodes_by_id[tree.root_node_id]
+    return tracker.nodes_by_id[tree.root_node_id]
 
 
 def _run_post_n_scan_lifecycle(
@@ -442,7 +442,7 @@ def _set_track_active_leaf_scores(
             f"Expected {len(scores)} active leaves for track {track_id}, "
             f"got {len(leaf_ids)}."
         )
-    leaves = [tracker._nodes_by_id[leaf_id] for leaf_id in leaf_ids]
+    leaves = [tracker.nodes_by_id[leaf_id] for leaf_id in leaf_ids]
     for leaf, score in zip(leaves, scores):
         leaf.accumulated_log_score = float(score)
     return leaves
@@ -456,7 +456,7 @@ def _replace_active_leaves_with_scores(
     timestamp: datetime.datetime,
 ) -> list[TrackHypothesisNode]:
     tree = tracker.track_trees_by_track_id[track_id]
-    root = tracker._nodes_by_id[tree.root_node_id]
+    root = tracker.nodes_by_id[tree.root_node_id]
     leaves: list[TrackHypothesisNode] = []
     for score in scores:
         leaf = tracker._tree_store.create_track_hypothesis_node(

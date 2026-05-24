@@ -148,7 +148,7 @@ Persistent scan-to-scan state consists primarily of:
 - empty-tree removal,
 - unreachable-node cleanup.
 
-`TOMHTTracker` keeps compatibility views for `_nodes_by_id` and `track_trees_by_track_id`, but implementation code now uses `self._tree_store` directly.
+`TOMHTTracker` keeps convenience inspection views for `nodes_by_id` and `track_trees_by_track_id`, but implementation code uses `self._tree_store` directly.
 
 ### `TrackHypothesisNode`
 

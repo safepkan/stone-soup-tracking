@@ -52,7 +52,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
 
         self.assertEqual({0, 1}, set(tracker.track_trees_by_track_id.keys()))
         for tree in tracker.track_trees_by_track_id.values():
-            root = tracker._nodes_by_id[tree.root_node_id]
+            root = tracker.nodes_by_id[tree.root_node_id]
             self.assertGreater(len(root.child_node_ids), 0)
             self.assertGreater(len(tree.active_leaf_node_ids), 0)
 
@@ -141,7 +141,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         tracker.update_tracker(t0, [])
         tracker.add_external_starts(t0, [_track_start(0.0, t0)])
         tree = tracker.track_trees_by_track_id[0]
-        leaf = tracker._nodes_by_id[next(iter(tree.active_leaf_node_ids))]
+        leaf = tracker.nodes_by_id[next(iter(tree.active_leaf_node_ids))]
 
         with mock.patch(
             "mht.tomht_expansion.reconstruct_track_from_leaf_node",
@@ -181,7 +181,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         tracker.update_tracker(t0, [])
         tracker.add_external_starts(t0, [_track_start(0.0, t0)])
         tree = tracker.track_trees_by_track_id[0]
-        leaf = tracker._nodes_by_id[next(iter(tree.active_leaf_node_ids))]
+        leaf = tracker.nodes_by_id[next(iter(tree.active_leaf_node_ids))]
 
         with (
             mock.patch(
