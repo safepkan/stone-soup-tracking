@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 from dataclasses import dataclass
 import sys
-from typing import Callable
+from typing import Callable, Protocol
 
 from stonesoup.base import Property
 from stonesoup.deleter.base import Deleter
@@ -43,6 +43,37 @@ class TOMHTMissCountDeleter(Deleter):
         return int(track.metadata["missed_count"]) >= int(self.threshold)
 
 
+class FastDeleter(Protocol):
+    """Leaf-node deleter interface for TOMHT-owned fast lifecycle paths."""
+
+    def check_for_deletion(
+        self,
+        leaf_node: TrackHypothesisNode,
+        track_tree: TrackTree,
+        **kwargs: object,
+    ) -> bool:
+        """Return whether the TOMHT leaf/tree candidate should be deleted."""
+        ...
+
+
+@dataclass(frozen=True)
+class FastMissCountDeleter:
+    """Leaf-node equivalent of TOMHTMissCountDeleter for internal fast paths."""
+
+    threshold: int
+
+    def check_for_deletion(
+        self,
+        leaf_node: TrackHypothesisNode,
+        track_tree: TrackTree,
+        **kwargs: object,
+    ) -> bool:
+        """Return whether the TOMHT leaf has enough consecutive misses."""
+        del track_tree
+        del kwargs
+        return int(leaf_node.missed_count) >= int(self.threshold)
+
+
 @dataclass(frozen=True)
 class DeleterWithMetadata:
     """Configured deleter plus TOMHT diagnostic metadata."""
@@ -51,6 +82,7 @@ class DeleterWithMetadata:
     reason: str
     display_name: str | None = None
     miss_threshold: int | None = None
+    fast_deleter: FastDeleter | None = None
 
 
 @dataclass
@@ -121,6 +153,7 @@ def resolve_deleter_with_metadata(
         deleter=TOMHTMissCountDeleter(threshold=threshold),
         reason="miss",
         miss_threshold=threshold,
+        fast_deleter=FastMissCountDeleter(threshold=threshold),
     )
 
 
@@ -131,15 +164,6 @@ def uses_internal_default_miss_count_deleter(
     return deleter_with_metadata.reason == "miss" and isinstance(
         deleter_with_metadata.deleter, TOMHTMissCountDeleter
     )
-
-
-def internal_default_miss_count_deleter_deletes_leaf(
-    *,
-    deleter: TOMHTMissCountDeleter,
-    leaf_node: TrackHypothesisNode,
-) -> bool:
-    """Evaluate TOMHT's default miss-count deleter without Track reconstruction."""
-    return int(leaf_node.missed_count) >= int(deleter.threshold)
 
 
 def track_deleter_decision_leaves(
@@ -309,9 +333,12 @@ def apply_post_n_scan_track_lifecycle(
     mode = normalized_track_miss_termination_mode(params.track_miss_termination_mode)
     if lifecycle_deleter_stats is None:
         lifecycle_deleter_stats = LifecycleDeleterStats()
-    default_miss_fast_path = bool(
-        params.enable_default_miss_deleter_fast_path
-    ) and uses_internal_default_miss_count_deleter(deleter_with_metadata)
+    fast_deleter: FastDeleter | None = None
+    if bool(params.enable_default_miss_deleter_fast_path):
+        if uses_internal_default_miss_count_deleter(deleter_with_metadata):
+            fast_deleter = deleter_with_metadata.fast_deleter
+            if fast_deleter is None:
+                raise TypeError("Default miss fast path requires a fast deleter.")
 
     termination_reasons_by_track_id = collect_score_track_termination_reasons(
         tree_store=tree_store,
@@ -331,22 +358,19 @@ def apply_post_n_scan_track_lifecycle(
             continue
 
         leaf_delete_decisions: list[bool] = []
-        if default_miss_fast_path:
-            default_deleter = deleter_with_metadata.deleter
-            if not isinstance(default_deleter, TOMHTMissCountDeleter):
-                raise TypeError(
-                    "Default miss fast path requires TOMHTMissCountDeleter."
-                )
+        if fast_deleter is not None:
             for leaf in decision_leaves:
                 check_start_ns = start_timer()
-                should_delete = internal_default_miss_count_deleter_deletes_leaf(
-                    deleter=default_deleter,
+                should_delete = fast_deleter.check_for_deletion(
                     leaf_node=leaf,
+                    track_tree=tree,
+                    timestamp=timestamp,
                 )
                 lifecycle_deleter_stats.default_miss_fast_path_calls += 1
                 lifecycle_deleter_stats.check_wall_ns += elapsed_ns(check_start_ns)
                 leaf_delete_decisions.append(should_delete)
         else:
+            deleter = deleter_with_metadata.deleter
             committed_states = list(tree.committed_states)
             for leaf in decision_leaves:
                 reconstruct_start_ns = start_timer()
@@ -363,11 +387,9 @@ def apply_post_n_scan_track_lifecycle(
                 )
 
                 check_start_ns = start_timer()
-                should_delete = bool(
-                    deleter_with_metadata.deleter.check_for_deletion(
-                        candidate_track,
-                        timestamp=timestamp,
-                    )
+                should_delete = deleter.check_for_deletion(
+                    candidate_track,
+                    timestamp=timestamp,
                 )
                 lifecycle_deleter_stats.check_wall_ns += elapsed_ns(check_start_ns)
                 leaf_delete_decisions.append(should_delete)

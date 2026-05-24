@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, and smoke-runner parameter reset completed through **2026-05-20**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, smoke-runner parameter reset, and lifecycle fast-deleter cleanup completed through **2026-05-24**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -359,14 +359,16 @@ effective_miss_threshold = max(max_missed, ns_scan_window + 1)
 ```
 
 The default miss-count deleter is intentionally minimal: with
-`TOMHTParams.enable_default_miss_deleter_fast_path=True` (default), TOMHT checks
-the selected leaf `missed_count` directly against the effective threshold and
-does not reconstruct a Stone Soup `Track` for this default path. If the flag is
-disabled, the default deleter uses the normal reconstructed-`Track` path for
-profiling/debug comparison. It has no sensor/context awareness. Custom Stone
-Soup deleters still replace the default miss-count deleter and receive a full
-reconstructed `Track`, and remain the path for field-of-view exit, lifetime
-limits, sensor/context-aware invalidity, or application-specific deletion.
+`TOMHTParams.enable_default_miss_deleter_fast_path=True` (default), TOMHT uses
+an internal `FastMissCountDeleter` that receives the selected leaf and owning
+`TrackTree`, checks the leaf `missed_count` directly against the effective
+threshold, and does not reconstruct a Stone Soup `Track` for this default path.
+If the flag is disabled, the default
+deleter uses the normal reconstructed-`Track` path for profiling/debug
+comparison. It has no sensor/context awareness. Custom Stone Soup deleters still
+replace the default miss-count deleter and receive a full reconstructed `Track`,
+and remain the path for field-of-view exit, lifetime limits,
+sensor/context-aware invalidity, or application-specific deletion.
 
 `TRACK_LIFECYCLE` diagnostics report deletion reason groups (`score`, `miss`, `deleter`).
 

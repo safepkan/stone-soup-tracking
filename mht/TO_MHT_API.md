@@ -320,11 +320,12 @@ or application-specific invalidity checks.
 
 If no deleter is supplied, TOMHT resolves an internal successive-miss-count
 deleter from `TOMHTParams`. The default miss-count deleter is intentionally
-minimal: TOMHT checks selected leaf `missed_count` directly and has no awareness
-of sensor identity or scan context. A custom deleter is the recommended path as
-soon as deletion logic needs to be sensor- or context-aware; custom Stone Soup
-deleters still receive full reconstructed `Track` objects. The default direct
-check is an internal optimization gated by
+minimal: TOMHT's internal fast path uses a `FastMissCountDeleter` that receives
+the selected leaf and owning `TrackTree`, checks leaf `missed_count` directly,
+and has no awareness of sensor identity or scan context. A custom deleter is the
+recommended path as soon as deletion logic needs to be sensor- or context-aware;
+custom Stone Soup deleters still receive full reconstructed `Track` objects. The
+default direct check is an internal optimization gated by
 `TOMHTParams.enable_default_miss_deleter_fast_path`, which defaults to `True`;
 disabling it restores the reconstructed-`Track` path for profiling/debug
 comparison.
@@ -905,10 +906,12 @@ This avoids deleting a whole tree before the N-scan machinery has had enough
 history to commit safely.
 
 With `TOMHTParams.enable_default_miss_deleter_fast_path=True` (default), the
-default miss-count deleter checks TOMHT's selected leaf `missed_count` directly
-and counts every miss equally, with no awareness of sensor identity, geometry,
-or scan context. If the flag is disabled, the same default deleter is evaluated
-through the normal reconstructed-`Track` path for profiling/debug comparison.
+default miss-count fast path checks TOMHT's selected leaf `missed_count`
+directly through an internal `FastMissCountDeleter` that also receives the
+owning `TrackTree`. It counts every miss equally, with no awareness of sensor
+identity, geometry, or scan context. If the flag is disabled, the same default
+deleter is evaluated through the normal reconstructed-`Track` path for
+profiling/debug comparison.
 In particular, a track predicted to be outside a sensor's field of view will
 accumulate misses that count toward the threshold even though the sensor could
 not have detected the target. Any sensor- or context-aware deletion logic should

@@ -15,12 +15,13 @@
   `expand_default_state_fast_path_calls` are now reported so reconstruction
   overhead no longer has to be inferred from `expand_other_ms`.
 - Implemented the next narrow object-boundary cleanup for lifecycle deletion:
-  the resolved default internal miss-count deleter now checks leaf
-  `missed_count` directly instead of reconstructing a full Stone Soup `Track`.
-  Custom Stone Soup deleters still replace that default and still receive a
-  full reconstructed `Track` built from the committed prefix plus unresolved
-  lineage. Lifecycle deleter reconstruction/check counters are now surfaced in
-  scan timing output.
+  the resolved default internal miss-count path now uses `FastMissCountDeleter`
+  to check leaf `missed_count` directly instead of reconstructing a full Stone
+  Soup `Track`; the fast-deleter interface also receives the owning `TrackTree`.
+  Custom Stone Soup deleters still replace that default and still receive a full
+  reconstructed `Track` built from the committed prefix plus unresolved lineage.
+  Lifecycle deleter
+  reconstruction/check counters are now surfaced in scan timing output.
 - Added `TOMHTParams.enable_default_miss_deleter_fast_path` as a default-on
   profiling/debug gate for the internal miss-count fast path. Scan timing now
   splits the old broad N-scan/lifecycle/publication bucket into

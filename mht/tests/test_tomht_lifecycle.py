@@ -29,11 +29,12 @@ from mht.tests.tomht_tracker_test_support import (
 )
 from mht.tomht_lifecycle import (
     effective_track_miss_threshold,
+    FastMissCountDeleter,
     LifecycleDeleterStats,
     resolve_deleter_with_metadata,
     TOMHTMissCountDeleter,
 )
-from mht.tomht_model import GlobalHypothesis
+from mht.tomht_model import GlobalHypothesis, TrackHypothesisNode, TrackTree
 from mht.tomht_output import reconstruct_track_from_committed_prefix_and_leaf_node
 from mht.tomht_tracker import TOMHTParams
 
@@ -308,6 +309,7 @@ class TOMHTLifecycleIntegrationTest(unittest.TestCase):
         resolved = resolve_deleter_with_metadata(params=params, deleter=None)
 
         self.assertIsInstance(resolved.deleter, TOMHTMissCountDeleter)
+        self.assertIsInstance(resolved.fast_deleter, FastMissCountDeleter)
         self.assertEqual("miss", resolved.reason)
         self.assertEqual(4, resolved.miss_threshold)
         self.assertTrue(
@@ -318,6 +320,49 @@ class TOMHTLifecycleIntegrationTest(unittest.TestCase):
         self.assertFalse(
             resolved.deleter.check_for_deletion(
                 Track(init_metadata={"missed_count": 3})
+            )
+        )
+        leaf = TrackHypothesisNode(
+            node_id=0,
+            track_id=0,
+            parent=None,
+            scan_index=0,
+            timestamp=datetime.datetime(2026, 3, 28, 10, 0, 0),
+            state=_state(0.0, datetime.datetime(2026, 3, 28, 10, 0, 0)),
+            state_kind="root",
+            used_det_key=None,
+            assoc_label=-2,
+            log_delta=0.0,
+            accumulated_log_score=0.0,
+            detection_history_keys=frozenset(),
+            age=1,
+            hits=0,
+            missed_count=4,
+            last_det_key=None,
+            last_det_hit=False,
+            root_source="external",
+            birth_scan_index=0,
+        )
+        tree = TrackTree(
+            track_id=0,
+            root_node_id=0,
+            active_leaf_node_ids={0},
+            root_source="external",
+            lifecycle_state="confirmed",
+            publication_state="published",
+        )
+        assert resolved.fast_deleter is not None
+        self.assertTrue(
+            resolved.fast_deleter.check_for_deletion(
+                leaf_node=leaf,
+                track_tree=tree,
+            )
+        )
+        leaf.missed_count = 3
+        self.assertFalse(
+            resolved.fast_deleter.check_for_deletion(
+                leaf_node=leaf,
+                track_tree=tree,
             )
         )
 
