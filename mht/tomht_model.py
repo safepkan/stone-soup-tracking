@@ -42,6 +42,9 @@ class TrackHypothesisNode:
     assoc_label: int
     log_delta: float
     accumulated_log_score: float
+    # Detection keys cached for conflict checks. New descendants omit keys that
+    # were already committed when they were created; keys committed later may
+    # remain here and are masked by TrackTree.committed_detection_keys.
     detection_history_keys: frozenset[DetectionKey]
 
     age: int

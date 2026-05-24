@@ -464,6 +464,10 @@ class TOMHTOutputIntegrationTest(unittest.TestCase):
                 tree=tree_after_second_prune,
             ),
         )
+        self.assertEqual(
+            frozenset({(2, 0), (3, 0)}),
+            scan3_leaf.detection_history_keys,
+        )
         committed_x = [
             float(np.asarray(state.state_vector, dtype=float).reshape(-1)[0])
             for state in tree_after_second_prune.committed_states

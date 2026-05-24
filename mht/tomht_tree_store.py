@@ -78,6 +78,10 @@ class TrackTreeStore:
                 log_delta
             )
 
+        tree = self.track_trees_by_track_id.get(int(track_id))
+        if tree is not None and tree.committed_detection_keys:
+            history_keys = frozenset(history_keys - tree.committed_detection_keys)
+
         node = TrackHypothesisNode(
             node_id=self.allocate_node_id(),
             track_id=int(track_id),

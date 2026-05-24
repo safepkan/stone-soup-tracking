@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, smoke-runner parameter reset, and lifecycle fast-deleter cleanup completed through **2026-05-24**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, active detection-history trimming, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, smoke-runner parameter reset, and lifecycle fast-deleter cleanup completed through **2026-05-24**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -504,15 +504,21 @@ tuple with `scan_index` and `det_index` fields, so it remains usable as an
 immutable set/dict key while call sites that inspect the components avoid
 positional indexing.
 
-Each node still caches its full lineage in `detection_history_keys`, while each
-`TrackTree` stores detection keys from branch decisions fixed by N-scan
-promotion in `committed_detection_keys`. Active conflict keys are computed as:
+Each node caches detection keys needed for unresolved conflict checks in
+`detection_history_keys`. New child nodes drop keys that are already present in
+the tree's committed prefix at creation time, while each `TrackTree` still
+stores detection keys from branch decisions fixed by N-scan promotion in
+`committed_detection_keys`. Active conflict keys are computed as:
 
 ```text
 leaf.detection_history_keys - tree.committed_detection_keys
 ```
 
-This keeps clustering and solver feasibility aligned while avoiding constraints from committed pre-root history that the current unresolved frontier can no longer change.
+This keeps clustering and solver feasibility aligned while avoiding constraints
+from committed pre-root history that the current unresolved frontier can no
+longer change. Active leaves created before the latest N-scan promotion may
+still contain keys that have since become committed; the live-key subtraction
+masks those until descendants are created.
 Historical-conflict relaxation has been removed from this path.
 
 ### Global rebuild
