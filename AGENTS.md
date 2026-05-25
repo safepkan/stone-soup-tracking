@@ -72,7 +72,7 @@
   - `outputs/` = replay outputs/logs/profiles (local working artifacts)
 - Standard command from the `l2-sp` clone root (or any equivalent clone that
   contains `python.pipeline.batch_mcap_replay`):
-  - `source venv/bin/activate && python -m python.pipeline.batch_mcap_replay replay/inputs/cpi_replay_2025-12-10_173948.mcap --include-tracker --tracker-type stonesoup-mht --max-cpis 400 --output-path replay/outputs/standard_replay_default`
-- For backend/config overrides, add:
-  - `--tracker-param-override-file replay/overrides/<file>.json`
+  - `source venv/bin/activate && python -m python.pipeline.batch_mcap_replay ../stone-soup-tracking/replay/inputs/cpi_replay_2025-12-10_173948.mcap --include-tracker --tracker-type stonesoup-mht --max-cpis 400 --tracker-param-override-file ../stone-soup-tracking/replay/overrides/tracker_standard_replay.json --output-path ../stone-soup-tracking/replay/outputs/standard_replay_default`
+- For backend/config overrides, add them after the standard replay override:
+  - `--tracker-param-override-file ../stone-soup-tracking/replay/overrides/<file>.json`
 - See `replay/README.md` for examples.

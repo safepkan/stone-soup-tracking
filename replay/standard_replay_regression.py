@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 import os
 from pathlib import Path
 import re
@@ -27,6 +28,9 @@ from replay.regression_common import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INPUT_MCAP = REPO_ROOT / "replay" / "inputs" / "cpi_replay_2025-12-10_173948.mcap"
+STANDARD_TRACKER_OVERRIDE_PATH = (
+    REPO_ROOT / "replay" / "overrides" / "tracker_standard_replay.json"
+)
 
 BASELINE_DIR = REPO_ROOT / "replay" / "replay_baselines"
 BASELINE_RAW_PATH = BASELINE_DIR / "standard_replay_default.raw.log"
@@ -105,8 +109,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tracker-param-override-file",
         type=Path,
+        action="append",
         default=None,
-        help="Optional tracker override JSON path.",
+        help=(
+            "Optional tracker override JSON path. Repeatable; files are "
+            "passed after the standard replay override, so later files can "
+            "override standard replay defaults."
+        ),
     )
     parser.add_argument(
         "--keep-output-artifacts",
@@ -177,11 +186,51 @@ def _resolve_replay_python(replay_repo: Path, replay_python: Path | None) -> Pat
     )
 
 
-def _resolve_override_path(path: Path | None) -> Path | None:
-    if path is None:
-        return None
+def _resolve_override_path(path: Path, *, label: str) -> Path:
     candidate = path if path.is_absolute() else REPO_ROOT / path
-    return _require_existing_path(candidate, label="Tracker override file")
+    return _require_existing_path(candidate, label=label)
+
+
+def _resolve_tracker_override_paths(paths: Sequence[Path] | None) -> list[Path]:
+    resolved = [
+        _resolve_override_path(
+            STANDARD_TRACKER_OVERRIDE_PATH,
+            label="Standard replay tracker override file",
+        )
+    ]
+    for path in paths or ():
+        resolved.append(_resolve_override_path(path, label="Tracker override file"))
+    return resolved
+
+
+def _build_standard_replay_command(
+    *,
+    replay_python: Path,
+    replay_output_root: Path,
+    max_cpis: int,
+    tracker_overrides: Sequence[Path],
+) -> list[str]:
+    cmd = [
+        str(replay_python),
+        "-m",
+        "python.pipeline.batch_mcap_replay",
+        str(INPUT_MCAP),
+        "--include-tracker",
+        "--tracker-type",
+        "stonesoup-mht",
+        "--max-cpis",
+        str(max_cpis),
+        "--output-path",
+        str(replay_output_root),
+    ]
+    for tracker_override in tracker_overrides:
+        cmd.extend(
+            [
+                "--tracker-param-override-file",
+                str(tracker_override),
+            ]
+        )
+    return cmd
 
 
 def _normalize_output(
@@ -217,7 +266,7 @@ def _run_standard_replay(
     replay_repo: Path,
     replay_python: Path,
     max_cpis: int,
-    tracker_override: Path | None,
+    tracker_overrides: Sequence[Path],
     keep_output_artifacts: bool,
     output_root: Path | None,
     expansion_frontier: bool,
@@ -237,26 +286,12 @@ def _run_standard_replay(
             tempfile.mkdtemp(prefix="standard_replay_regression_", dir="/tmp")
         )
 
-    cmd = [
-        str(replay_python),
-        "-m",
-        "python.pipeline.batch_mcap_replay",
-        str(INPUT_MCAP),
-        "--include-tracker",
-        "--tracker-type",
-        "stonesoup-mht",
-        "--max-cpis",
-        str(max_cpis),
-        "--output-path",
-        str(replay_output_root),
-    ]
-    if tracker_override is not None:
-        cmd.extend(
-            [
-                "--tracker-param-override-file",
-                str(tracker_override),
-            ]
-        )
+    cmd = _build_standard_replay_command(
+        replay_python=replay_python,
+        replay_output_root=replay_output_root,
+        max_cpis=max_cpis,
+        tracker_overrides=tracker_overrides,
+    )
 
     env = os.environ.copy()
     if expansion_frontier:
@@ -408,16 +443,20 @@ def main() -> int:
     replay_repo = _require_existing_path(args.replay_repo, label="Replay repo")
     replay_python = _resolve_replay_python(replay_repo, args.replay_python)
     _require_existing_path(INPUT_MCAP, label="Input MCAP")
-    tracker_override = _resolve_override_path(args.tracker_param_override_file)
+    tracker_overrides = _resolve_tracker_override_paths(
+        args.tracker_param_override_file
+    )
 
     print(f"[run] replay_repo={replay_repo}")
     print(f"[run] replay_python={replay_python}")
+    for tracker_override in tracker_overrides:
+        print(f"[run] tracker_param_override_file={tracker_override}")
     raw_output, normalized_lines, replay_output_root, replayed_mcap_path = (
         _run_standard_replay(
             replay_repo=replay_repo,
             replay_python=replay_python,
             max_cpis=args.max_cpis,
-            tracker_override=tracker_override,
+            tracker_overrides=tracker_overrides,
             keep_output_artifacts=bool(args.keep_output_artifacts),
             output_root=args.output_root,
             expansion_frontier=bool(args.expansion_frontier),

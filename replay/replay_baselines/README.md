@@ -1,7 +1,10 @@
 # Standard Replay Baselines
 
 This directory stores versioned baseline artifacts for the canonical standard
-replay command.
+replay command. The canonical command includes
+`replay/overrides/tracker_standard_replay.json` so replay diagnostics remain
+explicit even if the sibling tracker integration stops setting those flags in
+code.
 
 Files:
 

@@ -29,6 +29,7 @@ REPLAY_PROFILE_PATH ?= $(REPLAY_PROFILE_DIR)/$(REPLAY_PROFILE_NAME).prof
 REPLAY_PROFILE_LOG ?= $(REPLAY_PROFILE_DIR)/$(REPLAY_PROFILE_NAME).log
 REPLAY_PROFILE_MCAP ?= $(REPLAY_PROFILE_DIR)/$(REPLAY_PROFILE_NAME).replayed.mcap
 REPLAY_PROFILE_EXTRA_ARGS ?=
+REPLAY_STANDARD_OVERRIDE ?= $(CURDIR)/replay/overrides/tracker_standard_replay.json
 REPLAY_DIM3_OVERRIDE ?= $(CURDIR)/replay/overrides/tracker_dim_3.json
 SNAKEVIZ_HOST ?= 127.0.0.1
 SNAKEVIZ_PORT ?= 8090
@@ -107,7 +108,7 @@ replay_compare_timing:
 .PHONY: replay_profile
 replay_profile:
 	mkdir -p "$(REPLAY_PROFILE_DIR)"
-	cd "$(REPLAY_REPO)" && . "$(REPLAY_VENV)/bin/activate" && XDG_CACHE_HOME=/tmp/.cache MPLCONFIGDIR=/tmp/mplconfig MPLBACKEND=Agg TOMHT_NO_SHOW=1 python -m cProfile -o "$(REPLAY_PROFILE_PATH)" -m python.pipeline.mcap_replay "$(REPLAY_INPUT)" -o "$(REPLAY_PROFILE_MCAP)" --force --include-tracker --tracker-type stonesoup-mht --max-cpis "$(REPLAY_PROFILE_MAX_CPIS)" $(REPLAY_PROFILE_EXTRA_ARGS) > "$(REPLAY_PROFILE_LOG)" 2>&1
+	cd "$(REPLAY_REPO)" && . "$(REPLAY_VENV)/bin/activate" && XDG_CACHE_HOME=/tmp/.cache MPLCONFIGDIR=/tmp/mplconfig MPLBACKEND=Agg TOMHT_NO_SHOW=1 python -m cProfile -o "$(REPLAY_PROFILE_PATH)" -m python.pipeline.mcap_replay "$(REPLAY_INPUT)" -o "$(REPLAY_PROFILE_MCAP)" --force --include-tracker --tracker-type stonesoup-mht --max-cpis "$(REPLAY_PROFILE_MAX_CPIS)" --tracker-param-override-file "$(REPLAY_STANDARD_OVERRIDE)" $(REPLAY_PROFILE_EXTRA_ARGS) > "$(REPLAY_PROFILE_LOG)" 2>&1
 	. "$(ENV)/bin/activate" && python replay/timing_summary_from_log.py "$(REPLAY_PROFILE_LOG)"
 	@echo "[profile] profile: $(REPLAY_PROFILE_PATH)"
 	@echo "[profile] log: $(REPLAY_PROFILE_LOG)"

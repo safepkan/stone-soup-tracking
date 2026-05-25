@@ -14,6 +14,11 @@ now reuses the branch-and-bound solver's ordered track / conflict-mask search
 preparation and performs an early-exit existence search; exact K-best solver
 behavior is unchanged.
 
+Update (2026-05-25): standard MCAP replay commands now carry replay diagnostics
+through `replay/overrides/tracker_standard_replay.json` instead of relying on
+the sibling `l2-sp` `StoneSoupMhtTracker` integration to hard-code TOMHT debug
+flags. Additional replay override files are layered after that standard file.
+
 ---
 
 ## Bottom line

@@ -1,0 +1,8 @@
+{
+  "tomht_params": {
+    "debug_display_detections": false,
+    "debug_display_scan_stats": true,
+    "debug_display_hypotheses": true,
+    "debug_display_births": true
+  }
+}

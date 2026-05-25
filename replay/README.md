@@ -34,12 +34,16 @@ python -m python.pipeline.batch_mcap_replay \
   --include-tracker \
   --tracker-type stonesoup-mht \
   --max-cpis 400 \
+  --tracker-param-override-file ../stone-soup-tracking/replay/overrides/tracker_standard_replay.json \
   --output-path ../stone-soup-tracking/replay/outputs/standard_replay_default
 ```
 
 ## Using JSON Overrides
 
-Pass a JSON file with TOMHT parameter overrides:
+Always pass the standard replay override first, then add any experiment-specific
+override files after it. The replay CLI accepts repeated
+`--tracker-param-override-file` arguments and deep-merges them in order, so
+later files override earlier files when they touch the same key.
 
 ```bash
 source venv/bin/activate
@@ -48,9 +52,17 @@ python -m python.pipeline.batch_mcap_replay \
   --include-tracker \
   --tracker-type stonesoup-mht \
   --max-cpis 400 \
+  --tracker-param-override-file ../stone-soup-tracking/replay/overrides/tracker_standard_replay.json \
   --tracker-param-override-file ../stone-soup-tracking/replay/overrides/tracker_backend_ortools.json \
   --output-path ../stone-soup-tracking/replay/outputs/standard_replay_ortools
 ```
+
+Standard replay override:
+
+- `replay/overrides/tracker_standard_replay.json`: keeps replay diagnostics
+  explicit (`debug_display_detections=false`,
+  `debug_display_scan_stats=true`, `debug_display_hypotheses=true`,
+  `debug_display_births=true`).
 
 Available backend override templates:
 
@@ -73,6 +85,12 @@ Heavyweight optional regression check for the canonical replay command:
 source venv/bin/activate
 python replay/standard_replay_regression.py compare
 ```
+
+The regression wrapper always passes
+`replay/overrides/tracker_standard_replay.json` to the sibling replay CLI.
+Any `--tracker-param-override-file` arguments supplied to the wrapper are passed
+after the standard file, preserving the same later-files-win merge behavior as
+manual replay commands.
 
 This command compares only normalized output and stores latest run artifacts for
 inspection under:
@@ -106,8 +124,9 @@ source venv/bin/activate
 make replay_run_dim3
 ```
 
-This uses `replay/overrides/tracker_dim_3.json` and writes the same latest
-artifact paths as the other standard replay `run` commands.
+This uses `replay/overrides/tracker_standard_replay.json` followed by
+`replay/overrides/tracker_dim_3.json` and writes the same latest artifact paths
+as the other standard replay `run` commands.
 
 Versioned golden baseline artifacts are stored in:
 
@@ -135,7 +154,10 @@ make replay_profile
 
 The profiling target runs the single-file `python.pipeline.mcap_replay` command
 directly, because profiling the batch wrapper would mostly measure subprocess
-waiting. It writes artifacts under `replay/outputs/profiles/`:
+waiting. It includes `replay/overrides/tracker_standard_replay.json` before
+`REPLAY_PROFILE_EXTRA_ARGS`, so additional profile overrides can be layered in
+the same way as normal replay runs. It writes artifacts under
+`replay/outputs/profiles/`:
 
 - `standard_replay_mcap_replay_400.prof`
 - `standard_replay_mcap_replay_400.log`
