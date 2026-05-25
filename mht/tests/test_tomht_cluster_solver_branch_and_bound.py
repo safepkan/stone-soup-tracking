@@ -10,6 +10,7 @@ from mht.tomht_cluster_solver import (
 )
 from mht.tomht_cluster_solver_branch_and_bound import BranchAndBoundClusterSolver
 from mht.tomht_cluster_solver_exhaustive import ExhaustiveClusterSolver
+from mht.tomht_cluster_solver_search import has_any_feasible_solver_combination
 from mht.tomht_model import DetectionKey
 
 
@@ -319,6 +320,79 @@ class TOMHTClusterSolverBranchAndBoundTest(unittest.TestCase):
             set(_selection_key(bnb_result)),
         )
         self.assertEqual(_score_map(exhaustive_result), _score_map(bnb_result))
+
+    def test_feasibility_probe_matches_exhaustive_empty_solution_status(self) -> None:
+        infeasible_problem = ClusterSolverProblem(
+            track_options=(
+                ClusterSolverTrackOptions(
+                    track_id=0,
+                    leaf_options=(
+                        _leaf(
+                            leaf_id=10,
+                            track_id=0,
+                            score=0.0,
+                            conflict_keys={(3, 0)},
+                        ),
+                    ),
+                ),
+                ClusterSolverTrackOptions(
+                    track_id=1,
+                    leaf_options=(
+                        _leaf(
+                            leaf_id=20,
+                            track_id=1,
+                            score=0.0,
+                            conflict_keys={(3, 0)},
+                        ),
+                    ),
+                ),
+            ),
+            max_results=3,
+        )
+        feasible_problem = ClusterSolverProblem(
+            track_options=(
+                ClusterSolverTrackOptions(
+                    track_id=0,
+                    leaf_options=(
+                        _leaf(
+                            leaf_id=10,
+                            track_id=0,
+                            score=0.0,
+                            conflict_keys={(3, 0)},
+                        ),
+                        _leaf(
+                            leaf_id=11,
+                            track_id=0,
+                            score=0.0,
+                            conflict_keys=set(),
+                        ),
+                    ),
+                ),
+                ClusterSolverTrackOptions(
+                    track_id=1,
+                    leaf_options=(
+                        _leaf(
+                            leaf_id=20,
+                            track_id=1,
+                            score=0.0,
+                            conflict_keys={(3, 0)},
+                        ),
+                    ),
+                ),
+            ),
+            max_results=3,
+        )
+
+        self.assertFalse(has_any_feasible_solver_combination(infeasible_problem))
+        self.assertEqual(
+            (), ExhaustiveClusterSolver().solve(infeasible_problem).solutions
+        )
+
+        self.assertTrue(has_any_feasible_solver_combination(feasible_problem))
+        self.assertNotEqual(
+            (),
+            ExhaustiveClusterSolver().solve(feasible_problem).solutions,
+        )
 
 
 if __name__ == "__main__":

@@ -2,11 +2,17 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, active detection-history trimming, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, smoke-runner parameter reset, and lifecycle fast-deleter cleanup completed through **2026-05-24**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, active detection-history trimming, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, smoke-runner parameter reset, lifecycle fast-deleter cleanup, and feasibility-probe search cleanup completed through **2026-05-25**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
 The long dated update stack from the previous version has been consolidated into the main text below. The recent scoring/start/lifecycle/API work gave the tracker coherent score semantics and a usable integration boundary. The subsequent expansion/frontier pass removed the main known frontier-control blocker by making overload splitting sound, restoring uniform supported-leaf pruning, and cleaning up expansion-related defaults.
+
+Update (2026-05-25): the opt-in pruning feasibility validation probe no longer
+uses exhaustive leaf-product enumeration with per-candidate set operations. It
+now reuses the branch-and-bound solver's ordered track / conflict-mask search
+preparation and performs an early-exit existence search; exact K-best solver
+behavior is unchanged.
 
 ---
 
@@ -411,6 +417,7 @@ Legacy `metadata["track_id"]` is a deprecated compatibility alias for the intern
 A dedicated solver seam exists:
 
 - `tomht_cluster_solver.py`: solver-facing problem/result/diagnostics contract,
+- `tomht_cluster_solver_search.py`: shared ordered-track/conflict-mask search helpers,
 - `tomht_cluster_solver_exhaustive.py`: exhaustive reference backend,
 - `tomht_cluster_solver_branch_and_bound.py`: current default exact backend,
 - `tomht_cluster_solver_ortools.py`: experimental exact CP-SAT backend,

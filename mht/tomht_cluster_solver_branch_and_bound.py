@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from .tomht_model import DetectionKey
-
 from .tomht_cluster_solver import (
     ClusterSolverDiagnostics,
     ClusterSolverProblem,
@@ -14,16 +10,10 @@ from .tomht_cluster_solver import (
     TopKSolutionHeap,
     validate_cluster_solver_problem,
 )
-
-
-@dataclass(frozen=True)
-class _OrderedTrackOptions:
-    """One track's search metadata after deterministic ordering."""
-
-    track_id: int
-    # Per-leaf tuple layout: (leaf_id, score, conflict_mask).
-    leaf_options: tuple[tuple[int, float, int], ...]
-    conflict_burden: int
+from .tomht_cluster_solver_search import (
+    prepare_ordered_tracks_for_search,
+    suffix_best_score_by_depth,
+)
 
 
 class BranchAndBoundClusterSolver:
@@ -55,8 +45,8 @@ class BranchAndBoundClusterSolver:
         if len(problem.track_options) == 1:
             return self._solve_one_track_fast_path(problem)
 
-        ordered_tracks = _prepare_ordered_tracks_for_search(problem)
-        suffix_best_score = _suffix_best_score_by_depth(ordered_tracks)
+        ordered_tracks = prepare_ordered_tracks_for_search(problem)
+        suffix_best_score = suffix_best_score_by_depth(ordered_tracks)
         track_count = len(ordered_tracks)
         ordered_track_ids = tuple(track.track_id for track in ordered_tracks)
 
@@ -216,83 +206,3 @@ class BranchAndBoundClusterSolver:
             complete_feasible_solutions=complete_feasible_solutions,
         )
         return ClusterSolverResult(solutions=solutions)
-
-
-def _prepare_ordered_tracks_for_search(
-    problem: ClusterSolverProblem,
-) -> tuple[_OrderedTrackOptions, ...]:
-    """Order tracks and precompute compact per-leaf search tuples."""
-    key_to_track_ids: dict[DetectionKey, set[int]] = {}
-    keys_by_track_id: dict[int, set[DetectionKey]] = {}
-
-    for track in problem.track_options:
-        track_id = int(track.track_id)
-        track_keys = keys_by_track_id.setdefault(track_id, set())
-        for leaf in track.leaf_options:
-            for key in leaf.full_history_conflict_keys:
-                track_keys.add(key)
-                key_to_track_ids.setdefault(key, set()).add(track_id)
-
-    shared_history_key_bit_by_key: dict[DetectionKey, int] = {}
-    next_bit_index = 0
-    for key, track_ids in key_to_track_ids.items():
-        if len(track_ids) <= 1:
-            continue
-        shared_history_key_bit_by_key[key] = 1 << next_bit_index
-        next_bit_index += 1
-
-    ordered_tracks: list[_OrderedTrackOptions] = []
-    for track in problem.track_options:
-        track_id = int(track.track_id)
-        conflict_burden = sum(
-            1
-            for key in keys_by_track_id.get(track_id, set())
-            if len(key_to_track_ids.get(key, set())) > 1
-        )
-        ordered_leaf_options_list: list[tuple[int, float, int]] = []
-        for _, leaf in sorted(
-            enumerate(track.leaf_options),
-            key=lambda item: (-float(item[1].score), int(item[0])),
-        ):
-            conflict_mask = 0
-            for key in leaf.full_history_conflict_keys:
-                bit = shared_history_key_bit_by_key.get(key)
-                if bit is None:
-                    continue
-                conflict_mask |= bit
-            ordered_leaf_options_list.append(
-                (
-                    int(leaf.leaf_id),
-                    float(leaf.score),
-                    conflict_mask,
-                )
-            )
-        ordered_leaf_options = tuple(ordered_leaf_options_list)
-        ordered_tracks.append(
-            _OrderedTrackOptions(
-                track_id=track_id,
-                leaf_options=ordered_leaf_options,
-                conflict_burden=conflict_burden,
-            )
-        )
-
-    ordered_tracks.sort(
-        key=lambda track: (
-            len(track.leaf_options),
-            -int(track.conflict_burden),
-            int(track.track_id),
-        )
-    )
-    return tuple(ordered_tracks)
-
-
-def _suffix_best_score_by_depth(
-    ordered_tracks: tuple[_OrderedTrackOptions, ...],
-) -> tuple[float, ...]:
-    """Compute optimistic suffix bounds by remaining search depth."""
-    suffix_best_score = [0.0 for _ in range(len(ordered_tracks) + 1)]
-    for depth in range(len(ordered_tracks) - 1, -1, -1):
-        track = ordered_tracks[depth]
-        best_track_score = float(track.leaf_options[0][1])
-        suffix_best_score[depth] = suffix_best_score[depth + 1] + best_track_score
-    return tuple(suffix_best_score)

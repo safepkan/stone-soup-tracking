@@ -9,7 +9,6 @@ strategy-specific recursion lives in the greedy/conditional modules.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from itertools import product
 from typing import Mapping, TypeAlias
 
 from .tomht_clustering import (
@@ -26,6 +25,7 @@ from .tomht_cluster_solver import (
     ClusterSolverTrackOptions,
     missing_cluster_solver_diagnostics,
 )
+from .tomht_cluster_solver_search import has_any_feasible_solver_combination
 from .tomht_model import DetectionKey, GlobalHypothesis, ScanContext
 from .tomht_model import TrackHypothesisNode
 from .tomht_params import TOMHTParams
@@ -128,26 +128,32 @@ def has_any_feasible_cluster_combination(
     tree_store: TrackTreeStore,
 ) -> bool:
     """Return whether at least one cluster leaf-product combination is feasible."""
-    prepared: list[list[tuple[TrackHypothesisNode, set[DetectionKey]]]] = []
+    track_options: list[ClusterSolverTrackOptions] = []
     for idx, track_id in enumerate(cluster.track_ids):
         tree = tree_store.track_trees_by_track_id[track_id]
-        prepared.append(
-            [
-                (leaf, set(live_conflict_keys_for_leaf(leaf=leaf, tree=tree)))
-                for leaf in leaf_options[idx]
-            ]
+        solver_leaf_options = tuple(
+            ClusterSolverLeafOption(
+                leaf_id=int(leaf.node_id),
+                track_id=int(track_id),
+                score=float(leaf.accumulated_log_score),
+                full_history_conflict_keys=frozenset(
+                    live_conflict_keys_for_leaf(leaf=leaf, tree=tree)
+                ),
+            )
+            for leaf in leaf_options[idx]
         )
-    for picked in product(*prepared):
-        used_keys: set[DetectionKey] = set()
-        feasible = True
-        for _, leaf_keys in picked:
-            if used_keys & leaf_keys:
-                feasible = False
-                break
-            used_keys |= leaf_keys
-        if feasible:
-            return True
-    return False
+        if not solver_leaf_options:
+            return False
+        track_options.append(
+            ClusterSolverTrackOptions(
+                track_id=int(track_id),
+                leaf_options=solver_leaf_options,
+            )
+        )
+
+    return has_any_feasible_solver_combination(
+        ClusterSolverProblem(track_options=tuple(track_options), max_results=1)
+    )
 
 
 def is_global_feasible_under_live_conflicts(

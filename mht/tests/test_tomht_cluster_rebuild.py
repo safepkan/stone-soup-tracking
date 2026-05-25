@@ -13,6 +13,8 @@ from mht.tests.tomht_tracker_test_support import (
 )
 from mht.tomht_clustering import build_track_clusters
 from mht.tomht_cluster_rebuild import (
+    cluster_leaf_options,
+    has_any_feasible_cluster_combination,
     is_global_feasible_under_live_conflicts,
     rebuild_cluster_globals,
 )
@@ -97,6 +99,63 @@ class TOMHTClusterRebuildIntegrationTest(unittest.TestCase):
         assert map_global is not None
         self.assertIs(map_global.leaf_nodes_by_track_id[track0_id], track0_miss)
         self.assertIs(map_global.leaf_nodes_by_track_id[track1_id], track1_hit)
+
+    def test_feasibility_probe_uses_live_conflict_keys(self) -> None:
+        shared_key = DetectionKey(scan_index=2, det_index=0)
+
+        infeasible_store = TrackTreeStore()
+        left_id, _ = _add_manual_tree_with_live_options(
+            infeasible_store,
+            root_x=0.0,
+            live_options=[(shared_key, 1.0)],
+        )
+        right_id, _ = _add_manual_tree_with_live_options(
+            infeasible_store,
+            root_x=10.0,
+            live_options=[(shared_key, 1.0)],
+        )
+        infeasible_cluster = _manual_cluster_for_track_ids(
+            store=infeasible_store,
+            track_ids=(left_id, right_id),
+            scan_index=2,
+        )
+        self.assertFalse(
+            has_any_feasible_cluster_combination(
+                cluster=infeasible_cluster,
+                leaf_options=cluster_leaf_options(
+                    track_ids=infeasible_cluster.track_ids,
+                    tree_store=infeasible_store,
+                ),
+                tree_store=infeasible_store,
+            )
+        )
+
+        feasible_store = TrackTreeStore()
+        left_id, _ = _add_manual_tree_with_live_options(
+            feasible_store,
+            root_x=0.0,
+            live_options=[(shared_key, 1.0), (None, 0.0)],
+        )
+        right_id, _ = _add_manual_tree_with_live_options(
+            feasible_store,
+            root_x=10.0,
+            live_options=[(shared_key, 1.0)],
+        )
+        feasible_cluster = _manual_cluster_for_track_ids(
+            store=feasible_store,
+            track_ids=(left_id, right_id),
+            scan_index=2,
+        )
+        self.assertTrue(
+            has_any_feasible_cluster_combination(
+                cluster=feasible_cluster,
+                leaf_options=cluster_leaf_options(
+                    track_ids=feasible_cluster.track_ids,
+                    tree_store=feasible_store,
+                ),
+                tree_store=feasible_store,
+            )
+        )
 
     def test_overload_solve_returns_one_original_cluster_snapshot(self) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
