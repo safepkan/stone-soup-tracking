@@ -20,6 +20,7 @@ The `Makefile` provides a few convenience targets:
 
 - `make setup_venv` creates a venv and installs `requirements.txt`.
 - `make update_venv` updates dependencies in the existing venv.
+- `make mht_tests` runs all TO-MHT unit tests under `mht/tests`.
 - `make smoke` runs both TO-MHT scenario smoke scripts headless.
 - `make smoke_compare` runs normalized smoke-output regression against versioned baselines.
 - `make smoke_compare_timing` runs smoke comparison and also prints timing-summary diff from raw logs.
@@ -130,6 +131,5 @@ Current CI job:
 Unit tests for the TO-MHT work live under `mht/tests`.
 
 ```bash
-source venv/bin/activate
-python -m unittest discover -s mht/tests -p 'test_*.py'
+make mht_tests
 ```
