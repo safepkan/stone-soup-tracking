@@ -50,11 +50,30 @@ provided the Stone Soup components and probabilistic assumptions.
 
 ## 2. Core tracker usage
 
+### Importing
+
+The stable public API is re-exported from `mht.api`:
+
+```python
+from mht.api import (
+    TOMHTTracker,
+    TOMHTParams,
+    DetectionProbabilityModel,
+    ConstantDetectionProbabilityModel,
+)
+```
+
+Import integration code against `mht.api`, not the internal `mht.tomht_*`
+modules. The inspection/debug snapshot types and the `tomht_*` modules are not
+part of this stable surface and may change without notice.
+
 ### Typical setup
 
 The basic setup is:
 
 ```python
+from mht.api import TOMHTTracker
+
 tracker = TOMHTTracker(
     updater=updater,
     predictor=predictor,  # pass predictor= OR hypothesiser=, not both
