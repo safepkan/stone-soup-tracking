@@ -3,7 +3,7 @@
 Status/positioning:
 - This backend is exact under the current cluster-solver contract.
 - In the current K-best extraction form (repeated solves + no-good cuts), it is
-  not a runtime win on the primary replay workload used during this phase.
+  not a runtime win on the primary replay workload.
 - It is retained for comparison, fallback exact solving, and future experiments
   (for example hybrid backend selection or alternative K-best extraction methods).
 
@@ -57,8 +57,8 @@ class ORToolsClusterSolver:
     """Experimental exact backend: CP-SAT + repeated no-good cuts for K-best.
 
     Operational expectation:
-    - Keep exhaustive as the recommended default backend for current replay
-      workloads in this phase.
+    - Keep branch-and-bound as the recommended default backend for current
+      replay workloads.
     - Use this backend as an exact experimental/reference path and when
       profiling solver behavior.
 

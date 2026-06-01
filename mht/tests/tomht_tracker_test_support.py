@@ -453,7 +453,6 @@ def _run_post_n_scan_lifecycle(
         lifecycle_deleter_stats=lifecycle_deleter_stats,
     )
     tracker._last_map_global = filtered
-    tracker.global_hypotheses = [filtered]
     return filtered
 
 

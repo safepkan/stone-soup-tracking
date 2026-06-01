@@ -27,7 +27,7 @@ TrackPublicationState: TypeAlias = Literal["unpublished", "published"]
 class TrackHypothesisNode:
     """One hypothesis node within one logical track tree.
 
-    Nodes are mutable in this phase to allow direct child-link maintenance
+    Nodes are mutable to allow direct child-link maintenance
     (``child_node_ids``). Parent links remain same-track only.
     """
 

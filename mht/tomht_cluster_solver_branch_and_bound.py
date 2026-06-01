@@ -1,4 +1,4 @@
-"""Experimental exact depth-first branch-and-bound cluster solver backend."""
+"""Exact depth-first branch-and-bound cluster solver backend (the default)."""
 
 from __future__ import annotations
 

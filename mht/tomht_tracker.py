@@ -19,7 +19,7 @@ Core control APIs:
 - ``add_external_starts(time,starts)``: inject confirmed external starts after the
   same-timestamp ``update_tracker()`` call.
 
-Track-oriented architecture in this phase:
+Track-oriented architecture:
 - persistent state is explicit ``TrackTree`` objects and their active leaves,
 - globals are rebuilt per cluster on every scan from current leaves,
 - the previous scan's explicit global list is not the persistent search frontier.
@@ -350,10 +350,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         # Last-scan rebuilt artifacts retained for inspection only.
         self._last_cluster_snapshots: list[ClusterRebuildSnapshot] = []
-        self.global_hypotheses: list[GlobalHypothesis] = [
-            GlobalHypothesis(leaf_nodes_by_track_id={}, log_weight=0.0)
-        ]
-        self._last_map_global: GlobalHypothesis = self.global_hypotheses[0]
+        self._last_map_global: GlobalHypothesis = GlobalHypothesis(
+            leaf_nodes_by_track_id={}, log_weight=0.0
+        )
 
         # N-scan bookkeeping snapshots.
         self._nscan_commitment_snapshot = NScanCommitmentSnapshot(
@@ -523,9 +522,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         )
         self._last_cluster_snapshots = cluster_snapshots
 
-        # Keep one full-scan MAP global in compatibility slot for old inspection paths.
+        # Retain the full-scan MAP global for inspection snapshots.
         self._last_map_global = map_global
-        self.global_hypotheses = [map_global]
         publication_ms = elapsed_ms(phase_start_ns)
         phase_start_ns = start_timer()
 
@@ -648,7 +646,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._last_map_global = result.map_global
         self._apply_score_based_track_confirmation()
         self._apply_output_publication(self._last_map_global)
-        self.global_hypotheses = [self._last_map_global]
 
     def get_unused_detections(self) -> list[Detection]:
         """Return residual detections from the most recent completed update."""
