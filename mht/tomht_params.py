@@ -14,19 +14,23 @@ from .tomht_scoring import _existence_probability_to_log_odds
 class TOMHTParams:
     """Flat tracker configuration for the track-oriented TO-MHT implementation.
 
-    Stable operational controls:
-    - per-leaf local branching and local frontier safety-valves,
-    - track-tree miss termination after N-scan pruning,
-    - MAP-only N-scan pruning window,
-    - optional debug/stat visibility toggles.
+    Core search controls (part of the normal frontier-control stack):
+    - ``max_children_per_leaf``: per-active-leaf local branching breadth
+      (core, but can be effectively disabled with a very high value),
+    - ``max_global_hypotheses`` (K): per-cluster K-best retained-global breadth,
+    - ``ns_scan_window`` (N): MAP-only N-scan pruning depth.
 
-    Compatibility note:
-    ``max_global_hypotheses`` is retained as a cap for how many rebuilt globals
-    are kept per cluster for debug/snapshot storage; it is no longer a persistent
-    beam frontier carried scan-to-scan.
+    Other operational controls:
+    - track-tree miss termination after N-scan pruning,
+    - start priors, lifecycle, confirmation/deletion, and publication gates,
+    - pre-solve and internal-birth tractability guardrails,
+    - optional debug/stat visibility toggles.
     """
 
-    # Local expansion / lifecycle controls.
+    # Core search control: per-active-leaf local branching cap - hit/miss
+    # continuation candidates retained per expanded leaf (the miss alternative is
+    # always preserved). The default is loose enough that it usually does not
+    # bind; a very high value disables it, leaving search shape to K and N.
     max_children_per_leaf: int = 5
     # Optional pre-solve per-tree frontier cap used only as a safety valve.
     # The high default keeps this in a tractability guardrail role, not as the
@@ -52,7 +56,11 @@ class TOMHTParams:
     #   threshold (fallback to active leaves if unavailable after N-scan)
     track_miss_termination_mode: str = "map_leaf"
 
-    # Rebuilt-global storage cap (debug/inspection cap, not persistent beam state).
+    # Core search control (K): per-cluster K-best retained globals per update
+    # (the solver's max_results), rebuilt fresh each update. Post-solve
+    # supported-leaf pruning keeps only leaves appearing in one of these top-K
+    # globals, so K bounds the hypothesis breadth that survives into the next
+    # scan.
     max_global_hypotheses: int = 20
     # Exact cluster-solver backend.
     # - "branch_and_bound": default exact DFS branch-and-bound backend
@@ -110,7 +118,9 @@ class TOMHTParams:
     publish_min_age: int = 0
     publish_min_existence_probability: float = 0.0
 
-    # MAP-only N-scan pruning: boundary is b = k - N.
+    # Core search control (N): MAP-only N-scan pruning depth; boundary b = k - N.
+    # Scans of association ambiguity retained before a tree root commits to its
+    # MAP child.
     ns_scan_window: int = 6
 
     # Internal start handling (kept intentionally simple in this phase).

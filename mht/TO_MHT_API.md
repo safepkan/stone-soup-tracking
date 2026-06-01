@@ -1135,6 +1135,12 @@ The most important score-related settings are:
 - `track_deletion_existence_probability`,
 - publication gates.
 
+The core search-shape controls (tune after the scoring model) are:
+
+- `max_children_per_leaf` (local branching; default usually does not bind),
+- `max_global_hypotheses` (K-best breadth),
+- `ns_scan_window` (N-scan depth).
+
 Practical signs of miscalibration:
 
 - tracks die when leaving sensor coverage:
@@ -1152,15 +1158,12 @@ Practical signs of miscalibration:
 
 Non-score safety valves include:
 
-- `max_children_per_leaf`,
 - `max_leaves_per_track_tree`,
 - `max_births_per_scan`,
 - birth load guards,
-- cluster overload splitting,
-- and N-scan window.
+- cluster overload splitting.
 
 These are tractability controls, not replacements for a coherent scoring model.
-`max_children_per_leaf` is a per-active-leaf local branching cap.
 `max_births_per_scan` defaults to `10` and remains a guardrail. Birth load
 guards default to disabled and should be set only for scenario-specific
 emergency load control. Confirmation-state-dependent gating is best handled in
@@ -1225,6 +1228,29 @@ important public parameters by purpose.
 - `mahalanobis_gate_threshold`: local association gate used by the tracker-owned
   default hypothesiser, not used for custom hypothesisers.
 
+### Core search controls
+
+These shape the hypothesis search — local branching, retained global breadth, and
+pruning depth — and have first-order effects on tracking quality and cost. They
+are part of the normal frontier-control stack, not emergency valves, and should
+be tuned deliberately. `max_global_hypotheses` (K) and `ns_scan_window` (N) are structural:
+the search cannot run without a finite value for each. `max_children_per_leaf` is
+also a core knob but can be effectively disabled by setting it very high.
+
+- `max_children_per_leaf`: per-active-leaf local branching cap — the number of
+  hit/miss continuation candidates retained from each expanded leaf (the miss
+  alternative is always preserved). The default `5` is loose enough that it
+  usually does not bind; tighten it to curb excessive local branching, or set it
+  very high to leave search shape entirely to K-best and N-scan. Default `5`.
+- `max_global_hypotheses` (**K**): per-cluster K-best retained globals per update
+  (the solver's `max_results`). Post-solve supported-leaf pruning keeps only
+  leaves appearing in one of these top-K globals, so K is the hypothesis breadth
+  that survives into the next scan. Rebuilt fresh each update. Default `20`.
+- `ns_scan_window` (**N**): N-scan pruning depth — the number of scans of
+  association ambiguity retained before a tree's root commits to its MAP child.
+  Larger N defers commitment and resolves crossing/ambiguous targets better at
+  higher memory/compute cost; smaller N commits sooner. Default `6`.
+
 ### Start priors
 
 - `initiator_start_initial_existence_probability`: default prior for starts
@@ -1253,16 +1279,12 @@ important public parameters by purpose.
 
 These controls are implementation safety valves and are subject to revision:
 
-- `max_children_per_leaf`: per-active-leaf local branching cap. It limits
-  retained hit/miss continuation candidates from each expanded leaf, not from
-  the whole track tree.
 - `max_leaves_per_track_tree`: optional pre-solve per-tree leaf cap.
 - `max_births_per_scan`: default `10`; a deterministic internal-birth cap and
   still a guardrail, not a substitute for initiator-side quality control.
 - `birth_skip_if_active_trees_above` and
   `birth_skip_if_active_leaves_above`: disabled by default (`None`) and
   available as scenario-specific emergency load guards.
-- `max_global_hypotheses`
 - `max_projected_cluster_combinations`
 - `overload_split_enabled`
 - `overload_split_projected_combination_threshold`: still conservative and a
@@ -1274,7 +1296,6 @@ These controls are implementation safety valves and are subject to revision:
   conditioning
 - `overload_split_greedy_ownership_metric`: currently only
   `"best_leaf_score"`
-- `ns_scan_window`
 
 Tune the probabilistic model first. Use these controls to keep computation
 bounded once the scoring model is roughly calibrated.

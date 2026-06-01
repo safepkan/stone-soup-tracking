@@ -734,7 +734,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         nscan_snapshot = self._nscan_commitment_snapshot
         print_summary_stats_report(
             stats=self._stats,
-            max_global_hypotheses=self.params.max_global_hypotheses,
             last_nscan_boundary_scan_index=nscan_snapshot.boundary_scan_index,
             committed_boundary_by_track_id=nscan_snapshot.committed_boundary_by_track_id,
             debug_display_expansion_frontier=(self._expansion_frontier_debug_enabled()),

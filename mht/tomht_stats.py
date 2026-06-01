@@ -608,13 +608,11 @@ def print_expansion_frontier_stats(
 def print_summary_stats(
     *,
     stats: list[ScanStats],
-    max_global_hypotheses: int,
     last_nscan_boundary_scan_index: int | None,
     committed_boundary_by_track_id: Mapping[int, int],
     debug_display_expansion_frontier: bool = False,
 ) -> None:
     """Print aggregate instrumentation summaries from collected ScanStats."""
-    del max_global_hypotheses
     if not stats:
         print("SUMMARY scans=0 (no collected ScanStats)")
         return
