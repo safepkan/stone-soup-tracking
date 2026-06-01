@@ -20,131 +20,140 @@ class TOMHTParams:
     - ``max_global_hypotheses`` (K): per-cluster K-best retained-global breadth,
     - ``ns_scan_window`` (N): MAP-only N-scan pruning depth.
 
-    Other operational controls:
-    - track-tree miss termination after N-scan pruning,
-    - start priors, lifecycle, confirmation/deletion, and publication gates,
-    - pre-solve and internal-birth tractability guardrails,
-    - optional debug/stat visibility toggles.
+    The remaining fields follow in grouped definition order:
+    - detection / scoring model (``prob_detect``, ``clutter_density``, gate,
+      numerical floor),
+    - start priors (internal initiator and external starts),
+    - confirmation, deletion, and publication gates,
+    - internal-birth cap and load guards,
+    - solver backend and tractability guardrails,
+    - internal profiling/debug fast-path switches,
+    - debug / instrumentation toggles.
     """
 
-    # Core search control: per-active-leaf local branching cap - hit/miss
-    # continuation candidates retained per expanded leaf (the miss alternative is
-    # always preserved). The default is loose enough that it usually does not
-    # bind; a very high value disables it, leaving search shape to K and N.
+    # Core search controls (N, K, and per-leaf local branching).
+    # Per-active-leaf local branching cap: hit/miss continuation candidates
+    # retained per expanded leaf (the miss alternative is always preserved). The
+    # default is loose enough that it usually does not bind; a very high value
+    # disables it, leaving search shape to K and N.
     max_children_per_leaf: int = 5
-    # Optional pre-solve per-tree frontier cap used only as a safety valve.
-    # The high default keeps this in a tractability guardrail role, not as the
-    # primary pruning mechanism.
-    max_leaves_per_track_tree: int | None = 500
-    # Internal profiling/debug switch: the tracker-owned default hypothesiser
-    # can expand from the current leaf state without reconstructing Track
-    # history. Custom hypothesisers still receive normal Stone Soup Tracks.
-    enable_default_hypothesiser_state_fast_path: bool = True
-    # Internal profiling/debug switch: the tracker-owned default miss-count
-    # deleter can check leaf metadata directly without reconstructing Track
-    # history. Custom deleters still receive normal Stone Soup Tracks.
-    enable_default_miss_deleter_fast_path: bool = True
-    # Base miss threshold used by the default post-N-scan deleter.
-    # Effective threshold uses an N-scan-aware floor (see lifecycle helper).
+    # K: per-cluster K-best retained globals per update (the solver's
+    # max_results), rebuilt fresh each update. Post-solve supported-leaf pruning
+    # keeps only leaves appearing in one of these top-K globals, so K bounds the
+    # hypothesis breadth that survives into the next scan.
+    max_global_hypotheses: int = 20
+    # N: MAP-only N-scan pruning depth; boundary b = k - N. Scans of association
+    # ambiguity retained before a tree root commits to its MAP child.
+    ns_scan_window: int = 6
+
+    # Detection / scoring model.
+    # prob_detect and clutter_density are scalar defaults used by
+    # ConstantDetectionProbabilityModel when the constructor receives no dynamic
+    # DetectionProbabilityModel. They are validated when that constant model is
+    # constructed: prob_detect must satisfy 0 < p < 1, and clutter_density must be
+    # finite and > 0. The 0.0 clutter_density default is an invalid sentinel; set
+    # an explicit density or pass a custom DPM. Both are ignored when a custom DPM
+    # is supplied.
+    prob_detect: float = 0.9
+    # Clutter density lambda in measurement-space units: detections per unit
+    # measurement-volume per scan. Must match the measurement coordinates used by
+    # the hypothesiser NLL computation.
+    clutter_density: float = 0.0
+    # Main-path local-association gate: Mahalanobis threshold (non-squared), used
+    # only by the tracker-owned default hypothesiser.
+    mahalanobis_gate_threshold: float = 3.0
+    # Dimensionless floor for P_D and (1 - P_D) inside scoring logs, keeping
+    # legitimate dynamic-DPM endpoints finite. Not a clutter-density floor.
+    log_epsilon: float = 1e-12
+
+    # Start priors (initial existence prior for new track roots).
+    # Constructor initiator=None disables internal starts and leaves residual
+    # detections available via get_unused_detections(). For a one-detection
+    # measurement initiator a principled user-side choice is
+    # logit(P_init) = log(P_D * beta_NT / lambda), where beta_NT is new-target
+    # density and lambda is clutter density in the same measurement-space units;
+    # the tracker keeps that as guidance rather than adding beta_NT as a core
+    # parameter.
+    initiator_start_initial_existence_probability: float = 0.8
+    # External-start prior; default 0.95 reflects externally confirmed starts.
+    external_start_initial_existence_probability: float = 0.95
+
+    # Confirmation, deletion, and publication.
+    # Sticky tree-level confirmation threshold, compared (as log-odds) against the
+    # max active-leaf accumulated score.
+    track_confirmation_existence_probability: float = 0.9
+    # Conservative tree-level deletion threshold, compared (as log-odds) against
+    # the max active-leaf accumulated score after N-scan pruning. Confirmation and
+    # deletion form a hysteresis-style pair: confirmation is sticky, deletion
+    # removes the whole tree.
+    track_deletion_existence_probability: float = 0.01
+    # Base miss threshold for the default post-N-scan deleter. Effective threshold
+    # uses an N-scan-aware floor (see lifecycle helper).
     max_missed: int = 5
-    # Candidate-leaf selection mode applied after N-scan pruning. This controls
-    # which leaves are evaluated by the configured deleter, including the default
-    # miss-count deleter and custom Stone Soup deleters.
+    # Candidate-leaf selection mode applied after N-scan pruning. Controls which
+    # leaves the configured deleter evaluates (default miss-count deleter and
+    # custom Stone Soup deleters alike).
     # - "all_active_leaves": terminate only if all active leaves exceed threshold
     # - "map_leaf": terminate if MAP leaf exceeds threshold
     # - "global_k_leaves": terminate if all retained rebuilt-global leaves exceed
     #   threshold (fallback to active leaves if unavailable after N-scan)
     track_miss_termination_mode: str = "map_leaf"
-
-    # Core search control (K): per-cluster K-best retained globals per update
-    # (the solver's max_results), rebuilt fresh each update. Post-solve
-    # supported-leaf pruning keeps only leaves appearing in one of these top-K
-    # globals, so K bounds the hypothesis breadth that survives into the next
-    # scan.
-    max_global_hypotheses: int = 20
-    # Exact cluster-solver backend.
-    # - "branch_and_bound": default exact DFS branch-and-bound backend
-    # - "exhaustive": exact reference/fallback backend
-    # - "ortools": experimental CP-SAT backend
-    cluster_solver_backend: str = "branch_and_bound"
-    # Optional hard cap for one cluster's projected Cartesian leaf combinations.
-    # If exceeded, cluster rebuild fails explicitly (no adaptive trimming/retry).
-    max_projected_cluster_combinations: int | None = None
-    # Optional overload mitigation:
-    # when a cluster's projected Cartesian combinations exceed this threshold,
-    # split solving remains internal and returns feasible globals for the
-    # original live cluster.
-    overload_split_enabled: bool = True
-    overload_split_projected_combination_threshold: int | None = 500_000
-    overload_split_max_edge_removals_per_cluster: int | None = None
-    # Overload split solve strategy:
-    # - "greedy_partition": default operational overload fallback; sound but
-    #   approximate. It greedily partitions contested cut detections and falls
-    #   back to conditional_exact if the partition cannot produce feasible
-    #   original-cluster globals.
-    # - "conditional_exact": reference / higher-compute recursive conditional
-    #   mode. It enumerates cut assignments to preserve K-best-oriented behavior
-    #   under overload.
-    overload_split_solution_mode: str = "greedy_partition"
-    overload_split_greedy_ownership_metric: str = "best_leaf_score"
-
-    # Scoring / numerical behavior.
-    # prob_detect and clutter_density are scalar defaults used by
-    # ConstantDetectionProbabilityModel when the tracker constructor does not
-    # receive a dynamic DetectionProbabilityModel. They are validated when that
-    # constant model is constructed: prob_detect must satisfy 0 < p < 1, and
-    # clutter_density must be finite and > 0. The 0.0 clutter_density default is
-    # an invalid sentinel; set an explicit density or pass a custom DPM.
-    # log_epsilon is only a dimensionless floor for P_D and (1 - P_D) logs, not a
-    # clutter-density floor.
-    log_epsilon: float = 1e-12
-    prob_detect: float = 0.9
-    # Main-path gate control: Mahalanobis threshold (non-squared).
-    mahalanobis_gate_threshold: float = 3.0
-    # Clutter density lambda in measurement-space units:
-    # detections per unit measurement-volume per scan. Must match the same
-    # measurement coordinates used by the hypothesiser NLL computation.
-    clutter_density: float = 0.0
-    # Public external-start prior. Internally converted to log-odds for the root
-    # log_delta; default 0.95 reflects externally confirmed starts.
-    external_start_initial_existence_probability: float = 0.95
-    # Sticky tree-level confirmation threshold. Internally converted to log-odds
-    # and compared against max active-leaf accumulated score.
-    track_confirmation_existence_probability: float = 0.9
-    # Conservative tree-level deletion threshold. Internally converted to
-    # log-odds and compared against max active-leaf accumulated score after
-    # N-scan pruning. Confirmation/deletion form a hysteresis-style pair:
-    # confirmation is sticky, while deletion removes the whole tree.
-    track_deletion_existence_probability: float = 0.01
-    # Sticky output-publication gate. By default, only confirmed MAP tracks are
+    # Sticky output-publication gate. By default only confirmed MAP tracks are
     # published; tentative trees remain internal and inspectable.
     publish_lifecycle_states: tuple[str, ...] = ("confirmed",)
     publish_min_hits: int = 0
     publish_min_age: int = 0
     publish_min_existence_probability: float = 0.0
 
-    # Core search control (N): MAP-only N-scan pruning depth; boundary b = k - N.
-    # Scans of association ambiguity retained before a tree root commits to its
-    # MAP child.
-    ns_scan_window: int = 6
-
-    # Internal start handling (kept intentionally simple in this phase).
-    # Constructor initiator=None disables internal starts and leaves residual
-    # detections available via get_unused_detections().
-    # Public initiator-start prior. Internally converted to log-odds for
-    # initiator-created roots. For a one-detection measurement initiator, a
-    # principled user-side choice is:
-    # logit(P_init) = log(P_D * beta_NT / lambda)
-    # where beta_NT is new-target density and lambda is clutter density in the
-    # same measurement-space units. The tracker keeps that as parameter-choice
-    # guidance rather than adding beta_NT as a core parameter.
-    initiator_start_initial_existence_probability: float = 0.8
+    # Internal births.
+    # Deterministic per-scan cap on internal births; a guardrail, not a quality
+    # filter (prefer initiator-side filtering if it fires routinely).
     max_births_per_scan: int = 10
     # Optional birth load guards: skip births once frontier growth is already
     # high. Disabled by default; set scenario-specific values only when this
     # emergency safety valve is wanted.
     birth_skip_if_active_trees_above: int | None = None
     birth_skip_if_active_leaves_above: int | None = None
+
+    # Solver and tractability guardrails.
+    # Exact cluster-solver backend.
+    # - "branch_and_bound": default exact DFS branch-and-bound backend
+    # - "exhaustive": exact reference/fallback backend
+    # - "ortools": experimental CP-SAT backend
+    cluster_solver_backend: str = "branch_and_bound"
+    # Optional pre-solve per-tree frontier cap used only as a safety valve. The
+    # high default keeps this in a guardrail role, not the primary pruning
+    # mechanism.
+    max_leaves_per_track_tree: int | None = 500
+    # Optional hard cap for one cluster's projected Cartesian leaf combinations.
+    # If exceeded, cluster rebuild fails explicitly (no adaptive trimming/retry).
+    max_projected_cluster_combinations: int | None = None
+    # Overload mitigation: when a cluster's projected Cartesian combinations
+    # exceed the threshold, split solving stays internal and returns feasible
+    # globals for the original live cluster.
+    overload_split_enabled: bool = True
+    overload_split_projected_combination_threshold: int | None = 500_000
+    overload_split_max_edge_removals_per_cluster: int | None = None
+    # Overload split solve strategy:
+    # - "greedy_partition": default operational fallback; sound but approximate.
+    #   Greedily partitions contested cut detections, falling back to
+    #   conditional_exact if the partition cannot produce feasible
+    #   original-cluster globals.
+    # - "conditional_exact": reference / higher-compute recursive conditional
+    #   mode. Enumerates cut assignments to preserve K-best-oriented behavior
+    #   under overload.
+    overload_split_solution_mode: str = "greedy_partition"
+    overload_split_greedy_ownership_metric: str = "best_leaf_score"
+
+    # Internal profiling/debug fast-path switches.
+    # Tracker-owned default hypothesiser may expand from the current leaf state
+    # without reconstructing Track history. Custom hypothesisers still receive
+    # normal Stone Soup Tracks.
+    enable_default_hypothesiser_state_fast_path: bool = True
+    # Tracker-owned default miss-count deleter may check leaf metadata directly
+    # without reconstructing Track history. Custom deleters still receive normal
+    # Stone Soup Tracks.
+    enable_default_miss_deleter_fast_path: bool = True
 
     # Debug / instrumentation toggles.
     debug_display_detections: bool = False
