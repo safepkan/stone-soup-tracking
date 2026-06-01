@@ -91,7 +91,12 @@ class TOMHTParams:
     # Scoring / numerical behavior.
     # prob_detect and clutter_density are scalar defaults used by
     # ConstantDetectionProbabilityModel when the tracker constructor does not
-    # receive a dynamic DetectionProbabilityModel.
+    # receive a dynamic DetectionProbabilityModel. They are validated when that
+    # constant model is constructed: prob_detect must satisfy 0 < p < 1, and
+    # clutter_density must be finite and > 0. The 0.0 clutter_density default is
+    # an invalid sentinel; set an explicit density or pass a custom DPM.
+    # log_epsilon is only a dimensionless floor for P_D and (1 - P_D) logs, not a
+    # clutter-density floor.
     log_epsilon: float = 1e-12
     prob_detect: float = 0.9
     # Main-path gate control: Mahalanobis threshold (non-squared).

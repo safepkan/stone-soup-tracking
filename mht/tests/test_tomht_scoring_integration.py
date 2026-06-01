@@ -12,7 +12,7 @@ from mht.tests.tomht_tracker_test_support import (
     _track_start,
 )
 from mht.tomht_scoring import ConstantDetectionProbabilityModel
-from mht.tomht_tracker import TOMHTParams
+from mht.tomht_tracker import TOMHTParams, TOMHTTracker
 
 
 class TOMHTScoringIntegrationTest(unittest.TestCase):
@@ -84,6 +84,8 @@ class TOMHTScoringIntegrationTest(unittest.TestCase):
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
         t1 = t0 + datetime.timedelta(seconds=1)
         params = TOMHTParams(
+            prob_detect=0.8,
+            clutter_density=0.25,
             external_start_initial_existence_probability=0.6,
             track_confirmation_existence_probability=0.8,
             debug_display_scan_stats=False,
@@ -93,19 +95,19 @@ class TOMHTScoringIntegrationTest(unittest.TestCase):
         )
 
         default_hypothesiser = _ScriptedHypothesiser()
-        default_tracker = _build_tracker(
+        default_tracker = TOMHTTracker(
             hypothesiser=default_hypothesiser,
             updater=_ScriptedUpdater(),
             params=params,
         )
         explicit_hypothesiser = _ScriptedHypothesiser()
-        explicit_tracker = _build_tracker(
+        explicit_tracker = TOMHTTracker(
             hypothesiser=explicit_hypothesiser,
             updater=_ScriptedUpdater(),
             params=params,
             detection_probability_model=ConstantDetectionProbabilityModel(
-                prob_detect=0.0,
-                clutter_density=params.log_epsilon,
+                prob_detect=params.prob_detect,
+                clutter_density=params.clutter_density,
             ),
         )
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import datetime
 from pathlib import Path
 import unittest
@@ -56,6 +56,28 @@ class _NoopUpdater:
         raise RuntimeError("No update expected in this test helper")
 
 
+class _EndpointDetectionProbabilityModel:
+    def detection_probability(
+        self,
+        *,
+        track_id: object | None,
+        prediction,
+        caller_scan_context: object | None,
+    ) -> float:
+        del track_id, prediction, caller_scan_context
+        return 0.0
+
+    def clutter_density(
+        self,
+        *,
+        prediction,
+        detection: Detection | None,
+        caller_scan_context: object | None,
+    ) -> float:
+        del prediction, detection, caller_scan_context
+        return 1.0
+
+
 class _LegacyPositionalNoopHypothesiser:
     def __init__(self, predictor: _NoopPredictor, updater: _NoopUpdater) -> None:
         self.predictor = predictor
@@ -109,7 +131,10 @@ def _build_tracker(
             debug_display_hypotheses=False,
             debug_display_births=False,
             collect_stats=False,
+            clutter_density=1.0,
         )
+    elif params.clutter_density <= 0.0:
+        params = replace(params, clutter_density=1.0)
     return TOMHTTracker(
         hypothesiser=_NoopHypothesiser(),
         updater=_NoopUpdater(),
@@ -127,6 +152,7 @@ def _build_tracker_with_overrides(params_overrides: dict[str, object]) -> TOMHTT
             debug_display_hypotheses=False,
             debug_display_births=False,
             collect_stats=False,
+            clutter_density=1.0,
         ),
         params_overrides=params_overrides,
     )
@@ -183,6 +209,43 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
         self.assertEqual(0.25, constant_dpm.constant_clutter_density)
         self.assertEqual(1e-9, tracker.scoring_model.log_epsilon)
 
+    def test_constructor_rejects_default_clutter_density_without_custom_dpm(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "clutter_density must be a positive, finite density",
+        ):
+            TOMHTTracker(
+                hypothesiser=_NoopHypothesiser(),
+                updater=_NoopUpdater(),
+                params=TOMHTParams(
+                    debug_display_scan_stats=False,
+                    debug_display_hypotheses=False,
+                    debug_display_births=False,
+                    collect_stats=False,
+                ),
+            )
+
+    def test_constructor_ignores_scalar_scoring_params_with_custom_dpm(self) -> None:
+        dpm = _EndpointDetectionProbabilityModel()
+
+        tracker = TOMHTTracker(
+            hypothesiser=_NoopHypothesiser(),
+            updater=_NoopUpdater(),
+            params=TOMHTParams(
+                prob_detect=0.0,
+                clutter_density=0.0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+            detection_probability_model=dpm,
+        )
+
+        self.assertIs(dpm, tracker.scoring_model.detection_probability_model)
+
     def test_constructor_applies_params_overrides(self) -> None:
         tracker = _build_tracker_with_overrides(
             {
@@ -232,6 +295,7 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
                 debug_display_hypotheses=False,
                 debug_display_births=False,
                 collect_stats=False,
+                clutter_density=1.0,
             ),
         )
         self.assertIsInstance(
@@ -250,6 +314,7 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
                 debug_display_hypotheses=False,
                 debug_display_births=False,
                 collect_stats=False,
+                clutter_density=1.0,
             ),
         )
 

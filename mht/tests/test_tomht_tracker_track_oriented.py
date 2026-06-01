@@ -135,6 +135,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
                 debug_display_hypotheses=False,
                 debug_display_births=False,
                 collect_stats=False,
+                clutter_density=1.0,
             ),
         )
 
@@ -175,6 +176,7 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
                 debug_display_hypotheses=False,
                 debug_display_births=False,
                 collect_stats=False,
+                clutter_density=1.0,
             ),
         )
 

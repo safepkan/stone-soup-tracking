@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import datetime
 from math import exp, log, log1p
 import sys
@@ -246,6 +245,31 @@ class _CaptureDetectionProbabilityModel:
         return self._clutter_density
 
 
+class _NeutralDetectionProbabilityModel:
+    def __init__(self, *, clutter_density: float) -> None:
+        self._clutter_density = clutter_density
+
+    def detection_probability(
+        self,
+        *,
+        track_id: object | None,
+        prediction,
+        caller_scan_context: object | None,
+    ) -> float:
+        del track_id, prediction, caller_scan_context
+        return 0.0
+
+    def clutter_density(
+        self,
+        *,
+        prediction,
+        detection: Detection | None,
+        caller_scan_context: object | None,
+    ) -> float:
+        del prediction, detection, caller_scan_context
+        return self._clutter_density
+
+
 class _MetadataMissCountDeleter(Deleter):
     if sys.version_info >= (3, 14):
         threshold = Property(
@@ -359,11 +383,15 @@ def _build_tracker(
             debug_display_births=False,
             collect_stats=False,
         )
-    params = replace(
-        params,
-        prob_detect=0.0,
-        clutter_density=params.log_epsilon,
-    )
+    if detection_probability_model is None:
+        # Test scripts encode hit scores in the hypothesiser distance and expect
+        # miss alternatives to be score-neutral. A dynamic DPM with P_D = 0 keeps
+        # that behavior, and its clutter density matches log_epsilon so the hit
+        # term reduces to -NLL. This avoids relying on the scalar scoring params,
+        # which are ignored once a DPM is supplied.
+        detection_probability_model = _NeutralDetectionProbabilityModel(
+            clutter_density=params.log_epsilon,
+        )
     return TOMHTTracker(
         hypothesiser=hypothesiser,
         updater=updater,

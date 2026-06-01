@@ -13,6 +13,24 @@ from stonesoup.types.prediction import Prediction
 from .tomht_model import ScanContext
 
 
+def _validate_unit_probability(
+    probability: float,
+    *,
+    parameter_name: str,
+) -> float:
+    """Return a finite open-unit probability or raise ``ValueError``."""
+    invalid_message = (
+        f"{parameter_name} must satisfy 0.0 < p < 1.0; got {probability!r}."
+    )
+    try:
+        p = float(probability)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(invalid_message) from exc
+    if not isfinite(p) or not 0.0 < p < 1.0:
+        raise ValueError(invalid_message)
+    return p
+
+
 def _existence_probability_to_log_odds(
     probability: float,
     *,
@@ -23,15 +41,7 @@ def _existence_probability_to_log_odds(
     External configuration uses an intuitive probability. TOMHT root scores are
     additive log-deltas, so ``0.5`` maps to the old neutral ``0.0`` score.
     """
-    invalid_message = (
-        f"{parameter_name} must satisfy 0.0 < p < 1.0; got {probability!r}."
-    )
-    try:
-        p = float(probability)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(invalid_message) from exc
-    if not isfinite(p) or not 0.0 < p < 1.0:
-        raise ValueError(invalid_message)
+    p = _validate_unit_probability(probability, parameter_name=parameter_name)
     return log(p) - log1p(-p)
 
 
@@ -114,8 +124,26 @@ class ConstantDetectionProbabilityModel:
     _clutter_density: float = field(repr=False)
 
     def __init__(self, prob_detect: float, clutter_density: float) -> None:
-        object.__setattr__(self, "prob_detect", prob_detect)
-        object.__setattr__(self, "_clutter_density", clutter_density)
+        validated_prob_detect = _validate_unit_probability(
+            prob_detect,
+            parameter_name="prob_detect",
+        )
+        try:
+            validated_clutter_density = float(clutter_density)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "clutter_density must be a positive, finite density (> 0); got "
+                f"{clutter_density!r}. Set TOMHTParams.clutter_density, or pass "
+                "a custom detection_probability_model."
+            ) from exc
+        if not isfinite(validated_clutter_density) or validated_clutter_density <= 0.0:
+            raise ValueError(
+                "clutter_density must be a positive, finite density (> 0); got "
+                f"{clutter_density!r}. Set TOMHTParams.clutter_density, or pass "
+                "a custom detection_probability_model."
+            )
+        object.__setattr__(self, "prob_detect", validated_prob_detect)
+        object.__setattr__(self, "_clutter_density", validated_clutter_density)
 
     @property
     def constant_clutter_density(self) -> float:
@@ -155,7 +183,8 @@ class NLLScoringModel:
     - ``NLL`` must be computed from the same measurement coordinates used by the
       association hypothesiser (i.e. from ``p(z|x)`` in that measurement space),
     - ``clutter_density`` (``lambda``) must be in the same measurement-space
-      units (detections per measurement-volume per scan).
+      units (detections per measurement-volume per scan) and must be finite and
+      positive.
     With that contract, linear coordinate rescaling cancels between
     ``-log(lambda)`` and the Gaussian normalisation term inside ``NLL``.
 
@@ -168,31 +197,65 @@ class NLLScoringModel:
     - Initiator/external-start root scores are existence-prior log-odds and are
       handled outside this local NLL scorer.
     - ``detection_probability_model`` may vary ``P_D`` and ``lambda`` per
-      prediction, detection, or caller-provided scan context. A scalar
-      ``ConstantDetectionProbabilityModel`` preserves the default behavior.
+      prediction, detection, or caller-provided scan context. Dynamic ``P_D``
+      returns must be finite and in the closed interval ``[0, 1]``; scalar
+      ``ConstantDetectionProbabilityModel`` configuration uses the open interval
+      ``(0, 1)`` so its logs are finite without relying on endpoint behavior.
     - ``clutter_density`` units must match the measurement-space NLL; hit
       clutter density callbacks receive both the hypothesis prediction and
       concrete detection. If a DPM returns ``P_D`` near zero outside sensor
       coverage, miss scores become near zero and avoid unfair miss penalties.
+    - ``log_epsilon`` is only a dimensionless floor for ``P_D`` and
+      ``1 - P_D`` in logarithms, keeping legitimate dynamic DPM endpoints finite.
+      It is not applied to clutter density because a density has no scale-free
+      floor.
     """
 
     detection_probability_model: DetectionProbabilityModel
     log_epsilon: float
 
-    def _clamped_prob_detect(self, prob_detect: float) -> float:
-        return min(1.0, max(0.0, float(prob_detect)))
+    def _checked_prob_detect(self, prob_detect: float) -> float:
+        try:
+            p = float(prob_detect)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "DetectionProbabilityModel.detection_probability must return "
+                f"a finite value in [0, 1]; got {prob_detect!r}. Out-of-range "
+                "values are a caller error."
+            ) from exc
+        if not isfinite(p) or not 0.0 <= p <= 1.0:
+            raise ValueError(
+                "DetectionProbabilityModel.detection_probability must return "
+                f"a finite value in [0, 1]; got {prob_detect!r}. Out-of-range "
+                "values are a caller error."
+            )
+        return p
 
     def _safe_log_clutter_density(self, clutter_density: float) -> float:
-        return log(max(float(clutter_density), self.log_epsilon))
+        try:
+            density = float(clutter_density)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "DetectionProbabilityModel.clutter_density must return a finite, "
+                f"positive density (> 0); got {clutter_density!r}. Values <= 0 "
+                "cannot be clamped scale-free and are a caller error."
+            ) from exc
+        if not isfinite(density) or density <= 0.0:
+            raise ValueError(
+                "DetectionProbabilityModel.clutter_density must return a finite, "
+                f"positive density (> 0); got {clutter_density!r}. Values <= 0 "
+                "cannot be clamped scale-free and are a caller error."
+            )
+        return log(density)
 
     def _log_hit_base(self, *, prob_detect: float, clutter_density: float) -> float:
-        prob_detect = self._clamped_prob_detect(prob_detect)
+        prob_detect = self._checked_prob_detect(prob_detect)
         return log(max(prob_detect, self.log_epsilon)) - self._safe_log_clutter_density(
             clutter_density
         )
 
     def _log_miss(self, *, prob_detect: float) -> float:
-        prob_detect = self._clamped_prob_detect(prob_detect)
+        prob_detect = self._checked_prob_detect(prob_detect)
         return log(max(1.0 - prob_detect, self.log_epsilon))
 
     def score_track_hypotheses(

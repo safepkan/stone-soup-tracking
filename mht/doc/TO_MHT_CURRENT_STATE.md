@@ -252,7 +252,7 @@ Legacy PDA/beta scoring, unused-detection scoring, `birth_log_penalty`, and `Sco
 
 ### DetectionProbabilityModel
 
-`NLLScoringModel` now consumes a narrow `DetectionProbabilityModel` rather than scalar `P_D`/`lambda` directly. The default `ConstantDetectionProbabilityModel` wraps `TOMHTParams.prob_detect` and `TOMHTParams.clutter_density`, preserving the simple scalar path.
+`NLLScoringModel` now consumes a narrow `DetectionProbabilityModel` rather than scalar `P_D`/`lambda` directly. The default `ConstantDetectionProbabilityModel` wraps `TOMHTParams.prob_detect` and `TOMHTParams.clutter_density`, preserving the simple scalar path. That scalar path validates `prob_detect` as finite and in `(0,1)` and `clutter_density` as finite and `> 0` at tracker construction; the default `clutter_density=0.0` is an invalid sentinel unless a custom DPM is supplied.
 
 Custom DPMs can vary detection probability and clutter density by:
 
@@ -268,6 +268,9 @@ Important semantics:
 - empty scans can still carry caller context,
 - DPM callbacks receive public track IDs only after publication,
 - unpublished trees pass `track_id=None`,
+- dynamic DPM returns are validated during scoring: `P_D` must be finite and in
+  `[0,1]`, clutter density must be finite and `> 0`, and invalid values raise
+  rather than being clamped,
 - DPM is not currently used for initiator-root or external-start root scoring.
 
 ### User-facing probabilities vs internal log-odds

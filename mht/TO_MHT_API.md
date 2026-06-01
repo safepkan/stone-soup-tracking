@@ -356,6 +356,14 @@ The detection-probability model is optional.
 If omitted, TOMHT wraps scalar `TOMHTParams.prob_detect` and
 `TOMHTParams.clutter_density` in a `ConstantDetectionProbabilityModel`.
 
+In this scalar default path, `prob_detect` must be finite and in the open
+interval `(0, 1)`, and `clutter_density` must be finite and `> 0`. These values
+are validated when the tracker constructs the default constant model, and
+invalid values raise `ValueError`. The default `clutter_density=0.0` is an
+invalid sentinel: set a deployment-specific density before constructing a
+tracker, or pass a custom `DetectionProbabilityModel`. When a custom DPM is
+supplied, these scalar fields are ignored and are not validated.
+
 These scalar parameters are caller-provided model assumptions. They are not
 tracker mechanics in the same sense as frontier caps, N-scan window, or overload
 guards. Use them when a constant detection probability and constant clutter
@@ -402,6 +410,9 @@ where:
 - `lambda` is clutter density in the relevant measurement space,
 - `NLL = -log p(z | x)` is the measurement likelihood negative log likelihood
   returned by the hypothesiser.
+
+Scoring requires `lambda > 0` and `P_D ∈ [0, 1]`; custom DPM return-value
+validation is described in Section 6.
 
 `P_D` and `lambda` are supplied by the caller's sensing model, either through
 the scalar defaults or through a custom DPM. Treat them as calibration/model
@@ -496,6 +507,21 @@ ConstantDetectionProbabilityModel(
     clutter_density=params.clutter_density,
 )
 ```
+
+For this constant implementation, `prob_detect` must be finite and in `(0, 1)`
+and `clutter_density` must be finite and `> 0`; invalid values raise
+`ValueError` when the model is constructed.
+
+For custom dynamic DPMs, `detection_probability(...)` must return a finite value
+in `[0, 1]`. The endpoints are valid: `P_D=0` makes a miss increment exactly
+zero and keeps the hit increment finite through an internal dimensionless floor;
+`P_D=1` keeps the miss increment finite the same way. Values outside `[0, 1]`,
+NaN, and infinities raise `ValueError` during scoring and are never clamped.
+
+`clutter_density(...)` must return a finite density `> 0` in the same
+measurement-space units as the NLL. Non-positive, NaN, or infinite densities
+raise `ValueError` during scoring. They are never clamped because a clutter
+density has no scale-free numerical floor.
 
 ### When DPM methods are called
 
@@ -1240,10 +1266,16 @@ important public parameters by purpose.
 
 ### Sensor/scoring calibration
 
-- `prob_detect`: scalar default `P_D` used by `ConstantDetectionProbabilityModel`.
+- `prob_detect`: scalar default `P_D` used by
+  `ConstantDetectionProbabilityModel`; must be finite and in `(0, 1)` when no
+  custom DPM is supplied.
 - `clutter_density`: scalar default `lambda` used by
-  `ConstantDetectionProbabilityModel`.
-- `log_epsilon`: numerical floor for safe logarithms.
+  `ConstantDetectionProbabilityModel`; must be finite and `> 0` when no custom
+  DPM is supplied. The default `0.0` is an invalid sentinel requiring an
+  explicit density or a custom DPM. Custom DPMs ignore these scalar fields.
+- `log_epsilon`: dimensionless numerical floor applied only to `P_D` and
+  `1 - P_D` inside scoring logs so dynamic DPM endpoint probabilities remain
+  finite. It is not a clutter-density floor.
 - `mahalanobis_gate_threshold`: local association gate used by the tracker-owned
   default hypothesiser, not used for custom hypothesisers.
 
@@ -1329,6 +1361,9 @@ Current important assumptions:
   `P_D`, `lambda`, birth terms, and other factors are applied separately by the tracker,
 - custom hypothesisers must satisfy the additional constraints listed in Section 4,
 - clutter density units must match the NLL measurement coordinates,
+- DPM return values are validated during scoring: dynamic `P_D` must be finite
+  and in `[0, 1]`, dynamic clutter density must be finite and `> 0`, and invalid
+  values raise `ValueError` rather than being clamped,
 - the tracker does not own generic birth-state initialization,
 - current internal-start candidates may be capped or skipped by implementation
   guardrails before insertion,
