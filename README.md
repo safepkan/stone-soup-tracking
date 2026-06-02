@@ -1,6 +1,13 @@
-# Stone Soup Tracking Experiments
+# Stone Soup TO-MHT Tracker
 
-Experimental repository for exploring Stone Soup tracking capabilities.
+Development repository for a track-oriented multiple-hypothesis tracker (TO-MHT)
+built on Stone Soup.
+
+The tracker itself lives in [`mht/`](mht/) — start at
+[`mht/README.md`](mht/README.md). That folder is the unit exported to the
+external release repo (`../stonesoup-tomht`); everything outside it is
+development and workflow support (replay regression, smoke scenarios, release
+export, CI) and is not part of the release.
 
 ## Working with the Coding Agent
 
