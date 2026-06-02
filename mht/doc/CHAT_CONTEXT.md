@@ -9,6 +9,7 @@ Use ChatGPT for high-level design and review, and Codex/VS Code for implementati
 Keep the TO-MHT docs in sync with the code.
 
 ## Read first (canonical docs)
+- `mht/README.md` — getting-started overview for the exported package (ships with the release)
 - `mht/TO_MHT_API.md` — public API and integration guide
 - `mht/doc/TO_MHT_CURRENT_STATE.md` — what the tracker currently does
 - `mht/doc/TO_MHT_NEXT_STEPS.md` — the current implementation phase

@@ -141,9 +141,9 @@ Avoid mixing concepts that are now cleanly separated:
 
 ### 2.5 Treat docs as part of the handoff
 
-`CURRENT_STATE`, `NEXT_STEPS`, `ROADMAP`, and `TO_MHT_API.md` should continue to
-track the implementation. The API guide is especially important for ISAC-style
-integration discussions.
+`CURRENT_STATE`, `NEXT_STEPS`, `ROADMAP`, `TO_MHT_API.md`, and the exported
+`mht/README.md` should continue to track the implementation. The API guide is
+especially important for ISAC-style integration discussions.
 
 ---
 

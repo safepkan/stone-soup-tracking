@@ -3,6 +3,7 @@
 - The goal is to implement a TO-MHT-style tracker in Python on top of Stone Soup.
 - High-level planning happens with ChatGPT via the web UI; coding and execution happen here in the CLI.
 - TO-MHT Markdown documents to keep synchronized:
+  - `mht/README.md` — getting-started overview for the exported package (ships with the release)
   - `mht/TO_MHT_API.md` — public API and integration guide
   - `mht/doc/TO_MHT_CURRENT_STATE.md` — what the tracker currently does
   - `mht/doc/TO_MHT_NEXT_STEPS.md` — the ordered task list
