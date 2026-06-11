@@ -469,6 +469,7 @@ The tracker now has:
 - sticky publication,
 - confirmed-only default output,
 - public vs internal ID split,
+- committed output-state history retention controls,
 - existence probability/log-odds metadata.
 
 This gives future score/frontier controls a meaningful interpretation.

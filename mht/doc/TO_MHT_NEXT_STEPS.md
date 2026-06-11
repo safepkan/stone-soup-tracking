@@ -7,6 +7,10 @@
   and tree-level `committed_detection_keys` is a bounded masking set rather than
   a complete committed detection audit log. Public output state-history
   reconstruction is unchanged.
+- Added committed output-state history retention controls:
+  `max_stored_history_age_s` and `max_stored_history_updates` cap the stored
+  committed prefix at N-scan promotion time. Both default to `None`, and the
+  current unresolved N-scan lineage remains included in reconstructed tracks.
 - Implemented the first narrow object-boundary optimization for local expansion:
   the tracker-owned `TrackerOwnedNLLDistanceHypothesiser` now has a
   state-prior entry point, and TOMHT expansion uses it without reconstructing a

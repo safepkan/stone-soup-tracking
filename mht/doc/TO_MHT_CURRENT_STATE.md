@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, active detection-history trimming, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, smoke-runner parameter reset, lifecycle fast-deleter cleanup, feasibility-probe search cleanup, and bounded detection-conflict retention completed through **2026-06-11**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, active detection-history trimming, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, smoke-runner parameter reset, lifecycle fast-deleter cleanup, feasibility-probe search cleanup, bounded detection-conflict retention, and committed output-state retention controls completed through **2026-06-11**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -25,6 +25,12 @@ lifetime detection audit logs. Tracker-created nodes retain keys no older than
 `node.scan_index - ns_scan_window`; committed detection keys are retained only
 while they can still mask keys inside that unresolved horizon.
 
+Update (2026-06-11): committed output-state prefix retention is configurable via
+`TOMHTParams.max_stored_history_age_s` and
+`TOMHTParams.max_stored_history_updates`. Both default to `None` for no cap.
+The caps apply when N-scan promotion appends a committed state; the current
+unresolved root-to-leaf lineage is not trimmed.
+
 ---
 
 ## Bottom line
@@ -35,7 +41,7 @@ The tracker is now a practical track-oriented TO-MHT implementation in the sense
 - globals are rebuilt per cluster on every scan from current leaves,
 - the previous scan's explicit global list is not the persistent search frontier,
 - MAP-only N-scan pruning operates directly on explicit trees,
-- output tracks are reconstructed from committed prefix history plus current unresolved lineage,
+- output tracks are reconstructed from retained committed prefix history plus current unresolved lineage,
 - output publication is a sticky tree-level boundary separate from internal confirmation,
 - and scoring is now an additive NLL/LLR model with explicit detection-probability and clutter-density inputs.
 
@@ -193,7 +199,7 @@ Nodes are mutable in this phase so child-link bookkeeping can be maintained dire
 - unresolved `root_node_id`,
 - active leaf node IDs,
 - `root_source`,
-- committed prefix states,
+- retained committed prefix states,
 - committed prefix detection keys,
 - sticky `lifecycle_state` (`tentative` / `confirmed`),
 - sticky `publication_state` (`unpublished` / `published`),
@@ -628,8 +634,10 @@ N-scan pruning is MAP-only:
 - boundary `b = scan_index - ns_scan_window`,
 - promote the child of the current root on the MAP path,
 - remove siblings structurally,
-- append committed states to the tree's committed prefix,
-- add the promoted child's full detection history to the tree's committed detection keys,
+- append committed states to the tree's committed prefix and apply optional
+  `max_stored_history_age_s` / `max_stored_history_updates` retention caps,
+- add the promoted child's bounded detection-history cache to the tree's
+  committed detection-key mask,
 - update commitment snapshot and disagreement stats.
 
 Default `ns_scan_window` remains `6`.
@@ -664,11 +672,14 @@ These are pragmatic robustness/tractability mechanisms and remain conceptually p
 
 Published output tracks are reconstructed from:
 
-- committed prefix history,
+- retained committed prefix history,
 - current unresolved MAP leaf lineage,
 - tree context for lifecycle/publication/public ID metadata.
 
-This preserves logical output history across N-scan pruning while keeping unresolved tree structure explicit.
+By default the committed prefix is unbounded for backward-compatible output.
+When `max_stored_history_age_s` or `max_stored_history_updates` is set, only the
+committed prefix is trimmed. The current unresolved N-scan lineage is still
+included, so the returned `Track` can be longer than the committed-prefix cap.
 
 ### Instrumentation
 

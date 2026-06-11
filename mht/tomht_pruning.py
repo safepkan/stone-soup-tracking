@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import datetime
 from dataclasses import dataclass, replace
+
+from stonesoup.types.state import State
 
 from .tomht_model import (
     ClusterRebuildSnapshot,
@@ -161,6 +164,36 @@ def annotate_cluster_snapshots_with_map_pruning_disagreement(
     return updated_snapshots, disagreement_total
 
 
+def trim_committed_states(
+    *,
+    committed_states: list[State],
+    reference_timestamp: datetime.datetime,
+    max_age_s: float | None,
+    max_updates: int | None,
+) -> list[State]:
+    """Return committed-prefix states retained by age and count caps.
+
+    ``reference_timestamp`` is the timestamp of the promoted N-scan boundary
+    node. The unresolved root-to-leaf lineage is intentionally not trimmed here.
+    """
+    retained_states = committed_states
+    if max_age_s is not None:
+        cutoff_timestamp = reference_timestamp - datetime.timedelta(
+            seconds=float(max_age_s)
+        )
+        retained_states = [
+            state
+            for state in retained_states
+            if state.timestamp is None or state.timestamp >= cutoff_timestamp
+        ]
+    if max_updates is not None:
+        update_count = int(max_updates)
+        if update_count == 0:
+            return []
+        retained_states = retained_states[-update_count:]
+    return retained_states
+
+
 def plan_map_n_scan_pruning(
     *,
     boundary_scan_index: int,
@@ -208,6 +241,8 @@ def apply_planned_map_n_scan_pruning(
     plan: MapNScanPruningPlan,
     tree_store: TrackTreeStore,
     nscan_commitment_snapshot: NScanCommitmentSnapshot,
+    max_stored_history_age_s: float | None,
+    max_stored_history_updates: int | None,
 ) -> tuple[int, NScanCommitmentSnapshot]:
     """Apply one precomputed N-scan pruning plan to trees and bookkeeping."""
     committed_count = 0
@@ -227,11 +262,20 @@ def apply_planned_map_n_scan_pruning(
         root_before = plan.root_before_by_track_id[track_id]
         chosen_child = tree_store.nodes_by_id[chosen_child_id]
 
-        # Preserve committed output prefix strictly before the new unresolved root.
+        # Committed output-state prefix: append the old root state, then apply
+        # optional retention caps. This only affects reconstructed Track history.
         current_tree.committed_states.append(root_before.state)
-        # The promoted child is now the only surviving root branch, so its
-        # historical detection choices are fixed for future live solves even
-        # though its state remains in the reconstruction root lineage.
+        current_tree.committed_states = trim_committed_states(
+            committed_states=current_tree.committed_states,
+            reference_timestamp=chosen_child.timestamp,
+            max_age_s=max_stored_history_age_s,
+            max_updates=max_stored_history_updates,
+        )
+
+        # Committed detection-key mask: the promoted child is now the only
+        # surviving root branch, so its historical detection choices are fixed
+        # for future live solves even though its state remains in the unresolved
+        # reconstruction lineage.
         current_tree.committed_detection_keys = (
             current_tree.committed_detection_keys | chosen_child.detection_history_keys
         )
@@ -299,6 +343,8 @@ def apply_map_n_scan_pruning(
     *,
     scan_index: int,
     ns_scan_window: int,
+    max_stored_history_age_s: float | None,
+    max_stored_history_updates: int | None,
     map_global: GlobalHypothesis,
     cluster_snapshots: list[ClusterRebuildSnapshot],
     tree_store: TrackTreeStore,
@@ -337,6 +383,8 @@ def apply_map_n_scan_pruning(
         plan=plan,
         tree_store=tree_store,
         nscan_commitment_snapshot=updated_snapshot,
+        max_stored_history_age_s=max_stored_history_age_s,
+        max_stored_history_updates=max_stored_history_updates,
     )
     return MapNScanPruningResult(
         boundary_scan_index=boundary_scan_index,

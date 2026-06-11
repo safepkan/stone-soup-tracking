@@ -79,6 +79,24 @@ class TOMHTParamsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     TOMHTParams(**overrides)
 
+    def test_stored_history_params_validate_domains(self) -> None:
+        params = TOMHTParams()
+        self.assertIsNone(params.max_stored_history_age_s)
+        self.assertIsNone(params.max_stored_history_updates)
+        TOMHTParams(max_stored_history_age_s=0.0)
+        TOMHTParams(max_stored_history_updates=0)
+
+        invalid_cases: list[tuple[dict[str, Any], str]] = [
+            ({"max_stored_history_age_s": -0.1}, "max_stored_history_age_s"),
+            ({"max_stored_history_age_s": float("nan")}, "max_stored_history_age_s"),
+            ({"max_stored_history_age_s": float("inf")}, "max_stored_history_age_s"),
+            ({"max_stored_history_updates": -1}, "max_stored_history_updates"),
+        ]
+        for overrides, message in invalid_cases:
+            with self.subTest(overrides=overrides):
+                with self.assertRaisesRegex(ValueError, message):
+                    TOMHTParams(**overrides)
+
     def test_expansion_and_birth_guardrail_defaults(self) -> None:
         params = TOMHTParams()
 

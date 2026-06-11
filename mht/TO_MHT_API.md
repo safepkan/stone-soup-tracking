@@ -1305,6 +1305,18 @@ also a core knob but can be effectively disabled by setting it very high.
   `committed_detection_keys`); those caches are not lifetime detection audit
   logs. Default `6`.
 
+### Output history retention
+
+These caps limit the stored committed output-state prefix. They do not trim the
+current unresolved N-scan lineage, so a returned `Track` can contain the
+retained committed suffix plus the current unresolved tail.
+
+- `max_stored_history_age_s`: maximum committed-prefix age in seconds, measured
+  back from the N-scan commit-boundary timestamp. `None` means no age cap.
+  Default `None`.
+- `max_stored_history_updates`: maximum number of committed-prefix states to
+  retain. `None` means no count cap. Default `None`.
+
 ### Start priors
 
 - `initiator_start_initial_existence_probability`: default prior for starts

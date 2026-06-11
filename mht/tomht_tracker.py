@@ -892,6 +892,8 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         result = apply_map_n_scan_pruning(
             scan_index=scan_index,
             ns_scan_window=self.params.ns_scan_window,
+            max_stored_history_age_s=self.params.max_stored_history_age_s,
+            max_stored_history_updates=self.params.max_stored_history_updates,
             map_global=map_global,
             cluster_snapshots=cluster_snapshots,
             tree_store=self._tree_store,

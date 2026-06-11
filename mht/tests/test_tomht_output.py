@@ -588,6 +588,100 @@ class TOMHTOutputIntegrationTest(unittest.TestCase):
                     )
                 )
 
+    def test_committed_output_history_can_be_limited_by_update_count(
+        self,
+    ) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                ns_scan_window=1,
+                max_stored_history_updates=1,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        for scan_index in range(1, 4):
+            timestamp = t0 + datetime.timedelta(seconds=scan_index)
+            hypothesiser.set_options(
+                timestamp=timestamp,
+                track_id=0,
+                options=[(0, 5.0), (None, 0.0)],
+            )
+            tracker.update_tracker(
+                timestamp,
+                [_detection(float(scan_index), float(scan_index), timestamp)],
+            )
+
+        tree = tracker.track_trees_by_track_id[0]
+        committed_x = [
+            float(np.asarray(state.state_vector, dtype=float).reshape(-1)[0])
+            for state in tree.committed_states
+        ]
+        self.assertEqual([1.0], committed_x)
+
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        output_x = [
+            float(np.asarray(state.state_vector, dtype=float).reshape(-1)[0])
+            for state in output_track.states
+        ]
+        self.assertEqual([1.0, 2.0, 3.0], output_x)
+
+    def test_committed_output_history_can_be_limited_by_age(
+        self,
+    ) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                ns_scan_window=1,
+                max_stored_history_age_s=1.0,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        for scan_index in range(1, 5):
+            timestamp = t0 + datetime.timedelta(seconds=scan_index)
+            hypothesiser.set_options(
+                timestamp=timestamp,
+                track_id=0,
+                options=[(0, 5.0), (None, 0.0)],
+            )
+            tracker.update_tracker(
+                timestamp,
+                [_detection(float(scan_index), float(scan_index), timestamp)],
+            )
+
+        tree = tracker.track_trees_by_track_id[0]
+        committed_x = [
+            float(np.asarray(state.state_vector, dtype=float).reshape(-1)[0])
+            for state in tree.committed_states
+        ]
+        self.assertEqual([2.0], committed_x)
+
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        output_x = [
+            float(np.asarray(state.state_vector, dtype=float).reshape(-1)[0])
+            for state in output_track.states
+        ]
+        self.assertEqual([2.0, 3.0, 4.0], output_x)
+
 
 if __name__ == "__main__":
     unittest.main()

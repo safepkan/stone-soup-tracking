@@ -106,6 +106,12 @@ class TOMHTParams:
     publish_min_hits: int = 0
     publish_min_age: int = 0
     publish_min_existence_probability: float = 0.0
+    # Stored output-state history caps for the committed prefix. ``None`` means
+    # no cap. These do not trim the current unresolved N-scan lineage, so a
+    # returned Track can contain up to the retained committed suffix plus the
+    # current unresolved tail.
+    max_stored_history_age_s: float | None = None
+    max_stored_history_updates: int | None = None
 
     # Internal births.
     # Deterministic per-scan cap on internal births; a guardrail, not a quality
@@ -191,6 +197,7 @@ class TOMHTParams:
             raise ValueError("ns_scan_window must be >= 0.")
         self._validate_overload_split_params()
         self._validate_publication_params()
+        self._validate_stored_history_params()
 
     def _validate_overload_split_params(self) -> None:
         """Validate overload split mode controls."""
@@ -252,6 +259,16 @@ class TOMHTParams:
             raise ValueError(
                 "publish_min_existence_probability must satisfy 0.0 <= p < 1.0."
             )
+
+    def _validate_stored_history_params(self) -> None:
+        """Validate committed output-state history retention controls."""
+        if self.max_stored_history_age_s is not None:
+            max_stored_history_age_s = float(self.max_stored_history_age_s)
+            if not isfinite(max_stored_history_age_s) or max_stored_history_age_s < 0.0:
+                raise ValueError("max_stored_history_age_s must be >= 0.0.")
+        if self.max_stored_history_updates is not None:
+            if int(self.max_stored_history_updates) < 0:
+                raise ValueError("max_stored_history_updates must be >= 0.")
 
 
 def apply_params_overrides(
