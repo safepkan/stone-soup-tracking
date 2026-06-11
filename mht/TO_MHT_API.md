@@ -1300,7 +1300,10 @@ also a core knob but can be effectively disabled by setting it very high.
 - `ns_scan_window` (**N**): N-scan pruning depth — the number of scans of
   association ambiguity retained before a tree's root commits to its MAP child.
   Larger N defers commitment and resolves crossing/ambiguous targets better at
-  higher memory/compute cost; smaller N commits sooner. Default `6`.
+  higher memory/compute cost; smaller N commits sooner. The same horizon bounds
+  internal detection conflict-key caches (`detection_history_keys` and
+  `committed_detection_keys`); those caches are not lifetime detection audit
+  logs. Default `6`.
 
 ### Start priors
 

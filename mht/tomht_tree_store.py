@@ -8,12 +8,20 @@ from typing import Iterable
 from stonesoup.types.state import State
 
 from .tomht_model import DetectionKey, TrackHypothesisNode, TrackTree
+from .tomht_tree_utils import trim_detection_history_keys_to_scan_window
 
 
 class TrackTreeStore:
     """Own persistent track-tree/node tables and stable ID allocation."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        detection_history_scan_window: int,
+    ) -> None:
+        if int(detection_history_scan_window) < 0:
+            raise ValueError("detection_history_scan_window must be >= 0.")
+        self.detection_history_scan_window = int(detection_history_scan_window)
         self._next_track_id = 0
         self._next_node_id = 0
         self.nodes_by_id: dict[int, TrackHypothesisNode] = {}
@@ -81,6 +89,11 @@ class TrackTreeStore:
         tree = self.track_trees_by_track_id.get(int(track_id))
         if tree is not None and tree.committed_detection_keys:
             history_keys = frozenset(history_keys - tree.committed_detection_keys)
+        history_keys = trim_detection_history_keys_to_scan_window(
+            history_keys=history_keys,
+            scan_index=scan_index,
+            scan_window=self.detection_history_scan_window,
+        )
 
         node = TrackHypothesisNode(
             node_id=self.allocate_node_id(),

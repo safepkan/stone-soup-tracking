@@ -27,7 +27,7 @@ from mht.tomht_tree_store import TrackTreeStore
 
 class TOMHTClusterRebuildIntegrationTest(unittest.TestCase):
     def test_clustering_ignores_committed_prefix_only_conflicts(self) -> None:
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         _add_manual_tree_with_committed_prefix(
             store,
             root_x=0.0,
@@ -48,7 +48,7 @@ class TOMHTClusterRebuildIntegrationTest(unittest.TestCase):
 
     def test_live_unresolved_conflicts_are_enforced_by_cluster_solver(self) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         track0_id, track0_hit, track0_miss = _add_manual_tree_with_committed_prefix(
             store,
             root_x=0.0,
@@ -103,7 +103,7 @@ class TOMHTClusterRebuildIntegrationTest(unittest.TestCase):
     def test_feasibility_probe_uses_live_conflict_keys(self) -> None:
         shared_key = DetectionKey(scan_index=2, det_index=0)
 
-        infeasible_store = TrackTreeStore()
+        infeasible_store = TrackTreeStore(detection_history_scan_window=1)
         left_id, _ = _add_manual_tree_with_live_options(
             infeasible_store,
             root_x=0.0,
@@ -130,7 +130,7 @@ class TOMHTClusterRebuildIntegrationTest(unittest.TestCase):
             )
         )
 
-        feasible_store = TrackTreeStore()
+        feasible_store = TrackTreeStore(detection_history_scan_window=1)
         left_id, _ = _add_manual_tree_with_live_options(
             feasible_store,
             root_x=0.0,
@@ -159,7 +159,7 @@ class TOMHTClusterRebuildIntegrationTest(unittest.TestCase):
 
     def test_overload_solve_returns_one_original_cluster_snapshot(self) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         track0_id, _ = _add_manual_tree_with_live_options(
             store,
@@ -228,7 +228,7 @@ class TOMHTClusterRebuildIntegrationTest(unittest.TestCase):
         self,
     ) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         track0_id, track0_leaves = _add_manual_tree_with_live_options(
             store,
@@ -279,7 +279,7 @@ class TOMHTClusterRebuildIntegrationTest(unittest.TestCase):
         self,
     ) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         track0_id, track0_leaves = _add_manual_tree_with_live_options(
             store,
@@ -329,7 +329,7 @@ class TOMHTClusterRebuildIntegrationTest(unittest.TestCase):
 
     def test_overload_recombined_globals_are_deterministically_ordered(self) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         track0_id, track0_leaves = _add_manual_tree_with_live_options(
             store,
             root_x=0.0,
@@ -385,7 +385,7 @@ class TOMHTClusterRebuildIntegrationTest(unittest.TestCase):
         self,
     ) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 2)
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         _add_manual_tree_with_live_options(
             store,

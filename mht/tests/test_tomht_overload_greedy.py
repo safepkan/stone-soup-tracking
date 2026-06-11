@@ -170,7 +170,7 @@ class TOMHTOverloadGreedyPartitionTest(unittest.TestCase):
             TOMHTParams(overload_split_greedy_ownership_metric="not-a-metric")
 
     def test_greedy_ownership_uses_higher_best_claiming_leaf_score(self) -> None:
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         left_id, left_leaves = _add_manual_tree_with_live_options(
             store,
@@ -199,7 +199,7 @@ class TOMHTOverloadGreedyPartitionTest(unittest.TestCase):
         )
 
     def test_greedy_ownership_tie_breaks_to_left_track_tuple(self) -> None:
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         left_id, left_leaves = _add_manual_tree_with_live_options(
             store,
@@ -220,7 +220,7 @@ class TOMHTOverloadGreedyPartitionTest(unittest.TestCase):
         self.assertIn("greedy_assign_r=0", overload_log)
 
     def test_greedy_releases_first_side_assigned_but_unused_cut_keys(self) -> None:
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         left_id, left_leaves = _add_manual_tree_with_live_options(
             store,
@@ -246,7 +246,7 @@ class TOMHTOverloadGreedyPartitionTest(unittest.TestCase):
         )
 
     def test_greedy_claimed_first_side_keys_remain_forbidden(self) -> None:
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         left_id, left_leaves = _add_manual_tree_with_live_options(
             store,
@@ -272,7 +272,7 @@ class TOMHTOverloadGreedyPartitionTest(unittest.TestCase):
         )
 
     def test_greedy_falls_back_when_partition_has_no_second_solution(self) -> None:
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         left_id, left_leaves = _add_manual_tree_with_live_options(
             store,
@@ -298,7 +298,7 @@ class TOMHTOverloadGreedyPartitionTest(unittest.TestCase):
         )
 
     def test_conditional_exact_mode_does_not_emit_greedy_diagnostics(self) -> None:
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         left_id, left_leaves = _add_manual_tree_with_live_options(
             store,
@@ -319,7 +319,7 @@ class TOMHTOverloadGreedyPartitionTest(unittest.TestCase):
         self.assertNotIn("greedy_", overload_log)
 
     def test_supported_leaf_pruning_applies_after_greedy_overload_solve(self) -> None:
-        store = TrackTreeStore()
+        store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         left_id, left_leaves = _add_manual_tree_with_live_options(
             store,
@@ -349,8 +349,8 @@ class TOMHTOverloadGreedyPartitionTest(unittest.TestCase):
         )
 
     def test_greedy_can_drop_kbest_optimality_while_remaining_feasible(self) -> None:
-        greedy_store = TrackTreeStore()
-        exact_store = TrackTreeStore()
+        greedy_store = TrackTreeStore(detection_history_scan_window=1)
+        exact_store = TrackTreeStore(detection_history_scan_window=1)
         shared_key = DetectionKey(scan_index=2, det_index=0)
         greedy_left_id, greedy_left_leaves = _add_manual_tree_with_live_options(
             greedy_store,

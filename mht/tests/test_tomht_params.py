@@ -56,6 +56,10 @@ class TOMHTParamsTest(unittest.TestCase):
                         track_deletion_existence_probability=probability,
                     )
 
+    def test_ns_scan_window_rejects_negative_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, "ns_scan_window"):
+            TOMHTParams(ns_scan_window=-1)
+
     def test_publication_params_validate_domains(self) -> None:
         self.assertEqual(("confirmed",), TOMHTParams().publish_lifecycle_states)
         TOMHTParams(publish_lifecycle_states=())

@@ -450,7 +450,7 @@ class TOMHTOutputIntegrationTest(unittest.TestCase):
         tree_after_second_prune = tracker.track_trees_by_track_id[0]
         self.assertEqual(2, len(tree_after_second_prune.committed_states))
         self.assertEqual(
-            frozenset({(1, 0), (2, 0)}),
+            frozenset({(2, 0)}),
             tree_after_second_prune.committed_detection_keys,
         )
         scan3_map = tracker.get_map_hypothesis_snapshot()
@@ -482,6 +482,111 @@ class TOMHTOutputIntegrationTest(unittest.TestCase):
         self.assertEqual([0.0, 1.0, 2.0, 3.0], output_x)
         self.assertEqual(1, output_x.count(1.0))
         self.assertEqual(4, len(output_track))
+
+    def test_detection_conflict_history_is_bounded_by_n_scan_horizon(
+        self,
+    ) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                ns_scan_window=1,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        for scan_index in range(1, 6):
+            timestamp = t0 + datetime.timedelta(seconds=scan_index)
+            hypothesiser.set_options(
+                timestamp=timestamp,
+                track_id=0,
+                options=[(0, 5.0), (None, 0.0)],
+            )
+            tracker.update_tracker(
+                timestamp,
+                [_detection(float(scan_index), float(scan_index), timestamp)],
+            )
+
+        tree = tracker.track_trees_by_track_id[0]
+        self.assertEqual(
+            frozenset({(4, 0)}),
+            tree.committed_detection_keys,
+        )
+
+        for node in tracker.nodes_by_id.values():
+            with self.subTest(node_id=node.node_id):
+                min_scan_index = int(node.scan_index) - 1
+                self.assertTrue(
+                    all(
+                        int(key.scan_index) >= min_scan_index
+                        for key in node.detection_history_keys
+                    )
+                )
+                self.assertLessEqual(
+                    len({key.scan_index for key in node.detection_history_keys}),
+                    2,
+                )
+
+    def test_n_scan_promotion_trims_retained_intermediate_node_histories(
+        self,
+    ) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                ns_scan_window=3,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        for scan_index in range(1, 8):
+            timestamp = t0 + datetime.timedelta(seconds=scan_index)
+            hypothesiser.set_options(
+                timestamp=timestamp,
+                track_id=0,
+                options=[(0, 5.0), (None, 0.0)],
+            )
+            tracker.update_tracker(
+                timestamp,
+                [_detection(float(scan_index), float(scan_index), timestamp)],
+            )
+
+        nscan_snapshot = tracker.get_n_scan_commitment_snapshot()
+        self.assertEqual(4, nscan_snapshot.boundary_scan_index)
+        self.assertIsNotNone(nscan_snapshot.boundary_scan_index)
+        assert nscan_snapshot.boundary_scan_index is not None
+        min_scan_index = int(nscan_snapshot.boundary_scan_index)
+
+        tree = tracker.track_trees_by_track_id[0]
+        retained_node_ids = tracker._tree_store.reachable_node_ids_from_seeds(
+            tracker.nodes_by_id[leaf_id] for leaf_id in tree.active_leaf_node_ids
+        )
+        self.assertGreater(len(retained_node_ids), len(tree.active_leaf_node_ids))
+        for node_id in retained_node_ids:
+            node = tracker.nodes_by_id[node_id]
+            with self.subTest(node_id=node_id, scan_index=node.scan_index):
+                self.assertTrue(
+                    all(
+                        int(key.scan_index) >= min_scan_index
+                        for key in node.detection_history_keys
+                    )
+                )
 
 
 if __name__ == "__main__":

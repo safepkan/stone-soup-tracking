@@ -2,6 +2,11 @@
 
 ## Completed object-boundary cleanup phase
 
+- Bounded detection-conflict retention: tracker-created node
+  `detection_history_keys` now retain only keys in the N-scan conflict horizon,
+  and tree-level `committed_detection_keys` is a bounded masking set rather than
+  a complete committed detection audit log. Public output state-history
+  reconstruction is unchanged.
 - Implemented the first narrow object-boundary optimization for local expansion:
   the tracker-owned `TrackerOwnedNLLDistanceHypothesiser` now has a
   state-prior entry point, and TOMHT expansion uses it without reconstructing a

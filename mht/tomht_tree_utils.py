@@ -14,6 +14,39 @@ def live_conflict_keys_for_leaf(
     return frozenset(leaf.detection_history_keys - tree.committed_detection_keys)
 
 
+def trim_detection_history_keys_to_scan_window(
+    *,
+    history_keys: frozenset[DetectionKey],
+    scan_index: int,
+    scan_window: int,
+) -> frozenset[DetectionKey]:
+    """Return detection keys no older than the configured N-scan horizon.
+
+    The cutoff is inclusive. With ``N=1`` and a node at scan ``k``, the node
+    keeps keys from scans ``k-1`` and ``k`` because the solver may need the
+    boundary scan before the current scan's N-scan commit masks it.
+    """
+    min_scan_index = int(scan_index) - int(scan_window)
+    return trim_detection_history_keys_before_scan(
+        history_keys=history_keys,
+        min_scan_index=min_scan_index,
+    )
+
+
+def trim_detection_history_keys_before_scan(
+    *,
+    history_keys: frozenset[DetectionKey],
+    min_scan_index: int,
+) -> frozenset[DetectionKey]:
+    """Return detection keys with scan index at or after ``min_scan_index``."""
+    min_scan_index_int = int(min_scan_index)
+    if all(int(key.scan_index) >= min_scan_index_int for key in history_keys):
+        return history_keys
+    return frozenset(
+        key for key in history_keys if int(key.scan_index) >= min_scan_index_int
+    )
+
+
 def child_of_root_on_path(
     *,
     root: TrackHypothesisNode,

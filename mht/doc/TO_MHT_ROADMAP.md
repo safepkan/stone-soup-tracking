@@ -478,6 +478,7 @@ This gives future score/frontier controls a meaningful interpretation.
 The overload/frontier work produced:
 
 - live conflict keys that exclude committed history,
+- bounded detection-conflict retention tied to the N-scan horizon,
 - removal of historical relaxation,
 - sound overload solving with feasible original-cluster globals downstream,
 - uniform supported-leaf pruning for overload-solved clusters,

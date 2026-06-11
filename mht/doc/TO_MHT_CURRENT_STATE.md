@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, active detection-history trimming, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, smoke-runner parameter reset, lifecycle fast-deleter cleanup, and feasibility-probe search cleanup completed through **2026-05-25**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, active detection-history trimming, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, smoke-runner parameter reset, lifecycle fast-deleter cleanup, feasibility-probe search cleanup, and bounded detection-conflict retention completed through **2026-06-11**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -18,6 +18,12 @@ Update (2026-05-25): standard MCAP replay commands now carry replay diagnostics
 through `replay/overrides/tracker_standard_replay.json` instead of relying on
 the sibling `l2-sp` `StoneSoupMhtTracker` integration to hard-code TOMHT debug
 flags. Additional replay override files are layered after that standard file.
+
+Update (2026-06-11): per-node `detection_history_keys` and tree-level
+`committed_detection_keys` are bounded conflict-solving caches rather than
+lifetime detection audit logs. Tracker-created nodes retain keys no older than
+`node.scan_index - ns_scan_window`; committed detection keys are retained only
+while they can still mask keys inside that unresolved horizon.
 
 ---
 
@@ -522,10 +528,20 @@ immutable set/dict key while call sites that inspect the components avoid
 positional indexing.
 
 Each node caches detection keys needed for unresolved conflict checks in
-`detection_history_keys`. New child nodes drop keys that are already present in
-the tree's committed prefix at creation time, while each `TrackTree` still
-stores detection keys from branch decisions fixed by N-scan promotion in
-`committed_detection_keys`. Active conflict keys are computed as:
+`detection_history_keys`. This cache is bounded by the N-scan conflict horizon,
+not by track lifetime: for a node at scan `k`, tracker-created nodes keep only
+keys from scans `k - ns_scan_window` and newer. The cutoff is inclusive because
+the solver may need the boundary scan before the current scan's N-scan commit
+masks it. New child nodes also drop keys that are already present in the tree's
+committed prefix at creation time.
+
+Each `TrackTree` keeps `committed_detection_keys` as a bounded masking set for
+recent branch decisions fixed by N-scan promotion. It is not a complete
+committed detection history; keys older than the current N-scan boundary are
+dropped because retained node caches no longer need matching keys. N-scan
+promotion also trims the retained unresolved subtree against that boundary,
+including intermediate nodes between the promoted root and active leaves. Active
+conflict keys are computed as:
 
 ```text
 leaf.detection_history_keys - tree.committed_detection_keys
@@ -535,7 +551,8 @@ This keeps clustering and solver feasibility aligned while avoiding constraints
 from committed pre-root history that the current unresolved frontier can no
 longer change. Active leaves created before the latest N-scan promotion may
 still contain keys that have since become committed; the live-key subtraction
-masks those until descendants are created.
+masks those until descendants are created, and both sides of that subtraction
+remain bounded by the N-scan horizon.
 Historical-conflict relaxation has been removed from this path.
 
 ### Global rebuild

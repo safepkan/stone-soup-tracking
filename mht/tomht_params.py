@@ -43,7 +43,9 @@ class TOMHTParams:
     # hypothesis breadth that survives into the next scan.
     max_global_hypotheses: int = 20
     # N: MAP-only N-scan pruning depth; boundary b = k - N. Scans of association
-    # ambiguity retained before a tree root commits to its MAP child.
+    # ambiguity retained before a tree root commits to its MAP child. This also
+    # bounds retained detection conflict keys; it is not an output state-history
+    # cap.
     ns_scan_window: int = 6
 
     # Detection / scoring model.
@@ -185,6 +187,8 @@ class TOMHTParams:
             self.initiator_start_initial_existence_probability,
             parameter_name="initiator_start_initial_existence_probability",
         )
+        if int(self.ns_scan_window) < 0:
+            raise ValueError("ns_scan_window must be >= 0.")
         self._validate_overload_split_params()
         self._validate_publication_params()
 

@@ -42,9 +42,11 @@ class TrackHypothesisNode:
     assoc_label: int
     log_delta: float
     accumulated_log_score: float
-    # Detection keys cached for conflict checks. New descendants omit keys that
-    # were already committed when they were created; keys committed later may
-    # remain here and are masked by TrackTree.committed_detection_keys.
+    # Detection keys cached for conflict checks. This is not a lifetime audit
+    # log: tracker-created nodes retain only the N-scan conflict horizon. New
+    # descendants omit keys that were already committed when they were created;
+    # keys committed later may remain here and are masked by
+    # TrackTree.committed_detection_keys until descendants are materialized.
     detection_history_keys: frozenset[DetectionKey]
 
     age: int
@@ -72,6 +74,9 @@ class TrackTree:
     publication_state: TrackPublicationState = "unpublished"
     public_track_id: object | None = None
     committed_states: list[State] = field(default_factory=list)
+    # Bounded masking set for recently committed detection keys that can still
+    # appear in retained node histories. This is not a full committed detection
+    # history.
     committed_detection_keys: frozenset[DetectionKey] = field(default_factory=frozenset)
 
 

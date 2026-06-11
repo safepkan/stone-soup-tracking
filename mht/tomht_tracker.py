@@ -346,7 +346,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._maybe_print_config()
 
         # Persistent tracker state.
-        self._tree_store = TrackTreeStore()
+        self._tree_store = TrackTreeStore(
+            detection_history_scan_window=int(params.ns_scan_window),
+        )
 
         # Last-scan rebuilt artifacts retained for inspection only.
         self._last_cluster_snapshots: list[ClusterRebuildSnapshot] = []

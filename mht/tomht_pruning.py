@@ -11,7 +11,11 @@ from .tomht_model import (
     TrackHypothesisNode,
 )
 from .tomht_tree_store import TrackTreeStore
-from .tomht_tree_utils import child_of_root_on_path, is_descendant_of
+from .tomht_tree_utils import (
+    child_of_root_on_path,
+    is_descendant_of,
+    trim_detection_history_keys_before_scan,
+)
 
 
 @dataclass(frozen=True)
@@ -231,6 +235,14 @@ def apply_planned_map_n_scan_pruning(
         current_tree.committed_detection_keys = (
             current_tree.committed_detection_keys | chosen_child.detection_history_keys
         )
+        # ``committed_detection_keys`` is a bounded masking set, not an audit log.
+        # Once the scan-k N-scan commit has run, active histories only need
+        # committed keys at or after the boundary scan ``k - N``; older keys have
+        # already fallen outside the retained live-conflict horizon.
+        current_tree.committed_detection_keys = trim_detection_history_keys_before_scan(
+            history_keys=current_tree.committed_detection_keys,
+            min_scan_index=plan.boundary_scan_index,
+        )
 
         current_tree.root_node_id = chosen_child.node_id
         chosen_child.parent = None
@@ -246,6 +258,18 @@ def apply_planned_map_n_scan_pruning(
         if not retained_leaf_ids:
             retained_leaf_ids = {chosen_child.node_id}
         current_tree.active_leaf_node_ids = retained_leaf_ids
+
+        retained_node_ids = tree_store.reachable_node_ids_from_seeds(
+            tree_store.nodes_by_id[leaf_id] for leaf_id in retained_leaf_ids
+        )
+        for node_id in retained_node_ids:
+            retained_node = tree_store.nodes_by_id[node_id]
+            retained_node.detection_history_keys = (
+                trim_detection_history_keys_before_scan(
+                    history_keys=retained_node.detection_history_keys,
+                    min_scan_index=plan.boundary_scan_index,
+                )
+            )
 
         latest_committed_ancestor_by_track_id[track_id] = chosen_child
         prev_boundary = committed_boundary_by_track_id.get(track_id)
