@@ -210,6 +210,93 @@ class TOMHTTrackerExternalStartsTest(unittest.TestCase):
         )
         self.assertNotIn("opaque_source_tag", output_track.metadata)
 
+    def test_external_start_caller_metadata_whitelist_copies_requested_keys(
+        self,
+    ) -> None:
+        tracker = _build_tracker(
+            params=_quiet_params(
+                external_start_caller_metadata_keys=("sensor_id", "imm_profile"),
+            )
+        )
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        tracker.update_tracker(timestamp, [])
+        start = _external_start(timestamp)
+        start.metadata.update(
+            {
+                "sensor_id": "radar-a",
+                "imm_profile": "cv_ca",
+                "opaque_source_tag": "not-whitelisted",
+                "age": 3,
+                "hits": 2,
+            }
+        )
+
+        tracker.add_external_starts(timestamp, [start])
+
+        tree = next(iter(tracker.track_trees_by_track_id.values()))
+        self.assertEqual(
+            {"sensor_id": "radar-a", "imm_profile": "cv_ca"},
+            tree.caller_metadata,
+        )
+        tree_snapshot = next(iter(tracker.get_track_tree_snapshot().values()))
+        self.assertEqual(
+            {"sensor_id": "radar-a", "imm_profile": "cv_ca"},
+            tree_snapshot["caller_metadata"],
+        )
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        self.assertEqual("radar-a", output_track.metadata["sensor_id"])
+        self.assertEqual("cv_ca", output_track.metadata["imm_profile"])
+        self.assertNotIn("opaque_source_tag", output_track.metadata)
+        self.assertEqual(3, output_track.metadata["age"])
+        self.assertEqual(2, output_track.metadata["hits"])
+
+    def test_external_start_caller_metadata_whitelist_rejects_tomht_owned_keys(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(ValueError, "TOMHT-owned.*age"):
+            _quiet_params(external_start_caller_metadata_keys=("sensor_id", "age"))
+
+    def test_update_track_metadata_modifies_caller_metadata_only(self) -> None:
+        tracker = _build_tracker()
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_external_start(timestamp)])
+
+        tracker.update_track_metadata(
+            internal_track_id=0,
+            updates={"sensor_id": "radar-a", "track_class": "fo"},
+        )
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        self.assertEqual("radar-a", output_track.metadata["sensor_id"])
+        self.assertEqual("fo", output_track.metadata["track_class"])
+
+        tracker.update_track_metadata(
+            public_track_id=output_track.id,
+            updates={"imm_profile": "cv_ca"},
+            remove_keys=("sensor_id",),
+        )
+        output_track = next(iter(tracker.get_map_output_tracks()))
+        self.assertNotIn("sensor_id", output_track.metadata)
+        self.assertEqual("fo", output_track.metadata["track_class"])
+        self.assertEqual("cv_ca", output_track.metadata["imm_profile"])
+
+    def test_update_track_metadata_rejects_tomht_owned_keys(self) -> None:
+        tracker = _build_tracker()
+        timestamp = datetime.datetime(2026, 3, 12, 10, 0, 0)
+        tracker.update_tracker(timestamp, [])
+        tracker.add_external_starts(timestamp, [_external_start(timestamp)])
+
+        with self.assertRaisesRegex(ValueError, "TOMHT-owned.*existence_probability"):
+            tracker.update_track_metadata(
+                internal_track_id=0,
+                updates={"existence_probability": 0.8},
+            )
+        with self.assertRaisesRegex(ValueError, "TOMHT-owned.*age"):
+            tracker.update_track_metadata(
+                internal_track_id=0,
+                remove_keys=("age",),
+            )
+
     def test_metadata_low_probability_external_start_remains_unpublished(
         self,
     ) -> None:

@@ -106,6 +106,7 @@ update_tracker(time, detections, *, caller_scan_context=None)
 tracks
 get_unused_detections()
 add_external_starts(time, starts)
+update_track_metadata(...)
 ```
 
 `update_tracker(...)` processes one scan/update and returns the current
@@ -121,6 +122,10 @@ primarily for external-start workflows where no internal initiator is configured
 
 `add_external_starts(...)` injects caller-vetted external starts after an
 `update_tracker(...)` call at the same timestamp.
+
+`update_track_metadata(...)` updates caller-owned metadata attached to an
+existing live logical track. TOMHT-owned metadata keys are reserved and cannot be
+modified through this method.
 
 #### Inspection and debug methods
 
@@ -383,6 +388,39 @@ If omitted, TOMHT assigns dense public output IDs in first-publication order.
 If supplied, it maps the internal TOMHT logical track ID to the public
 `Track.id` assigned when a tree first becomes published. A custom mapper is
 responsible for returning unique, non-`None`, non-reused public IDs.
+
+### Caller metadata
+
+`caller_metadata` is caller-owned per-track metadata stored on the logical
+`TrackTree` and merged into reconstructed Stone Soup `Track.metadata` views.
+This includes public output tracks and reconstructed tracks passed to caller-side
+custom hypothesisers or deleters.
+
+Use `external_start_caller_metadata_keys` to copy selected metadata from
+external starts at insertion time. The default is empty, so arbitrary external
+start metadata is not propagated unless explicitly whitelisted.
+
+Use `update_track_metadata(...)` to modify caller metadata for an existing live
+track:
+
+```python
+tracker.update_track_metadata(
+    internal_track_id=track.metadata["internal_track_id"],
+    updates={"sensor_id": "radar-a", "track_class": "fo"},
+    remove_keys=("old_key",),
+)
+```
+
+Exactly one of `internal_track_id` or `public_track_id` must be supplied.
+`internal_track_id` is the preferred stable handle; `public_track_id` is a
+convenience for published tracks.
+
+TOMHT-owned keys such as `internal_track_id`, `public_track_id`, `age`, `hits`,
+`missed_count`, `existence_log_odds`, `existence_probability`,
+`lifecycle_state`, and `publication_state` are reserved. They may still be read
+from external-start input metadata where documented, but they cannot be included
+in `external_start_caller_metadata_keys` or modified with
+`update_track_metadata(...)`.
 
 ### Python 3.14 note
 
@@ -881,6 +919,19 @@ any finite log-odds value directly and does not clamp it.
 
 External starts may also provide `"age"` and `"hits"` metadata.
 
+External starts may also carry caller-owned metadata such as `sensor_id` or
+`track_class`. To preserve those fields in TOMHT output and in caller-side
+reconstructed `Track` views, list the exact keys in:
+
+```python
+params.external_start_caller_metadata_keys
+```
+
+This whitelist is validated fail-fast. TOMHT-owned keys, including `"age"`,
+`"hits"`, `"existence_log_odds"`, and `"existence_probability"`, cannot be
+included in the whitelist even though TOMHT may read them as external-start input
+controls.
+
 With the defaults, `external_start_initial_existence_probability=0.95` crosses
 the default `track_confirmation_existence_probability=0.9`, so an external
 start is confirmed and published immediately unless publication gates are
@@ -1323,6 +1374,8 @@ retained committed suffix plus the current unresolved tail.
   returned by the internal initiator.
 - `external_start_initial_existence_probability`: default prior for external
   starts passed through `add_external_starts(...)`.
+- `external_start_caller_metadata_keys`: explicit whitelist of caller-owned
+  metadata keys copied from external starts into logical-track caller metadata.
 
 ### Tree lifecycle and publication
 

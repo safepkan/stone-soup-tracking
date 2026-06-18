@@ -18,6 +18,8 @@ Core control APIs:
 - ``tracks``: current MAP output as Stone Soup ``Track`` objects.
 - ``add_external_starts(time,starts)``: inject confirmed external starts after the
   same-timestamp ``update_tracker()`` call.
+- ``update_track_metadata(...)``: update caller-owned metadata attached to an
+  existing logical track.
 
 Track-oriented architecture:
 - persistent state is explicit ``TrackTree`` objects and their active leaves,
@@ -77,6 +79,7 @@ from .tomht_model import (
     TrackHypothesisNode,
     TrackTree,
 )
+from .tomht_metadata import validate_caller_metadata_keys
 from .tomht_lifecycle import (
     DeleterWithMetadata,
     LifecycleDeleterStats,
@@ -122,7 +125,7 @@ from .tomht_stats import (
 from .tomht_utils import (
     sorted_detections,
 )
-from .tomht_tree_store import TrackTreeStore
+from .tomht_tree_store import TrackTreeStore, resolve_track_tree_by_id
 from .utils import elapsed_ms, get_process_maxrss_mb, ns_to_ms, start_timer
 
 # ============================================================================
@@ -137,6 +140,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     - ``update_tracker(time,detections)``
     - ``tracks``
     - ``add_external_starts(time,starts)``
+    - ``update_track_metadata(...)``
 
     Core per-scan pipeline order:
     1. Sort detections deterministically.
@@ -292,6 +296,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
 
         params = apply_params_overrides(params, params_overrides)
         self.params = params
+        self._external_start_caller_metadata_keys = validate_caller_metadata_keys(
+            params.external_start_caller_metadata_keys,
+            source_name="external_start_caller_metadata_keys",
+        )
         self._deleter_with_metadata: DeleterWithMetadata = (
             resolve_deleter_with_metadata(params=params, deleter=deleter)
         )
@@ -643,6 +651,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             last_scan_index=self._last_scan_index,
             last_map_global=self._last_map_global,
             external_start_default_log_delta=self._external_start_initial_log_delta,
+            external_start_caller_metadata_keys=(
+                self._external_start_caller_metadata_keys
+            ),
             assoc_pad_label=TOMHTTracker.ASSOC_PAD,
         )
         self._last_map_global = result.map_global
@@ -656,6 +667,53 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 "get_unused_detections() requires a completed update_tracker() first."
             )
         return list(self._last_unused_detections)
+
+    def update_track_metadata(
+        self,
+        *,
+        internal_track_id: int | None = None,
+        public_track_id: object | None = None,
+        updates: Mapping[str, object] | None = None,
+        remove_keys: Iterable[str] = (),
+    ) -> None:
+        """Update caller-owned metadata for one live logical track.
+
+        Exactly one of ``internal_track_id`` or ``public_track_id`` must be
+        supplied. ``updates`` adds or replaces caller-owned metadata fields, and
+        ``remove_keys`` removes caller-owned fields if present. TOMHT-owned
+        metadata fields such as IDs, lifecycle state, age/hit counts, and
+        existence scores cannot be added, replaced, or removed through this API.
+        """
+        if (internal_track_id is None) == (public_track_id is None):
+            raise ValueError(
+                "Provide exactly one of internal_track_id or public_track_id."
+            )
+
+        if updates is None:
+            updates_dict: dict[str, object] = {}
+        else:
+            if not isinstance(updates, Mapping):
+                raise TypeError("updates must be a mapping of metadata keys to values.")
+            updates_dict = dict(updates)
+
+        update_keys = validate_caller_metadata_keys(
+            updates_dict.keys(),
+            source_name="update_track_metadata updates",
+        )
+        remove_key_tuple = validate_caller_metadata_keys(
+            remove_keys,
+            source_name="update_track_metadata remove_keys",
+        )
+
+        tree = resolve_track_tree_by_id(
+            tree_store=self._tree_store,
+            internal_track_id=internal_track_id,
+            public_track_id=public_track_id,
+        )
+        for key in remove_key_tuple:
+            tree.caller_metadata.pop(key, None)
+        for key in update_keys:
+            tree.caller_metadata[key] = updates_dict[key]
 
     # =========================================================================
     # Inspection and Stats API
@@ -725,6 +783,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 "lifecycle_state": tree.lifecycle_state,
                 "publication_state": tree.publication_state,
                 "public_track_id": tree.public_track_id,
+                "caller_metadata": dict(tree.caller_metadata),
             }
         return MappingProxyType(out)
 

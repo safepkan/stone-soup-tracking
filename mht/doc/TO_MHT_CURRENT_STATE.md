@@ -2,7 +2,7 @@
 
 ## Snapshot date
 
-This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, active detection-history trimming, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, smoke-runner parameter reset, lifecycle fast-deleter cleanup, feasibility-probe search cleanup, bounded detection-conflict retention, and committed output-state retention controls completed through **2026-06-11**.
+This document describes the tracker as it exists after the track-oriented TO-MHT transition and the subsequent replay-hardening, solver-seam extraction, branch-and-bound default switch, local-association ownership work, NLL/DPM scoring cleanup, start/lifecycle/publication redesign, module-extraction cleanup, live conflict-key cleanup, active detection-history trimming, overload-split mode work, overload-solver module split, small expansion/frontier API cleanup, smoke-runner parameter reset, lifecycle fast-deleter cleanup, feasibility-probe search cleanup, bounded detection-conflict retention, committed output-state retention controls, and caller-metadata support completed through **2026-06-18**.
 
 It is a **current-state snapshot**, not a roadmap and not a full design history.
 
@@ -30,6 +30,12 @@ Update (2026-06-11): committed output-state prefix retention is configurable via
 `TOMHTParams.max_stored_history_updates`. Both default to `None` for no cap.
 The caps apply when N-scan promotion appends a committed state; the current
 unresolved root-to-leaf lineage is not trimmed.
+
+Update (2026-06-18): `TrackTree` now owns a `caller_metadata` dictionary for
+integrator-controlled per-track metadata. External starts can copy whitelisted
+caller-owned fields via `TOMHTParams.external_start_caller_metadata_keys`, and
+existing tracks can be updated with `update_track_metadata(...)`. TOMHT-owned
+metadata keys remain reserved and are rejected in both paths.
 
 ---
 
@@ -332,6 +338,14 @@ tentative/unpublished but still inspectable with
 `add_external_starts(...)` does not run full lifecycle deletion, N-scan
 pruning, cluster rebuild, or scan stats updates.
 
+External starts may carry caller-owned metadata such as `sensor_id` or
+`track_class`. Only fields listed in
+`TOMHTParams.external_start_caller_metadata_keys` are copied into
+`TrackTree.caller_metadata`; the default whitelist is empty. TOMHT-owned fields
+such as `age`, `hits`, `existence_log_odds`, and `existence_probability` can
+still be consumed as start controls but cannot be whitelisted as caller
+metadata.
+
 ### Internal initiator starts
 
 Internal starts are controlled by constructor initiator presence:
@@ -419,6 +433,13 @@ Standard `update_tracker(...)`, `tracks`, and `get_map_output_tracks()` return p
 `TrackTree.track_id` is the internal logical ID assigned at tree creation. `TrackTree.public_track_id` is assigned once, at first publication.
 
 Default public IDs are dense integers in first-publication order. A custom `output_track_id_mapper` can map internal logical IDs into caller-specific public IDs, but custom mappers are responsible for uniqueness and non-reuse.
+
+Caller-owned per-track metadata lives in `TrackTree.caller_metadata`, can be
+initialized from whitelisted external-start metadata, and can be changed with
+`update_track_metadata(...)`. It is merged into reconstructed Stone Soup
+`Track.metadata` for both public outputs and caller-side custom
+hypothesiser/deleter calls. TOMHT-owned metadata keys are projected last and are
+not caller-modifiable.
 
 Stable output metadata should use:
 

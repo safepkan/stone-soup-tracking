@@ -380,6 +380,7 @@ def apply_post_n_scan_track_lifecycle(
                     output_track_id=output_track_id_for_deleter(leaf),
                     lifecycle_state=tree.lifecycle_state,
                     public_track_id=tree.public_track_id,
+                    caller_metadata=tree.caller_metadata,
                 )
                 lifecycle_deleter_stats.track_reconstruct_calls += 1
                 lifecycle_deleter_stats.track_reconstruct_wall_ns += elapsed_ns(

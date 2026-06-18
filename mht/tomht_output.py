@@ -1,5 +1,6 @@
 """Stone Soup output-adapter helpers for TOMHT node-based internals."""
 
+from collections.abc import Mapping
 from math import exp
 from typing import Callable
 
@@ -70,7 +71,7 @@ def output_track_metadata_from_leaf_node(
     public_track_id: object | None = None,
 ) -> dict[str, object]:
     """
-    Build the explicit TOMHT-owned metadata projection for a reconstructed output
+    Build the explicit TOMHT-owned metadata projection for a reconstructed
     Track.
 
     This helper defines the metadata contract for Track objects returned from the
@@ -80,8 +81,10 @@ def output_track_metadata_from_leaf_node(
 
     Important:
     - This is an explicit projection from the internal node state.
-    - Arbitrary metadata from input birth tracks or external-start tracks is
-      intentionally not propagated.
+    - Arbitrary metadata from input birth tracks or external-start tracks is not
+      propagated through this projection. Caller-owned metadata is carried
+      separately on TrackTree.caller_metadata and merged at reconstruction
+      boundaries.
     - ``internal_track_id`` is the stable internal TOMHT logical-track
       identifier.
     - ``track_id`` is a deprecated compatibility alias for ``internal_track_id``.
@@ -125,12 +128,34 @@ def output_track_metadata_from_leaf_node(
     return metadata
 
 
+def merged_track_metadata_from_leaf_node(
+    leaf_node: TrackHypothesisNode,
+    *,
+    lifecycle_state: TrackLifecycleState | None = None,
+    publication_state: TrackPublicationState | None = None,
+    public_track_id: object | None = None,
+    caller_metadata: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Merge caller-owned metadata with the TOMHT-owned leaf projection."""
+    metadata = dict(caller_metadata or {})
+    metadata.update(
+        output_track_metadata_from_leaf_node(
+            leaf_node,
+            lifecycle_state=lifecycle_state,
+            publication_state=publication_state,
+            public_track_id=public_track_id,
+        )
+    )
+    return metadata
+
+
 def reconstruct_track_from_leaf_node(
     leaf_node: TrackHypothesisNode,
     *,
     lifecycle_state: TrackLifecycleState | None = None,
     publication_state: TrackPublicationState | None = None,
     public_track_id: object | None = None,
+    caller_metadata: Mapping[str, object] | None = None,
 ) -> Track:
     """
     Reconstruct a Stone Soup Track compatibility view from node ancestry.
@@ -141,11 +166,12 @@ def reconstruct_track_from_leaf_node(
     lineage = lineage_from_leaf_node(leaf_node)
     tr = Track([node.state for node in lineage], id=int(leaf_node.track_id))
     tr.metadata.update(
-        output_track_metadata_from_leaf_node(
+        merged_track_metadata_from_leaf_node(
             leaf_node,
             lifecycle_state=lifecycle_state,
             publication_state=publication_state,
             public_track_id=public_track_id,
+            caller_metadata=caller_metadata,
         )
     )
     return tr
@@ -159,6 +185,7 @@ def reconstruct_track_from_committed_prefix_and_leaf_node(
     public_track_id: object | None = None,
     lifecycle_state: TrackLifecycleState | None = None,
     publication_state: TrackPublicationState | None = None,
+    caller_metadata: Mapping[str, object] | None = None,
 ) -> Track:
     """Reconstruct output track from committed prefix plus unresolved lineage."""
     lineage = lineage_from_leaf_node(leaf_node)
@@ -167,11 +194,12 @@ def reconstruct_track_from_committed_prefix_and_leaf_node(
     track_id = internal_track_id if output_track_id is None else output_track_id
     tr = Track([*committed_states, *unresolved_states], id=track_id)
     tr.metadata.update(
-        output_track_metadata_from_leaf_node(
+        merged_track_metadata_from_leaf_node(
             leaf_node,
             lifecycle_state=lifecycle_state,
             publication_state=publication_state,
             public_track_id=public_track_id,
+            caller_metadata=caller_metadata,
         )
     )
     return tr
@@ -298,6 +326,7 @@ def reconstruct_map_output_tracks(
                 lifecycle_state=tree.lifecycle_state,
                 publication_state=tree.publication_state,
                 public_track_id=public_track_id,
+                caller_metadata=tree.caller_metadata,
             )
         )
     return output_tracks

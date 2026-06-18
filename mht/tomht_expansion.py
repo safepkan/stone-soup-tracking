@@ -166,6 +166,7 @@ def candidates_for_track_leaf(
             lifecycle_state=tree.lifecycle_state,
             publication_state=tree.publication_state,
             public_track_id=tree.public_track_id,
+            caller_metadata=tree.caller_metadata,
         )
         expansion_call_stats.track_reconstruct_calls += 1
         expansion_call_stats.track_reconstruct_wall_ns += elapsed_ns(

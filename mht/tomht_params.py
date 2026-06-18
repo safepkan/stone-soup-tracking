@@ -7,6 +7,7 @@ from dataclasses import dataclass, fields, replace
 from math import isfinite
 from typing import Any
 
+from .tomht_metadata import validate_caller_metadata_keys
 from .tomht_scoring import _existence_probability_to_log_odds
 
 
@@ -79,6 +80,10 @@ class TOMHTParams:
     initiator_start_initial_existence_probability: float = 0.8
     # External-start prior; default 0.95 reflects externally confirmed starts.
     external_start_initial_existence_probability: float = 0.95
+    # Caller-owned metadata keys to copy from external starts into the logical
+    # TrackTree caller_metadata store. TOMHT-owned output keys are reserved and
+    # rejected during parameter validation.
+    external_start_caller_metadata_keys: tuple[str, ...] = ()
 
     # Confirmation, deletion, and publication.
     # Sticky tree-level confirmation threshold, compared (as log-odds) against the
@@ -195,9 +200,17 @@ class TOMHTParams:
         )
         if int(self.ns_scan_window) < 0:
             raise ValueError("ns_scan_window must be >= 0.")
+        self._validate_caller_metadata_params()
         self._validate_overload_split_params()
         self._validate_publication_params()
         self._validate_stored_history_params()
+
+    def _validate_caller_metadata_params(self) -> None:
+        """Validate external-start caller metadata passthrough controls."""
+        validate_caller_metadata_keys(
+            self.external_start_caller_metadata_keys,
+            source_name="external_start_caller_metadata_keys",
+        )
 
     def _validate_overload_split_params(self) -> None:
         """Validate overload split mode controls."""

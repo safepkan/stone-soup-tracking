@@ -2,6 +2,12 @@
 
 ## Completed object-boundary cleanup phase
 
+- Added caller-owned track metadata support for integration handoff:
+  `TrackTree.caller_metadata` now persists caller fields across the TOMHT
+  lifecycle, `external_start_caller_metadata_keys` can whitelist metadata copied
+  from external starts, and `update_track_metadata(...)` can modify caller
+  metadata on existing live tracks. TOMHT-owned metadata keys are rejected
+  fail-fast in both paths.
 - Bounded detection-conflict retention: tracker-created node
   `detection_history_keys` now retain only keys in the N-scan conflict horizon,
   and tree-level `committed_detection_keys` is a bounded masking set rather than

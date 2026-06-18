@@ -8,6 +8,7 @@ import datetime
 from stonesoup.types.track import Track
 
 from .tomht_model import GlobalHypothesis, TrackHypothesisNode
+from .tomht_metadata import caller_metadata_from_mapping
 from .tomht_scoring import existence_metadata_to_log_odds
 from .tomht_tree_store import TrackTreeStore
 
@@ -63,6 +64,7 @@ def make_external_start_root(
     tree_store: TrackTreeStore,
     last_scan_index: int | None,
     external_start_default_log_delta: float,
+    external_start_caller_metadata_keys: tuple[str, ...],
     assoc_pad_label: int,
 ) -> TrackHypothesisNode:
     """Convert one confirmed external start Track into an inserted root node."""
@@ -90,6 +92,10 @@ def make_external_start_root(
         start,
         default_log_delta=external_start_default_log_delta,
     )
+    caller_metadata = caller_metadata_from_mapping(
+        start.metadata,
+        keys=external_start_caller_metadata_keys,
+    )
 
     return tree_store.create_root_tree_for_new_track(
         scan_index=int(last_scan_index),
@@ -102,6 +108,7 @@ def make_external_start_root(
         age=age,
         hits=hits,
         root_source="external_start",
+        caller_metadata=caller_metadata,
     )
 
 
@@ -113,6 +120,7 @@ def insert_external_start_trees(
     last_scan_index: int | None,
     last_map_global: GlobalHypothesis,
     external_start_default_log_delta: float,
+    external_start_caller_metadata_keys: tuple[str, ...],
     assoc_pad_label: int,
 ) -> ExternalStartInsertionResult:
     """Insert external-start roots and return the updated full-scan MAP view."""
@@ -123,6 +131,7 @@ def insert_external_start_trees(
             tree_store=tree_store,
             last_scan_index=last_scan_index,
             external_start_default_log_delta=external_start_default_log_delta,
+            external_start_caller_metadata_keys=external_start_caller_metadata_keys,
             assoc_pad_label=assoc_pad_label,
         )
         for start in starts

@@ -73,6 +73,7 @@ class TrackTree:
     lifecycle_state: TrackLifecycleState = "tentative"
     publication_state: TrackPublicationState = "unpublished"
     public_track_id: object | None = None
+    caller_metadata: dict[str, object] = field(default_factory=dict)
     committed_states: list[State] = field(default_factory=list)
     # Bounded masking set for recently committed detection keys that can still
     # appear in retained node histories. This is not a full committed detection

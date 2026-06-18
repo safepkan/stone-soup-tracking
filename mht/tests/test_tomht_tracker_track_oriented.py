@@ -104,6 +104,10 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
 
         tracker.update_tracker(t0, [])
         tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        tracker.update_track_metadata(
+            internal_track_id=0,
+            updates={"track_class": "fo", "imm_profile": "cv_ca"},
+        )
         tracker.update_tracker(t1, [])
 
         self.assertEqual(1, len(hypothesiser.track_metadata))
@@ -120,6 +124,8 @@ class TOMHTTrackOrientedArchitectureTest(unittest.TestCase):
         self.assertEqual(0, metadata["public_track_id"])
         self.assertEqual("confirmed", metadata["lifecycle_state"])
         self.assertEqual("published", metadata["publication_state"])
+        self.assertEqual("fo", metadata["track_class"])
+        self.assertEqual("cv_ca", metadata["imm_profile"])
 
     def test_default_hypothesiser_expansion_skips_track_reconstruction(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)

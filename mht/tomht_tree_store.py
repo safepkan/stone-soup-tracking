@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import Iterable
+from collections.abc import Iterable, Mapping
 
 from stonesoup.types.state import State
 
@@ -166,6 +166,7 @@ class TrackTreeStore:
         root: TrackHypothesisNode,
         *,
         root_source: str,
+        caller_metadata: Mapping[str, object] | None = None,
     ) -> TrackTree:
         """Insert a single-root tree for a newly created root node."""
         return self.add_track_tree(
@@ -174,6 +175,7 @@ class TrackTreeStore:
                 root_node_id=int(root.node_id),
                 active_leaf_node_ids={int(root.node_id)},
                 root_source=root_source,
+                caller_metadata=dict(caller_metadata or {}),
             )
         )
 
@@ -190,6 +192,7 @@ class TrackTreeStore:
         age: int,
         hits: int,
         root_source: str,
+        caller_metadata: Mapping[str, object] | None = None,
     ) -> TrackHypothesisNode:
         """Create a new logical track root and insert its single-root tree."""
         root = self.create_root_node(
@@ -208,6 +211,7 @@ class TrackTreeStore:
         self.add_track_tree_for_root(
             root,
             root_source=root_source,
+            caller_metadata=caller_metadata,
         )
         return root
 
@@ -308,3 +312,35 @@ class TrackTreeStore:
                 for child_id in node.child_node_ids
                 if child_id in retained_node_ids
             }
+
+
+def resolve_track_tree_by_id(
+    *,
+    tree_store: TrackTreeStore,
+    internal_track_id: int | None = None,
+    public_track_id: object | None = None,
+) -> TrackTree:
+    """Resolve one live track tree by internal or public track ID."""
+    if (internal_track_id is None) == (public_track_id is None):
+        raise ValueError("Provide exactly one of internal_track_id or public_track_id.")
+
+    if internal_track_id is not None:
+        track_id = int(internal_track_id)
+        tree = tree_store.track_trees_by_track_id.get(track_id)
+        if tree is None:
+            raise KeyError(f"No live TOMHT track with internal_track_id={track_id!r}.")
+        return tree
+
+    matches = [
+        tree
+        for tree in tree_store.track_trees_by_track_id.values()
+        if tree.public_track_id == public_track_id
+    ]
+    if not matches:
+        raise KeyError(f"No live TOMHT track with public_track_id={public_track_id!r}.")
+    if len(matches) > 1:
+        raise ValueError(
+            "public_track_id matched multiple live TOMHT tracks; custom "
+            "output_track_id_mapper values must be unique for track lookup."
+        )
+    return matches[0]
