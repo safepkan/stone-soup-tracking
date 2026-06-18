@@ -21,6 +21,7 @@ class DetectionKey(NamedTuple):
 
 TrackLifecycleState: TypeAlias = Literal["tentative", "confirmed"]
 TrackPublicationState: TypeAlias = Literal["unpublished", "published"]
+AssociationStatus: TypeAlias = Literal["committed", "tentative"]
 
 
 @dataclass
@@ -57,6 +58,10 @@ class TrackHypothesisNode:
 
     root_source: str
     birth_scan_index: int
+    # Caller-facing index from enumerate(detections) in update_tracker(...).
+    # This is intentionally separate from DetectionKey.det_index, which is the
+    # tracker-internal sorted scan index used for deterministic solving.
+    used_input_det_index: int | None = None
 
     # Mutable child links for explicit tree navigation / pruning operations.
     child_node_ids: set[int] = field(default_factory=set)
@@ -102,6 +107,7 @@ class ScanContext:
     timestamp: datetime.datetime
     detections: list[Detection]
     det_index_by_obj: dict[int, int]
+    det_input_index_by_obj: dict[int, int] = field(default_factory=dict)
     caller_scan_context: object | None = None
 
 
@@ -139,3 +145,40 @@ class MAPHypothesisSnapshot:
 
     log_weight: float
     leaf_nodes_by_track_id: Mapping[int, TrackHypothesisNode]
+
+
+@dataclass(frozen=True)
+class MapAssociationStep:
+    """One association decision in a MAP-selected track suffix."""
+
+    scan_index: int
+    timestamp: datetime.datetime
+    association_status: AssociationStatus
+    input_detection_index: int | None
+    internal_detection_index: int | None
+    node_id: int
+    state_kind: str
+    detection_key: DetectionKey | None
+
+
+@dataclass(frozen=True)
+class MapTrackAssociationHistory:
+    """Association-history suffix for one MAP-selected logical track."""
+
+    internal_track_id: int
+    public_track_id: object | None
+    lifecycle_state: TrackLifecycleState
+    publication_state: TrackPublicationState
+    committed_boundary_scan_index: int | None
+    steps: tuple[MapAssociationStep, ...]
+
+
+@dataclass(frozen=True)
+class MAPAssociationHistorySnapshot:
+    """Read-only MAP association-history view for inspection/integration."""
+
+    selection: Literal["map"]
+    scan_index: int | None
+    timestamp: datetime.datetime | None
+    include_unpublished: bool
+    histories: tuple[MapTrackAssociationHistory, ...]

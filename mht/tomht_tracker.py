@@ -20,6 +20,8 @@ Core control APIs:
   same-timestamp ``update_tracker()`` call.
 - ``update_track_metadata(...)``: update caller-owned metadata attached to an
   existing logical track.
+- ``get_map_association_history(...)``: inspect MAP association state as it
+  evolves from tentative to N-scan committed.
 
 Track-oriented architecture:
 - persistent state is explicit ``TrackTree`` objects and their active leaves,
@@ -73,6 +75,7 @@ from .tomht_expansion import (
 from .tomht_model import (
     ClusterRebuildSnapshot,
     GlobalHypothesis,
+    MAPAssociationHistorySnapshot,
     MAPHypothesisSnapshot,
     NScanCommitmentSnapshot,
     ScanContext,
@@ -91,6 +94,7 @@ from .tomht_lifecycle import (
 from .tomht_output import (
     apply_output_publication,
     ensure_public_track_id,
+    reconstruct_map_association_history,
     reconstruct_map_output_tracks,
     resolve_output_track_id_mapper,
 )
@@ -123,7 +127,7 @@ from .tomht_stats import (
     print_summary_stats as print_summary_stats_report,
 )
 from .tomht_utils import (
-    sorted_detections,
+    sorted_detections_with_input_indices,
 )
 from .tomht_tree_store import TrackTreeStore, resolve_track_tree_by_id
 from .utils import elapsed_ms, get_process_maxrss_mb, ns_to_ms, start_timer
@@ -141,6 +145,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     - ``tracks``
     - ``add_external_starts(time,starts)``
     - ``update_track_metadata(...)``
+    - ``get_map_association_history(...)``
 
     Core per-scan pipeline order:
     1. Sort detections deterministically.
@@ -407,13 +412,18 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         scan_index = (
             0 if self._last_scan_index is None else int(self._last_scan_index) + 1
         )
-        det_list = sorted_detections(detections)
+        indexed_det_list = sorted_detections_with_input_indices(detections)
+        det_list = [det for _, det in indexed_det_list]
         det_index_by_obj = {id(det): i for i, det in enumerate(det_list)}
+        det_input_index_by_obj = {
+            id(det): input_index for input_index, det in indexed_det_list
+        }
         ctx = ScanContext(
             scan_index=scan_index,
             timestamp=time,
             detections=det_list,
             det_index_by_obj=det_index_by_obj,
+            det_input_index_by_obj=det_input_index_by_obj,
             caller_scan_context=caller_scan_context,
         )
         prep_ctx_ms = elapsed_ms(phase_start_ns)
@@ -740,6 +750,21 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             map_snapshot=self.get_map_hypothesis_snapshot(),
             include_unpublished=include_unpublished,
             output_track_id_mapper=self._output_track_id_mapper,
+        )
+
+    def get_map_association_history(
+        self,
+        *,
+        include_unpublished: bool = False,
+    ) -> MAPAssociationHistorySnapshot:
+        """Return MAP-selected association history for inspection/integration."""
+        return reconstruct_map_association_history(
+            tree_store=self._tree_store,
+            map_snapshot=self.get_map_hypothesis_snapshot(),
+            nscan_snapshot=self._nscan_commitment_snapshot,
+            include_unpublished=include_unpublished,
+            scan_index=self._last_scan_index,
+            timestamp=self._last_update_timestamp,
         )
 
     def get_map_hypothesis_snapshot(self) -> MAPHypothesisSnapshot:

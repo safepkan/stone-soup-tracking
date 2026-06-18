@@ -82,6 +82,7 @@ def candidate_from_distance_hypothesis(
     expansion_call_stats: ExpansionCallStats,
 ) -> LocalChildCandidate:
     """Map one distance hypothesis to one child node candidate."""
+    input_det_index: int | None = None
     if isinstance(hypothesis.measurement, MissedDetection):
         state = hypothesis.prediction
         used_det_key = None
@@ -98,6 +99,9 @@ def candidate_from_distance_hypothesis(
                 "input detection objects for this scan."
             )
         det_index = int(det_index_raw)
+        input_det_index_raw = ctx.det_input_index_by_obj.get(id(detection))
+        if input_det_index_raw is not None:
+            input_det_index = int(input_det_index_raw)
         update_start_ns = start_timer()
         state = updater.update(hypothesis)
         expansion_call_stats.update_calls += 1
@@ -125,6 +129,7 @@ def candidate_from_distance_hypothesis(
         last_det_hit=used_det_key is not None,
         root_source=leaf_node.root_source,
         birth_scan_index=leaf_node.birth_scan_index,
+        used_input_det_index=input_det_index if used_det_key is not None else None,
     )
     return LocalChildCandidate(
         track_id=leaf_node.track_id,

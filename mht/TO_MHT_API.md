@@ -60,12 +60,16 @@ from mht.api import (
     TOMHTParams,
     DetectionProbabilityModel,
     ConstantDetectionProbabilityModel,
+    MAPAssociationHistorySnapshot,
+    MapTrackAssociationHistory,
+    MapAssociationStep,
 )
 ```
 
 Import integration code against `mht.api`, not the internal `mht.tomht_*`
-modules. The inspection/debug snapshot types and the `tomht_*` modules are not
-part of this stable surface and may change without notice.
+modules. The association-history return types above are part of the stable
+public surface. Other inspection/debug snapshot types and the `tomht_*` modules
+are not part of this stable surface and may change without notice.
 
 ### Typical setup
 
@@ -130,10 +134,12 @@ modified through this method.
 #### Inspection and debug methods
 
 These helpers are intended for inspection, evaluation, and debugging.
-They are not part of the stable integration contract and may change without notice.
+Unless a field is explicitly documented below as public/consumer-safe, debug
+snapshot details may change without notice.
 
 ```python
 get_map_output_tracks(include_unpublished=False)
+get_map_association_history(include_unpublished=False)
 get_map_hypothesis_snapshot()
 get_n_scan_commitment_snapshot()
 get_last_cluster_snapshots()
@@ -143,6 +149,48 @@ print_summary_stats()
 
 `get_map_output_tracks(include_unpublished=True)` can be used for inspection of
 unpublished MAP-selected tracks.
+
+`get_map_association_history(include_unpublished=True)` returns the current
+MAP-selected association-history suffix for each included live track. By default
+it mirrors `get_map_output_tracks()` and includes only published tracks; pass
+`include_unpublished=True` to inspect tentative/unpublished MAP-selected tracks
+as well.
+
+The association-history view is intended to provide full observability into the
+association state as it evolves and settles into N-scan committed association.
+It does not promise a full lifetime audit log. For each track, the returned
+steps are ordered oldest to newest and contain the latest committed association
+boundary when one exists, followed by the current MAP-selected tentative suffix.
+If no association has committed yet, all returned steps are tentative. This lets
+consumer tooling decide what to extract and how to present it: for example, a
+debug plot can show only the latest scan's MAP associations, while a richer
+tool can watch tentative associations change before they become committed.
+
+The intended public fields are:
+
+```python
+history.internal_track_id
+history.public_track_id
+history.lifecycle_state
+history.publication_state
+history.committed_boundary_scan_index
+step.scan_index
+step.timestamp
+step.input_detection_index
+step.association_status  # "committed" or "tentative"
+```
+
+`step.input_detection_index` is the caller-facing index from
+`enumerate(detections)` in the corresponding `update_tracker(...)` call, or
+`None` for a miss or a start without a known source detection. A caller should
+not pass the same `Detection` object more than once in one update if it wants
+association identity to be meaningful.
+
+Additional fields such as `step.internal_detection_index`, `step.node_id`,
+`step.state_kind`, and `step.detection_key` are diagnostic aids for TOMHT
+development and detailed debugging. They may help correlate logs and internal
+snapshots, but consumers should not build long-term integration behavior around
+their exact values.
 
 `get_map_hypothesis_snapshot()` exposes the internal MAP-selected leaf nodes for
 debugging and evaluation. It always returns a snapshot; before any scan, that

@@ -63,6 +63,7 @@ class TrackTreeStore:
         last_det_hit: bool,
         root_source: str,
         birth_scan_index: int,
+        used_input_det_index: int | None = None,
     ) -> TrackHypothesisNode:
         """Create and register one persistent hypothesis node."""
         if parent is not None and parent.track_id != track_id:
@@ -115,6 +116,7 @@ class TrackTreeStore:
             last_det_hit=bool(last_det_hit),
             root_source=root_source,
             birth_scan_index=int(birth_scan_index),
+            used_input_det_index=used_input_det_index,
         )
         self.register_node(node)
         if parent is not None:
@@ -135,6 +137,7 @@ class TrackTreeStore:
         age: int,
         hits: int,
         root_source: str,
+        used_input_det_index: int | None = None,
     ) -> TrackHypothesisNode:
         """Create a root node for an internal birth or external start."""
         return self.create_track_hypothesis_node(
@@ -154,6 +157,7 @@ class TrackTreeStore:
             last_det_hit=used_det_key is not None,
             root_source=root_source,
             birth_scan_index=scan_index,
+            used_input_det_index=used_input_det_index,
         )
 
     def add_track_tree(self, tree: TrackTree) -> TrackTree:
@@ -193,6 +197,7 @@ class TrackTreeStore:
         hits: int,
         root_source: str,
         caller_metadata: Mapping[str, object] | None = None,
+        used_input_det_index: int | None = None,
     ) -> TrackHypothesisNode:
         """Create a new logical track root and insert its single-root tree."""
         root = self.create_root_node(
@@ -207,6 +212,7 @@ class TrackTreeStore:
             age=age,
             hits=hits,
             root_source=root_source,
+            used_input_det_index=used_input_det_index,
         )
         self.add_track_tree_for_root(
             root,

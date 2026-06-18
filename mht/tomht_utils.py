@@ -41,9 +41,16 @@ def det_sort_key(det: Detection) -> tuple:
 
 def sorted_detections(detections: Iterable[Detection]) -> list[Detection]:
     """Return a deterministic list copy of scan detections."""
-    det_list = list(detections)
-    det_list.sort(key=det_sort_key)
-    return det_list
+    return [det for _, det in sorted_detections_with_input_indices(detections)]
+
+
+def sorted_detections_with_input_indices(
+    detections: Iterable[Detection],
+) -> list[tuple[int, Detection]]:
+    """Return deterministic detections with caller iteration indices."""
+    indexed_detections = list(enumerate(detections))
+    indexed_detections.sort(key=lambda item: det_sort_key(item[1]))
+    return indexed_detections
 
 
 def current_scan_det_indices_from_keys(

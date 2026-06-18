@@ -20,12 +20,16 @@ from mht.api import (
     TOMHTParams,
     DetectionProbabilityModel,
     ConstantDetectionProbabilityModel,
+    MAPAssociationHistorySnapshot,
+    MapTrackAssociationHistory,
+    MapAssociationStep,
 )
 ```
 
 Integration code should import from `mht.api`, not the internal `mht.tomht_*`
-modules. The inspection/debug snapshot types and the `tomht_*` modules are not
-part of the stable surface and may change between releases.
+modules. The association-history return types above are part of the stable
+public surface. Other inspection/debug snapshot types and the `tomht_*` modules
+are not part of the stable surface and may change between releases.
 
 ## Layout
 

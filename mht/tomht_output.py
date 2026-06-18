@@ -1,6 +1,7 @@
 """Stone Soup output-adapter helpers for TOMHT node-based internals."""
 
 from collections.abc import Mapping
+import datetime
 from math import exp
 from typing import Callable
 
@@ -8,8 +9,13 @@ from stonesoup.types.track import Track
 from stonesoup.types.state import State
 
 from .tomht_model import (
+    AssociationStatus,
     GlobalHypothesis,
+    MAPAssociationHistorySnapshot,
     MAPHypothesisSnapshot,
+    MapAssociationStep,
+    MapTrackAssociationHistory,
+    NScanCommitmentSnapshot,
     TrackHypothesisNode,
     TrackLifecycleState,
     TrackPublicationState,
@@ -51,6 +57,71 @@ def lineage_from_leaf_node(leaf_node: TrackHypothesisNode) -> list[TrackHypothes
         node = node.parent
     lineage.reverse()
     return lineage
+
+
+def _association_step_from_node(
+    node: TrackHypothesisNode,
+    *,
+    association_status: AssociationStatus,
+) -> MapAssociationStep:
+    """Build one public/diagnostic association-history step from a node."""
+    detection_key = node.used_det_key
+    internal_detection_index = None
+    input_detection_index = None
+    if detection_key is not None:
+        internal_detection_index = int(detection_key.det_index)
+        if node.used_input_det_index is not None:
+            input_detection_index = int(node.used_input_det_index)
+
+    return MapAssociationStep(
+        scan_index=int(node.scan_index),
+        timestamp=node.timestamp,
+        association_status=association_status,
+        input_detection_index=input_detection_index,
+        internal_detection_index=internal_detection_index,
+        node_id=int(node.node_id),
+        state_kind=node.state_kind,
+        detection_key=detection_key,
+    )
+
+
+def _map_association_steps_from_lineage(
+    *,
+    lineage: list[TrackHypothesisNode],
+    latest_committed_node: TrackHypothesisNode | None,
+) -> tuple[MapAssociationStep, ...]:
+    """Return latest committed boundary plus current MAP tentative suffix."""
+    if latest_committed_node is None:
+        return tuple(
+            _association_step_from_node(node, association_status="tentative")
+            for node in lineage
+        )
+
+    committed_node_id = int(latest_committed_node.node_id)
+    committed_index = None
+    for idx, node in enumerate(lineage):
+        if int(node.node_id) == committed_node_id:
+            committed_index = idx
+            break
+
+    if committed_index is None:
+        return tuple(
+            _association_step_from_node(node, association_status="tentative")
+            for node in lineage
+        )
+
+    steps: list[MapAssociationStep] = []
+    for idx, node in enumerate(lineage[committed_index:], start=committed_index):
+        association_status: AssociationStatus = (
+            "committed" if idx == committed_index else "tentative"
+        )
+        steps.append(
+            _association_step_from_node(
+                node,
+                association_status=association_status,
+            )
+        )
+    return tuple(steps)
 
 
 def _sigmoid_from_log_odds(log_odds: float) -> float:
@@ -330,3 +401,59 @@ def reconstruct_map_output_tracks(
             )
         )
     return output_tracks
+
+
+def reconstruct_map_association_history(
+    *,
+    tree_store: TrackTreeStore,
+    map_snapshot: MAPHypothesisSnapshot | None,
+    nscan_snapshot: NScanCommitmentSnapshot,
+    include_unpublished: bool,
+    scan_index: int | None,
+    timestamp: datetime.datetime | None,
+) -> MAPAssociationHistorySnapshot:
+    """Reconstruct the current MAP association-history suffix."""
+    if map_snapshot is None:
+        return MAPAssociationHistorySnapshot(
+            selection="map",
+            scan_index=scan_index,
+            timestamp=timestamp,
+            include_unpublished=include_unpublished,
+            histories=(),
+        )
+
+    histories: list[MapTrackAssociationHistory] = []
+    for track_id, leaf_node in sorted(map_snapshot.leaf_nodes_by_track_id.items()):
+        tree = tree_store.track_trees_by_track_id.get(int(track_id))
+        if tree is None:
+            continue
+        if not include_unpublished and tree.publication_state != "published":
+            continue
+
+        lineage = lineage_from_leaf_node(leaf_node)
+        latest_committed_node = (
+            nscan_snapshot.latest_committed_ancestor_by_track_id.get(int(track_id))
+        )
+        histories.append(
+            MapTrackAssociationHistory(
+                internal_track_id=int(track_id),
+                public_track_id=tree.public_track_id,
+                lifecycle_state=tree.lifecycle_state,
+                publication_state=tree.publication_state,
+                committed_boundary_scan_index=(
+                    nscan_snapshot.committed_boundary_by_track_id.get(int(track_id))
+                ),
+                steps=_map_association_steps_from_lineage(
+                    lineage=lineage,
+                    latest_committed_node=latest_committed_node,
+                ),
+            )
+        )
+
+    return MAPAssociationHistorySnapshot(
+        selection="map",
+        scan_index=scan_index,
+        timestamp=timestamp,
+        include_unpublished=include_unpublished,
+        histories=tuple(histories),
+    )

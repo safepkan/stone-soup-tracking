@@ -76,7 +76,14 @@ The main remaining profiling hotspot is no longer exact cluster solving. With br
 
 ## Public API and integration boundary
 
-The stable public names (`TOMHTTracker`, `TOMHTParams`, `DetectionProbabilityModel`, `ConstantDetectionProbabilityModel`) are re-exported from `mht.api`. Integration code should import from `mht.api` rather than the internal `mht.tomht_*` modules; `__init__.py` is intentionally kept empty. Inspection/debug snapshot types remain importable from their internal modules but are not part of the stable surface.
+The stable public names (`TOMHTTracker`, `TOMHTParams`,
+`DetectionProbabilityModel`, `ConstantDetectionProbabilityModel`,
+`MAPAssociationHistorySnapshot`, `MapTrackAssociationHistory`, and
+`MapAssociationStep`) are re-exported from `mht.api`. Integration code should
+import from `mht.api` rather than the internal `mht.tomht_*` modules;
+`__init__.py` is intentionally kept empty. Other inspection/debug snapshot types
+remain importable from their internal modules but are not part of the stable
+surface.
 
 The intended operational public surface is:
 
@@ -89,6 +96,7 @@ The tracker also exposes inspection helpers:
 
 - `get_map_hypothesis_snapshot()`,
 - `get_map_output_tracks(include_unpublished=False)`,
+- `get_map_association_history(include_unpublished=False)`,
 - `get_n_scan_commitment_snapshot()`,
 - `get_last_cluster_snapshots()`,
 - `get_track_tree_snapshot()`,
@@ -427,6 +435,14 @@ publish_lifecycle_states = ("confirmed",)
 Additional gates include `publish_min_hits`, `publish_min_age`, and `publish_min_existence_probability`.
 
 Standard `update_tracker(...)`, `tracks`, and `get_map_output_tracks()` return published MAP tracks only. `get_map_output_tracks(include_unpublished=True)` reconstructs live MAP-selected unpublished tracks for inspection.
+
+`get_map_association_history(include_unpublished=False)` mirrors that published
+filtering behavior. It returns a minimal observable association-history suffix
+for each included MAP-selected track: the latest N-scan committed boundary step
+when one exists, followed by the current MAP-selected tentative suffix. This lets
+integration/debug tooling observe associations as they evolve and settle into
+committed association, while leaving each consumer to decide whether to present
+only the latest scan or maintain a longer caller-side history.
 
 ### Public and internal IDs
 

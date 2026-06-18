@@ -54,6 +54,26 @@ def birth_used_key(
         return None
 
 
+def birth_used_input_det_index(
+    tr: Track,
+    *,
+    det_input_index_by_obj: dict[int, int],
+) -> int | None:
+    """Best-effort extraction of the caller input index for a birth detection."""
+    try:
+        last = tr.states[-1]
+        hyp = getattr(last, "hypothesis", None)
+        meas = getattr(hyp, "measurement", None) if hyp is not None else None
+        if meas is None:
+            return None
+        input_det_index = det_input_index_by_obj.get(id(meas))
+        if input_det_index is None:
+            return None
+        return int(input_det_index)
+    except Exception:
+        return None
+
+
 def birth_holding_track(birth: Track) -> Track:
     """Return the initiator holding-track metadata when available."""
     holding = birth.metadata.get("holding_track", None)
@@ -309,6 +329,10 @@ def run_internal_births_from_residuals(
             scan_index=ctx.scan_index,
             det_index_by_obj=ctx.det_index_by_obj,
         )
+        used_input_det_index = birth_used_input_det_index(
+            birth_track,
+            det_input_index_by_obj=ctx.det_input_index_by_obj,
+        )
         age = max(len(birth_track), 1)
         hits = 1 if used_key is not None else 0
         root_log_delta = initiator_start_initial_log_delta(
@@ -328,6 +352,9 @@ def run_internal_births_from_residuals(
             age=age,
             hits=hits,
             root_source="internal_birth",
+            used_input_det_index=(
+                used_input_det_index if used_key is not None else None
+            ),
         )
 
     return InternalBirthResult(

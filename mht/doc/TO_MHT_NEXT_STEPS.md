@@ -8,6 +8,11 @@
   from external starts, and `update_track_metadata(...)` can modify caller
   metadata on existing live tracks. TOMHT-owned metadata keys are rejected
   fail-fast in both paths.
+- Added MAP association-history observability for integration/debug tooling:
+  `get_map_association_history(...)` reports each included MAP-selected track's
+  latest committed association boundary plus current tentative suffix, using
+  caller-facing input detection indices while keeping internal detection indices
+  and node IDs diagnostic.
 - Bounded detection-conflict retention: tracker-created node
   `detection_history_keys` now retain only keys in the N-scan conflict horizon,
   and tree-level `committed_detection_keys` is a bounded masking set rather than

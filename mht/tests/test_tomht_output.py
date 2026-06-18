@@ -64,11 +64,31 @@ class TOMHTOutputIntegrationTest(unittest.TestCase):
 
         self.assertEqual(set(), tracker.get_map_output_tracks())
         self.assertEqual(set(), tracker.tracks)
+        self.assertEqual((), tracker.get_map_association_history().histories)
 
         map_snapshot = tracker.get_map_hypothesis_snapshot()
         self.assertIsNotNone(map_snapshot)
         assert map_snapshot is not None
         self.assertEqual(1, len(map_snapshot.leaf_nodes_by_track_id))
+
+        association_history = tracker.get_map_association_history(
+            include_unpublished=True
+        )
+        self.assertEqual("map", association_history.selection)
+        self.assertEqual(t1, association_history.timestamp)
+        self.assertEqual(1, len(association_history.histories))
+        track_history = association_history.histories[0]
+        self.assertEqual(0, track_history.internal_track_id)
+        self.assertIsNone(track_history.public_track_id)
+        self.assertEqual("unpublished", track_history.publication_state)
+        self.assertEqual(
+            ["tentative", "tentative"],
+            [step.association_status for step in track_history.steps],
+        )
+        self.assertEqual(
+            [None, None],
+            [step.input_detection_index for step in track_history.steps],
+        )
 
         inspection_tracks = tracker.get_map_output_tracks(include_unpublished=True)
         self.assertEqual(1, len(inspection_tracks))
@@ -152,6 +172,49 @@ class TOMHTOutputIntegrationTest(unittest.TestCase):
         self.assertEqual(0, output_track.metadata["public_track_id"])
         self.assertEqual("confirmed", output_track.metadata["lifecycle_state"])
         self.assertEqual("published", output_track.metadata["publication_state"])
+
+    def test_map_association_history_reports_caller_input_detection_index(
+        self,
+    ) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+
+        first_input_detection = _detection(2.0, 2.0, t1)
+        second_input_detection = _detection(1.0, 1.0, t1)
+        hypothesiser.set_options(
+            timestamp=t1,
+            track_id=0,
+            options=[(0, 5.0), (None, 0.0)],
+        )
+        tracker.update_tracker(t1, [first_input_detection, second_input_detection])
+
+        association_history = tracker.get_map_association_history(
+            include_unpublished=True
+        )
+        self.assertEqual(1, len(association_history.histories))
+        hit_step = association_history.histories[0].steps[-1]
+        self.assertEqual("tentative", hit_step.association_status)
+        self.assertEqual(1, hit_step.input_detection_index)
+        self.assertEqual(0, hit_step.internal_detection_index)
+        self.assertIsNotNone(hit_step.detection_key)
+        assert hit_step.detection_key is not None
+        self.assertEqual(1, hit_step.detection_key.scan_index)
+        self.assertEqual(0, hit_step.detection_key.det_index)
 
     def test_default_public_track_ids_are_dense_in_publication_order(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
@@ -468,6 +531,28 @@ class TOMHTOutputIntegrationTest(unittest.TestCase):
             frozenset({(2, 0), (3, 0)}),
             scan3_leaf.detection_history_keys,
         )
+        association_history = tracker.get_map_association_history()
+        self.assertEqual(1, len(association_history.histories))
+        track_history = association_history.histories[0]
+        self.assertEqual(0, track_history.internal_track_id)
+        self.assertEqual(2, track_history.committed_boundary_scan_index)
+        self.assertEqual(
+            ["committed", "tentative"],
+            [step.association_status for step in track_history.steps],
+        )
+        self.assertEqual(
+            [2, 3],
+            [step.scan_index for step in track_history.steps],
+        )
+        self.assertEqual(
+            [0, 0],
+            [step.input_detection_index for step in track_history.steps],
+        )
+        self.assertEqual(
+            [0, 0],
+            [step.internal_detection_index for step in track_history.steps],
+        )
+
         committed_x = [
             float(np.asarray(state.state_vector, dtype=float).reshape(-1)[0])
             for state in tree_after_second_prune.committed_states
