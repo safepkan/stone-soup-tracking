@@ -63,13 +63,17 @@ from mht.api import (
     MAPAssociationHistorySnapshot,
     MapTrackAssociationHistory,
     MapAssociationStep,
+    AssociationStatus,
+    TrackLifecycleState,
+    TrackPublicationState,
 )
 ```
 
 Import integration code against `mht.api`, not the internal `mht.tomht_*`
 modules. The association-history return types above are part of the stable
-public surface. Other inspection/debug snapshot types and the `tomht_*` modules
-are not part of this stable surface and may change without notice.
+public surface, along with the literal aliases used by their public fields.
+Other inspection/debug snapshot types and the `tomht_*` modules are not part of
+this stable surface and may change without notice.
 
 ### Typical setup
 

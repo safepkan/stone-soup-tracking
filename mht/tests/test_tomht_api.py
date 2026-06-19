@@ -12,6 +12,9 @@ def test_public_api_reexports_stable_integration_names() -> None:
         "MAPAssociationHistorySnapshot",
         "MapTrackAssociationHistory",
         "MapAssociationStep",
+        "AssociationStatus",
+        "TrackLifecycleState",
+        "TrackPublicationState",
     }
 
     assert expected_names <= set(api.__all__)

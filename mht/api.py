@@ -19,12 +19,18 @@ Exported names:
 - ``MAPAssociationHistorySnapshot`` / ``MapTrackAssociationHistory`` /
   ``MapAssociationStep``: public return types for
   ``TOMHTTracker.get_map_association_history(...)``.
+- ``AssociationStatus`` / ``TrackLifecycleState`` /
+  ``TrackPublicationState``: public literal aliases used by the association
+  history return types.
 """
 
 from .tomht_model import (
+    AssociationStatus,
     MAPAssociationHistorySnapshot,
     MapAssociationStep,
     MapTrackAssociationHistory,
+    TrackLifecycleState,
+    TrackPublicationState,
 )
 from .tomht_params import TOMHTParams
 from .tomht_scoring import (
@@ -41,4 +47,7 @@ __all__ = [
     "MAPAssociationHistorySnapshot",
     "MapTrackAssociationHistory",
     "MapAssociationStep",
+    "AssociationStatus",
+    "TrackLifecycleState",
+    "TrackPublicationState",
 ]

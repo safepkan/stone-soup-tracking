@@ -79,11 +79,12 @@ The main remaining profiling hotspot is no longer exact cluster solving. With br
 The stable public names (`TOMHTTracker`, `TOMHTParams`,
 `DetectionProbabilityModel`, `ConstantDetectionProbabilityModel`,
 `MAPAssociationHistorySnapshot`, `MapTrackAssociationHistory`, and
-`MapAssociationStep`) are re-exported from `mht.api`. Integration code should
-import from `mht.api` rather than the internal `mht.tomht_*` modules;
-`__init__.py` is intentionally kept empty. Other inspection/debug snapshot types
-remain importable from their internal modules but are not part of the stable
-surface.
+`MapAssociationStep`, plus their public literal aliases `AssociationStatus`,
+`TrackLifecycleState`, and `TrackPublicationState`) are re-exported from
+`mht.api`. Integration code should import from `mht.api` rather than the
+internal `mht.tomht_*` modules; `__init__.py` is intentionally kept empty. Other
+inspection/debug snapshot types remain importable from their internal modules
+but are not part of the stable surface.
 
 The intended operational public surface is:
 
