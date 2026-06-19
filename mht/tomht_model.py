@@ -149,12 +149,18 @@ class MAPHypothesisSnapshot:
 
 @dataclass(frozen=True)
 class MapAssociationStep:
-    """One association decision in a MAP-selected track suffix."""
+    """One association decision in a MAP-selected track suffix.
+
+    Public fields: scan_index, timestamp, association_status, and
+    input_detection_index.
+    """
 
     scan_index: int
     timestamp: datetime.datetime
     association_status: AssociationStatus
     input_detection_index: int | None
+
+    # Diagnostic fields.
     internal_detection_index: int | None
     node_id: int
     state_kind: str
@@ -163,7 +169,11 @@ class MapAssociationStep:
 
 @dataclass(frozen=True)
 class MapTrackAssociationHistory:
-    """Association-history suffix for one MAP-selected logical track."""
+    """Association-history suffix for one MAP-selected logical track.
+
+    All fields are part of the public association-history contract. The nested
+    MapAssociationStep values carry their own public-vs-diagnostic distinction.
+    """
 
     internal_track_id: int
     public_track_id: object | None
@@ -175,7 +185,10 @@ class MapTrackAssociationHistory:
 
 @dataclass(frozen=True)
 class MAPAssociationHistorySnapshot:
-    """Read-only MAP association-history view for inspection/integration."""
+    """Read-only MAP association-history view for inspection/integration.
+
+    All fields are part of the public association-history contract.
+    """
 
     selection: Literal["map"]
     scan_index: int | None
