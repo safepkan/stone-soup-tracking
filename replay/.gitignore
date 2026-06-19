@@ -10,6 +10,8 @@
 !overrides/*.json
 !outputs/
 !outputs/.gitkeep
+!tests/
+!tests/*.py
 !smoke_output_regression.py
 !timing_summary_from_log.py
 !regression_common.py

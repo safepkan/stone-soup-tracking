@@ -52,6 +52,10 @@ pre_commit:
 mht_tests:
 	$(PYTHON) -m pytest mht/tests
 
+.PHONY: replay_tests
+replay_tests:
+	$(PYTHON) -m pytest replay/tests
+
 .PHONY: smoke
 smoke:
 	MPLBACKEND=Agg TOMHT_NO_SHOW=1 $(PYTHON) mht/runners/run_tomht_crossing.py

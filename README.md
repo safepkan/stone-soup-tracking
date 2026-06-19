@@ -28,6 +28,7 @@ The `Makefile` provides a few convenience targets:
 - `make setup_venv` creates a venv and installs `requirements.txt`.
 - `make update_venv` updates dependencies in the existing venv.
 - `make mht_tests` runs all TO-MHT unit tests under `mht/tests`.
+- `make replay_tests` runs replay-regression helper tests under `replay/tests`.
 - `make smoke` runs both TO-MHT scenario smoke scripts headless.
 - `make smoke_compare` runs normalized smoke-output regression against versioned baselines.
 - `make smoke_compare_timing` runs smoke comparison and also prints timing-summary diff from raw logs.
@@ -135,8 +136,11 @@ Current CI job:
 
 ## Testing
 
-Unit tests for the TO-MHT work live under `mht/tests`.
+Unit tests for the exported TO-MHT package live under `mht/tests`. Replay
+regression helper tests live under `replay/tests` because top-level `replay/`
+is development infrastructure and is not exported.
 
 ```bash
 make mht_tests
+make replay_tests
 ```
