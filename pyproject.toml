@@ -22,7 +22,7 @@ dev = [
   "black==26.5.1",
   "flake8==7.3.0",
   "Flake8-pyproject==1.2.4",
-  "mypy==2.1.0",
+  "mypy==2.2.0",
   "pytest==9.1.1",
   "snakeviz==2.2.2",
   "nbformat==5.10.4",
