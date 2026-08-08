@@ -1442,6 +1442,8 @@ retained committed suffix plus the current unresolved tail.
 ### Debug and stats
 
 - `collect_stats`: retain per-scan `ScanStats` for later summaries.
+- `debug_display_config`: print the resolved tracker configuration and scoring
+  diagnostics once during construction.
 - `debug_display_scan_stats`: print the standard compact per-scan diagnostics.
 - `debug_display_expansion_frontier`: print opt-in expansion/frontier usefulness
   diagnostics.

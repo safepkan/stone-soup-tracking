@@ -371,7 +371,7 @@ class NLLScoringModelTest(unittest.TestCase):
         self.assertIs(detection, clutter_calls[0][1])
         self.assertIs(caller_context, clutter_calls[0][2])
 
-    def test_diagnostics_report_active_nll_terms_only(self) -> None:
+    def test_diagnostics_are_silent_when_disabled(self) -> None:
         model = NLLScoringModel(
             detection_probability_model=ConstantDetectionProbabilityModel(
                 prob_detect=0.9,
@@ -382,7 +382,22 @@ class NLLScoringModelTest(unittest.TestCase):
         out = StringIO()
 
         with redirect_stdout(out):
-            maybe_log_scoring_diagnostics(model)
+            maybe_log_scoring_diagnostics(model, enabled=False)
+
+        self.assertEqual("", out.getvalue())
+
+    def test_enabled_diagnostics_report_active_nll_terms_only(self) -> None:
+        model = NLLScoringModel(
+            detection_probability_model=ConstantDetectionProbabilityModel(
+                prob_detect=0.9,
+                clutter_density=2.0,
+            ),
+            log_epsilon=1e-12,
+        )
+        out = StringIO()
+
+        with redirect_stdout(out):
+            maybe_log_scoring_diagnostics(model, enabled=True)
 
         value = out.getvalue()
         self.assertIn("log_hit_base", value)

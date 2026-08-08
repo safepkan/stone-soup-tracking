@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 from dataclasses import dataclass, field, replace
 import datetime
+from io import StringIO
 from pathlib import Path
 import unittest
 from typing import Callable, Iterable
@@ -192,12 +194,15 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
             collect_stats=False,
         )
 
-        tracker = TOMHTTracker(
-            hypothesiser=_NoopHypothesiser(),
-            updater=_NoopUpdater(),
-            params=params,
-        )
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            tracker = TOMHTTracker(
+                hypothesiser=_NoopHypothesiser(),
+                updater=_NoopUpdater(),
+                params=params,
+            )
 
+        self.assertEqual("", stdout.getvalue())
         self.assertIsInstance(tracker.scoring_model, NLLScoringModel)
         self.assertIsInstance(
             tracker.scoring_model.detection_probability_model,
@@ -208,6 +213,26 @@ class TOMHTTrackerBasicsTest(unittest.TestCase):
         self.assertEqual(0.7, constant_dpm.prob_detect)
         self.assertEqual(0.25, constant_dpm.constant_clutter_density)
         self.assertEqual(1e-9, tracker.scoring_model.log_epsilon)
+
+    def test_constructor_prints_scoring_diagnostics_with_config(self) -> None:
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            TOMHTTracker(
+                hypothesiser=_NoopHypothesiser(),
+                updater=_NoopUpdater(),
+                params=TOMHTParams(
+                    clutter_density=0.25,
+                    debug_display_config=True,
+                    debug_display_scan_stats=False,
+                    debug_display_hypotheses=False,
+                    debug_display_births=False,
+                    collect_stats=False,
+                ),
+            )
+
+        value = stdout.getvalue()
+        self.assertIn("[Scoring] nll:", value)
+        self.assertIn("TOMHT_CONFIG resolved parameters:", value)
 
     def test_constructor_rejects_default_clutter_density_without_custom_dpm(
         self,

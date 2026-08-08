@@ -8,6 +8,10 @@ It is a **current-state snapshot**, not a roadmap and not a full design history.
 
 The long dated update stack from the previous version has been consolidated into the main text below. The recent scoring/start/lifecycle/API work gave the tracker coherent score semantics and a usable integration boundary. The subsequent expansion/frontier pass removed the main known frontier-control blocker by making overload splitting sound, restoring uniform supported-leaf pruning, and cleaning up expansion-related defaults.
 
+Update (2026-08-08): one-time `[Scoring]` construction diagnostics now follow
+`TOMHTParams.debug_display_config`; default tracker construction no longer emits
+those lines to stdout.
+
 Update (2026-05-25): the opt-in pruning feasibility validation probe no longer
 uses exhaustive leaf-product enumeration with per-candidate set operations. It
 now reuses the branch-and-bound solver's ordered track / conflict-mask search

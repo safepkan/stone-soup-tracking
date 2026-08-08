@@ -1,6 +1,5 @@
 /Users/patrik/Git/stone-soup-tracking/venv/lib/python3.14/site-packages/stonesoup/functions/__init__.py:225: UserWarning: LinAlgError('Matrix is not positive definite')
   warnings.warn(repr(e))
-[Scoring] nll: prob_detect=0.99, clutter_density=0.0001, log_hit_base=+9.200, log_miss=-4.605
 OPERATING_MODE setup=bearing_range resolved=CUSTOM requested=CUSTOM scenario_start_time=2026-01-01 00:00:00 births=on external_starts=off external_start_timing=off external_start_timing_source=disabled
 SCAN scan=0 t=2026-01-01 00:00:00 det=11 trees=0 leaves=0 tentative=0 confirmed=0 clusters=0 comb_eval=0 comb_feas=0 rebuilt_globals=0 split_clusters=0 split_ops=0 nscan boundary=-6 in_scope=0 committed_now=0 committed_total=0 disagree=0 births cand=11 tracks_created=0 tracks_kept=0 MAP tracks=0 published=0 unpublished=0 used=0 unused=11 hit_rate=0.00
 SCAN_TIMING t=2026-01-01 00:00:00 wall_ms=4.026

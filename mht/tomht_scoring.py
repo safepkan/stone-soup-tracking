@@ -292,8 +292,15 @@ class NLLScoringModel:
         return out
 
 
-def maybe_log_scoring_diagnostics(scoring_model: NLLScoringModel) -> None:
-    """Emit optional diagnostics for the tracker-owned NLL scorer."""
+def maybe_log_scoring_diagnostics(
+    scoring_model: NLLScoringModel,
+    *,
+    enabled: bool,
+) -> None:
+    """Emit diagnostics for the tracker-owned NLL scorer when enabled."""
+    if not enabled:
+        return
+
     dpm = scoring_model.detection_probability_model
     if isinstance(dpm, ConstantDetectionProbabilityModel):
         log_hit_base = scoring_model._log_hit_base(

@@ -352,7 +352,10 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             detection_probability_model=resolved_dpm,
             log_epsilon=params.log_epsilon,
         )
-        maybe_log_scoring_diagnostics(self.scoring_model)
+        maybe_log_scoring_diagnostics(
+            self.scoring_model,
+            enabled=params.debug_display_config,
+        )
         self._cluster_solver: ClusterSolver = make_cluster_solver(
             self.params.cluster_solver_backend
         )
