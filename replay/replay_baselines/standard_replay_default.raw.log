@@ -2,7 +2,6 @@ Processing 1 file(s) with up to 8 processes
 Output directory: /tmp/standard_replay_regression_yc2tc_h6/mcap_replay__2026-05-25_13_12_12Z
 
 [OK] /Users/patrik/Git/l2-sp/venv/bin/python -m python.pipeline.mcap_replay /Users/patrik/Git/stone-soup-tracking/replay/inputs/cpi_replay_2025-12-10_173948.mcap -o /tmp/standard_replay_regression_yc2tc_h6/mcap_replay__2026-05-25_13_12_12Z/cpi_replay_2025-12-10_173948_replayed.mcap --include-tracker --tracker-type stonesoup-mht --max-cpis 400 --tracker-param-override-file /Users/patrik/Git/stone-soup-tracking/replay/overrides/tracker_standard_replay.json
-[Scoring] nll: prob_detect=0.9, clutter_density=1e-05, log_hit_base=+11.408, log_miss=-2.303
 
 Internal births at 2025-12-10 17:39:48.685000+00:00: kept=1
   birth_state=(0=63.3995, 1=0, 2=1.34943, 3=0)
