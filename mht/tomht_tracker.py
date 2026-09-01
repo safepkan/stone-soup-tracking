@@ -880,11 +880,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             )
 
         assert hypothesiser is not None
-        resolved_predictor = getattr(hypothesiser, "predictor", None)
-        if resolved_predictor is None:
-            raise TypeError(
-                "A provided hypothesiser must expose predictor for tracker wiring."
-            )
         return hypothesiser
 
     # =========================================================================

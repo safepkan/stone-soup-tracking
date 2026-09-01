@@ -362,11 +362,6 @@ and must satisfy the following constraints for each track leaf and scan:
   including lifecycle state, to implement confirmation-state-dependent gates
   or other sensor-specific policy. The tracker-owned default hypothesiser
   does not currently vary gates by confirmation state.
-- **A `predictor` attribute is exposed for tracker wiring.** The
-  hypothesiser must expose a `predictor` attribute — typically a Stone
-  Soup `Property`, as in the default implementation. This is currently a
-  construction-time wiring requirement only: local prediction, including
-  across empty scans, remains the hypothesiser's responsibility.
 
 Timestamp handling within a scan is the hypothesiser's choice. The default
 honors per-detection timestamps when `detection.timestamp` differs from the
@@ -1381,12 +1376,6 @@ class ProfileSwitchingHypothesiser(Hypothesiser):
     )
 
     @property
-    def predictor(self):
-        # §4 wiring requirement: expose a predictor attribute.
-        profile_hypothesiser, _ = self.profiles[self.default_profile]
-        return profile_hypothesiser.predictor
-
-    @property
     def updater(self):
         # One paired dispatching updater per adapter instance.
         if not hasattr(self, "_dispatching_updater"):
@@ -1466,9 +1455,6 @@ Notes:
   make the profile observable from birth, whitelist the metadata key in
   `params.external_start_caller_metadata_keys` and set it on the external
   start, or set it with `update_track_metadata(...)`.
-- The adapter's `predictor` property exists only to satisfy TOMHT's
-  construction-time check (§4).
-
 ---
 
 ## 12. Calibration and tuning checklist

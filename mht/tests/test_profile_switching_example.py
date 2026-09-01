@@ -84,12 +84,6 @@ class ProfileSwitchingHypothesiser(Hypothesiser):
     )
 
     @property
-    def predictor(self):
-        # §4 wiring requirement: expose a predictor attribute.
-        profile_hypothesiser, _ = self.profiles[self.default_profile]
-        return profile_hypothesiser.predictor
-
-    @property
     def updater(self):
         # One paired dispatching updater per adapter instance.
         if not hasattr(self, "_dispatching_updater"):
