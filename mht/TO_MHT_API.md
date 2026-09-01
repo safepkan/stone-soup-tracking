@@ -233,8 +233,15 @@ evidence.
 
 ### `updater`
 
-The Stone Soup updater is required. It is used to produce posterior states for
-selected detection hypotheses.
+The Stone Soup updater is required. For each retained local detection
+hypothesis, TOMHT calls `updater.update(hypothesis)` during local expansion —
+before global MAP selection — to produce the posterior state for that child.
+It is passed neither the reconstructed track nor its metadata. A custom
+hypothesiser that needs to influence the update step can therefore carry
+information forward on the hypotheses it emits: the custom-hypothesiser
+contract below permits `SingleDistanceHypothesis` subclasses with extra
+fields, and a paired updater can read those fields back. §11 "Runtime
+per-track behavior switching" shows this pattern.
 
 ### `predictor` or `hypothesiser`
 
@@ -300,10 +307,10 @@ def hypothesise(
 and must satisfy the following constraints for each track leaf and scan:
 
 - **Returns a Stone Soup `MultipleHypothesis`** whose entries are
-  `SingleDistanceHypothesis` instances. Subclasses are permitted; TOMHT does
-  not consume hypothesis fields other than those listed in this contract, so
-  custom subclasses may carry additional fields for diagnostics without
-  affecting tracker behavior.
+  `SingleDistanceHypothesis` instances. Subclasses are permitted. TOMHT
+  consumes only the fields listed in this contract; caller-owned components
+  may use additional fields — for example, to pass dispatch information from
+  a custom hypothesiser to its paired updater (§11).
 - **Includes exactly one missed-detection hypothesis.** Its `distance` field
   is a sentinel and is ignored by tracker scoring; any finite value
   (the default uses `0.0`) is acceptable. The miss score is computed by the
@@ -343,19 +350,23 @@ and must satisfy the following constraints for each track leaf and scan:
   of a custom hypothesiser's output. `params.mahalanobis_gate_threshold`
   is consumed only by the tracker-owned default and has no effect when a
   custom hypothesiser is supplied.
-- **The input `track` carries TOMHT metadata.** During local expansion,
-  TOMHT reconstructs a Stone Soup `Track` for the active leaf and populates
-  metadata such as `internal_track_id`, `public_track_id`,
+- **The input `track` carries TOMHT and caller metadata.** During local
+  expansion, TOMHT reconstructs a Stone Soup `Track` for the active leaf and
+  populates metadata such as `internal_track_id`, `public_track_id`,
   `lifecycle_state`, `publication_state`, `age`, `hits`, and
-  `missed_count`. Advanced custom hypothesisers may use this metadata,
+  `missed_count`, plus caller-owned metadata for the logical track (see
+  "Caller metadata" below): keys whitelisted from external starts and keys
+  written at runtime through `update_track_metadata(...)`. This is the
+  intended channel for varying per-track hypothesiser behavior at runtime.
+  Advanced custom hypothesisers may use this metadata,
   including lifecycle state, to implement confirmation-state-dependent gates
   or other sensor-specific policy. The tracker-owned default hypothesiser
   does not currently vary gates by confirmation state.
 - **A `predictor` attribute is exposed for tracker wiring.** The
   hypothesiser must expose a `predictor` attribute — typically a Stone
-  Soup `Property`, as in the default implementation — that the tracker
-  uses for state prediction outside of local association, such as
-  advancing track states across empty scans.
+  Soup `Property`, as in the default implementation. This is currently a
+  construction-time wiring requirement only: local prediction, including
+  across empty scans, remains the hypothesiser's responsibility.
 
 Timestamp handling within a scan is the hypothesiser's choice. The default
 honors per-detection timestamps when `detection.timestamp` differs from the
@@ -448,6 +459,16 @@ responsible for returning unique, non-`None`, non-reused public IDs.
 This includes public output tracks and reconstructed tracks passed to caller-side
 custom hypothesisers or deleters.
 
+Caller metadata serves two roles. It annotates tracks: sensor of origin,
+classification labels, anything the integration wants carried alongside a
+track. And it is the intended control channel for per-track behavior: TOMHT
+is configured with a single top-level `(hypothesiser, updater)` set and never
+selects components per track, so per-track variation — motion-profile
+switches, class-dependent gating, sensor-specific policy — belongs in
+caller-owned components that read caller metadata from the reconstructed
+`Track` (§4) and adapt. §11 "Runtime per-track behavior switching" gives a
+worked example.
+
 Use `external_start_caller_metadata_keys` to copy selected metadata from
 external starts at insertion time. The default is empty, so arbitrary external
 start metadata is not propagated unless explicitly whitelisted.
@@ -466,6 +487,12 @@ tracker.update_track_metadata(
 Exactly one of `internal_track_id` or `public_track_id` must be supplied.
 `internal_track_id` is the preferred stable handle; `public_track_id` is a
 convenience for published tracks.
+
+In the single-threaded call pattern the API assumes, a metadata update made
+between tracker calls takes effect at the next `update_tracker()`, for all
+active leaves of that track's tree at once. Stored values are current-valued
+(no history is kept) and are visible in output-track metadata and
+`get_track_tree_snapshot()`.
 
 TOMHT-owned keys such as `internal_track_id`, `public_track_id`, `age`, `hits`,
 `missed_count`, `existence_log_odds`, `existence_probability`,
@@ -1268,6 +1295,179 @@ track.metadata["existence_probability"] = p
 
 on returned tracks. Valid log-odds take precedence; probability remains a
 convenient fallback for human-calibrated priors.
+
+### Runtime per-track behavior switching
+
+Some integrations need to change how one specific live track is processed
+while the tracker runs — for example, switching a caller-owned IMM between
+profile A and profile B as target properties are observed. The intended
+mechanism is caller metadata: write the requested mode with
+`update_track_metadata(...)` between scans, and dispatch on it inside
+caller-owned components. TOMHT itself keeps a single `(hypothesiser,
+updater)` pair and never selects components per track.
+
+Because the updater is not passed the track (§4), the dispatch has two
+halves: the hypothesiser reads the mode from `track.metadata` and stamps it
+onto the hypotheses it emits, and a paired updater reads the stamp back.
+Both halves fit in one adapter, so each per-profile pair stays clean and
+single-profile:
+
+```python
+from stonesoup.base import Property
+from stonesoup.hypothesiser.base import Hypothesiser
+from stonesoup.models.measurement.base import MeasurementModel
+from stonesoup.types.hypothesis import SingleDistanceHypothesis
+from stonesoup.types.multihypothesis import MultipleHypothesis
+from stonesoup.updater.base import Updater
+
+
+class ProfileStampedHypothesis(SingleDistanceHypothesis):
+    """Distance hypothesis carrying the profile key that produced it."""
+
+    profile = Property(str, doc="Profile key that produced this hypothesis.")
+
+
+class ProfileDispatchingUpdater(Updater):
+    """Updater delegating update() to the profile that emitted the hypothesis."""
+
+    profiles = Property(
+        dict, doc="Mapping from profile key to (hypothesiser, updater)."
+    )
+    measurement_model = Property(
+        MeasurementModel,
+        default=None,
+        doc="Unused; the per-profile updaters own their measurement models.",
+    )
+
+    def predict_measurement(self, predicted_state, measurement_model=None, **kwargs):
+        # Top-level TOMHT updater use only: components that need measurement
+        # predictions (e.g. the tracker-owned default hypothesiser) cannot
+        # use this dispatcher.
+        raise NotImplementedError(
+            "ProfileDispatchingUpdater only supports update(hypothesis)."
+        )
+
+    def update(self, hypothesis, **kwargs):
+        profile_key = getattr(hypothesis, "profile", None)
+        if profile_key is None:
+            raise TypeError(
+                "ProfileDispatchingUpdater requires ProfileStampedHypothesis input."
+            )
+        _, profile_updater = self.profiles[profile_key]
+        return profile_updater.update(hypothesis, **kwargs)
+
+
+class ProfileSwitchingHypothesiser(Hypothesiser):
+    """Per-track (hypothesiser, updater) dispatch on caller metadata.
+
+    Each profile is a self-contained pair satisfying the §4
+    custom-hypothesiser contract, and all profiles emit distances under the
+    same NLL convention.
+    """
+
+    profiles = Property(
+        dict, doc="Mapping from profile key to (hypothesiser, updater)."
+    )
+    default_profile = Property(
+        str, doc="Profile key used when a track carries no profile metadata."
+    )
+    metadata_key = Property(
+        str,
+        default="imm_profile",
+        doc=(
+            "Caller metadata key holding the requested profile. "
+            "Stored values must be keys of profiles."
+        ),
+    )
+
+    @property
+    def predictor(self):
+        # §4 wiring requirement: expose a predictor attribute.
+        profile_hypothesiser, _ = self.profiles[self.default_profile]
+        return profile_hypothesiser.predictor
+
+    @property
+    def updater(self):
+        # One paired dispatching updater per adapter instance.
+        if not hasattr(self, "_dispatching_updater"):
+            self._dispatching_updater = ProfileDispatchingUpdater(
+                profiles=self.profiles
+            )
+        return self._dispatching_updater
+
+    def hypothesise(self, track, detections, timestamp, **kwargs):
+        profile_key = track.metadata.get(self.metadata_key, self.default_profile)
+        profile_hypothesiser, _ = self.profiles[profile_key]
+        hypotheses = profile_hypothesiser.hypothesise(
+            track, detections, timestamp, **kwargs
+        )
+        return MultipleHypothesis(
+            [
+                ProfileStampedHypothesis(
+                    prediction=hyp.prediction,
+                    measurement=hyp.measurement,
+                    measurement_prediction=hyp.measurement_prediction,
+                    distance=hyp.distance,
+                    profile=profile_key,
+                )
+                for hyp in hypotheses
+            ]
+        )
+```
+
+Usage:
+
+```python
+switcher = ProfileSwitchingHypothesiser(
+    profiles={
+        "A": (profile_a_hypothesiser, profile_a_updater),
+        "B": (profile_b_hypothesiser, profile_b_updater),
+    },
+    default_profile="A",
+)
+
+tracker = TOMHTTracker(
+    updater=switcher.updater,
+    hypothesiser=switcher,
+    params=params,
+)
+
+# Later, between scans: pick a track from get_map_output_tracks(...)
+# and switch it to profile B.
+tid = output_track.metadata["internal_track_id"]
+tracker.update_track_metadata(
+    internal_track_id=tid,
+    updates={"imm_profile": "B"},
+)
+```
+
+Notes:
+
+- A switch is tree-level and takes effect at the next `update_tracker()`,
+  for all active leaves at once. It applies to future expansion only:
+  existing leaves keep their states and accumulated scores, descendants
+  created under the new profile inherit those scores — including after
+  N-scan commitment — and alternative pre-switch branches persist until
+  normal pruning or commitment removes them.
+- If profile state representations differ, the seam is the caller
+  components' to handle: either every profile hypothesiser accepts states
+  produced by the others, or the adapter (or the newly selected
+  hypothesiser) converts the reconstructed track before first use.
+- Every per-profile pair must satisfy the §4 custom-hypothesiser contract,
+  and all profiles must emit distances under the same NLL convention, in
+  measurement-space units matching the DPM's clutter density (§5, §6) —
+  scores from all profiles accumulate into one per-track history, judged
+  against one set of confirmation and deletion thresholds (§9).
+- The stamping rebuild copies the four contract fields only. If your
+  per-profile hypothesisers emit subclasses with extra fields your updaters
+  read, extend `ProfileStampedHypothesis` to carry them — or stamp your own
+  hypothesis subclass directly and drop the rebuild.
+- `default_profile` is a fallback and is never written into metadata. To
+  make the profile observable from birth, whitelist the metadata key in
+  `params.external_start_caller_metadata_keys` and set it on the external
+  start, or set it with `update_track_metadata(...)`.
+- The adapter's `predictor` property exists only to satisfy TOMHT's
+  construction-time check (§4).
 
 ---
 
