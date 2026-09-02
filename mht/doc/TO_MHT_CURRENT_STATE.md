@@ -60,9 +60,9 @@ The code treats track trees as the primary persistent state. Rebuilt globals, cl
 Scan stats now include expansion/frontier usefulness counters: active tree/leaf
 counts at the main scan-pipeline boundaries, expanded leaves and local child
 volume, retained top-K supported leaves, MAP-selected leaves, supported-leaf
-pruning removals, and lifecycle-state expansion split. These counters are
-collected by default in `ScanStats`; compact per-scan and summary lines are
-opt-in via
+pruning removals, lifecycle-state expansion split, and the frontier after
+end-of-scan birth insertion. These counters are collected by default in
+`ScanStats`; compact per-scan and summary lines are opt-in via
 `TOMHTParams.debug_display_expansion_frontier` or
 `TOMHT_DEBUG_EXPANSION_FRONTIER=1`.
 
@@ -235,14 +235,14 @@ The current runtime pipeline is:
 1. sort detections deterministically,
 2. expand active leaves in every persistent tree,
 3. remove empty trees,
-4. optionally create internal birth trees from residual detections,
-5. build live unresolved conflict clusters,
-6. rebuild feasible globals per original cluster through the exact cluster-solver contract, using an internal overload split mode when needed,
-7. post-solve prune each cluster tree frontier to leaves supported by retained rebuilt globals,
-8. merge cluster MAP selections into a full-scan MAP global,
-9. apply MAP-only N-scan pruning on explicit trees,
-10. apply whole-track lifecycle: sticky confirmation, then score deletion plus the configured deleter,
-11. update sticky output-publication state for MAP-selected live trees,
+4. build live unresolved conflict clusters,
+5. rebuild feasible globals per original cluster through the exact cluster-solver contract, using an internal overload split mode when needed,
+6. post-solve prune each cluster tree frontier to leaves supported by retained rebuilt globals,
+7. merge cluster MAP selections into a full-scan MAP global,
+8. apply MAP-only N-scan pruning on explicit trees,
+9. apply whole-track lifecycle: sticky confirmation, then score deletion plus the configured deleter,
+10. extract residual detections from the surviving active-leaf frontier and optionally create internal birth trees,
+11. merge internal-birth roots into the MAP view, re-apply score confirmation, and update sticky output-publication state,
 12. reclaim unreachable node storage,
 13. build/store scan stats and return published MAP output tracks.
 
@@ -370,11 +370,23 @@ The tracker does not own generic single-detection state initialization. Even one
 
 Internal-start roots use `TOMHTParams.initiator_start_initial_existence_probability` by default, again with optional metadata override using log-odds or probability.
 
+Residual extraction runs after supported-leaf pruning, N-scan pruning, and
+whole-track deletion. A detection is residual when it is not used by any active
+leaf surviving that full scan. Internal births use the same post-scan singleton
+tree insertion, MAP merge, confirmation, and publication sequence as external
+starts; they first participate in expansion and cluster solving on the next
+scan.
+
 Internal-birth candidate validity is now initiator-owned. The tracker no longer applies state-layout-specific position/covariance sanity checks. Remaining internal-start controls are capping, deterministic ordering, and optional load guardrails. `max_births_per_scan` defaults to `10`; it is still a guardrail. `birth_skip_if_active_trees_above` and `birth_skip_if_active_leaves_above` default to disabled (`None`) and are available for scenario-specific emergency use. Deterministic ranking is a safety valve; if `max_births_per_scan` routinely fires, the better fix is usually initiator-side filtering or candidate confidence metadata rather than relying on TOMHT's fallback ordering.
 
 ### Residual detections
 
-`get_unused_detections()` is mainly intended for `initiator=None` external-start workflows. If an internal initiator is configured, residual detections passed to that initiator should generally be considered consumed by the internal-start path, even if no retained starts result after capping/guardrails.
+`get_unused_detections()` is mainly intended for `initiator=None` external-start
+workflows. It returns detections not used by any active leaf surviving all
+current-scan pruning and deletion. If an internal initiator is configured,
+residual detections passed to that initiator should generally be considered
+consumed by the internal-start path, even if no retained starts result after
+capping. Guardrail-blocked processing leaves the residuals available.
 
 ---
 

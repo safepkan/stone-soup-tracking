@@ -31,6 +31,7 @@ class InternalBirthResult:
 
     stats: BirthStats
     unused_detections: list[Detection]
+    new_roots: list[TrackHypothesisNode]
 
 
 def birth_used_key(
@@ -168,12 +169,12 @@ def birth_track_sort_key(
     )
 
 
-def residual_detection_indices_after_expansion(
+def residual_detection_indices_for_frontier(
     *,
     active_leaf_nodes: Iterable[TrackHypothesisNode],
     ctx: ScanContext,
 ) -> list[int]:
-    """Return current-scan detection indices unused after local expansion."""
+    """Return current-scan detection indices unused by the supplied frontier."""
     used_current_scan_det_indices: set[int] = set()
     for leaf in active_leaf_nodes:
         if (
@@ -261,7 +262,7 @@ def run_internal_births_from_residuals(
     params: TOMHTParams,
     assoc_pad_label: int,
 ) -> InternalBirthResult:
-    """Create internal birth trees from Step-2 residual detections."""
+    """Create internal birth trees from end-of-scan residual detections."""
     if initiator is None:
         return InternalBirthResult(
             stats=BirthStats(
@@ -270,6 +271,7 @@ def run_internal_births_from_residuals(
                 birth_tracks_kept=0,
             ),
             unused_detections=residual_detections,
+            new_roots=[],
         )
 
     if not residual_detections:
@@ -280,6 +282,7 @@ def run_internal_births_from_residuals(
                 birth_tracks_kept=0,
             ),
             unused_detections=[],
+            new_roots=[],
         )
 
     birth_block_reason = birth_guardrail_block_reason(
@@ -301,6 +304,7 @@ def run_internal_births_from_residuals(
                 birth_tracks_kept=0,
             ),
             unused_detections=residual_detections,
+            new_roots=[],
         )
 
     initiated_tracks = list(
@@ -322,6 +326,7 @@ def run_internal_births_from_residuals(
             state = track.states[-1].state_vector
             print(f"  birth_state={format_birth_state_vector(state)}")
 
+    new_roots: list[TrackHypothesisNode] = []
     for birth_track in kept_birth_tracks:
         state = birth_track.states[-1]
         used_key = birth_used_key(
@@ -339,22 +344,24 @@ def run_internal_births_from_residuals(
             birth_track,
             params=params,
         )
-        tree_store.create_root_tree_for_new_track(
-            scan_index=ctx.scan_index,
-            timestamp=getattr(state, "timestamp", ctx.timestamp),
-            state=state,
-            state_kind="internal_birth",
-            used_det_key=used_key,
-            assoc_label=(
-                assoc_pad_label if used_key is None else int(used_key.det_index)
-            ),
-            log_delta=float(root_log_delta),
-            age=age,
-            hits=hits,
-            root_source="internal_birth",
-            used_input_det_index=(
-                used_input_det_index if used_key is not None else None
-            ),
+        new_roots.append(
+            tree_store.create_root_tree_for_new_track(
+                scan_index=ctx.scan_index,
+                timestamp=getattr(state, "timestamp", ctx.timestamp),
+                state=state,
+                state_kind="internal_birth",
+                used_det_key=used_key,
+                assoc_label=(
+                    assoc_pad_label if used_key is None else int(used_key.det_index)
+                ),
+                log_delta=float(root_log_delta),
+                age=age,
+                hits=hits,
+                root_source="internal_birth",
+                used_input_det_index=(
+                    used_input_det_index if used_key is not None else None
+                ),
+            )
         )
 
     return InternalBirthResult(
@@ -364,10 +371,11 @@ def run_internal_births_from_residuals(
             birth_tracks_kept=birth_tracks_kept,
         ),
         unused_detections=[],
+        new_roots=new_roots,
     )
 
 
-def run_internal_births_after_expansion(
+def run_internal_births_for_frontier(
     *,
     ctx: ScanContext,
     initiator: Initiator | None,
@@ -375,8 +383,8 @@ def run_internal_births_after_expansion(
     params: TOMHTParams,
     assoc_pad_label: int,
 ) -> InternalBirthResult:
-    """Create internal births from detections unused after local expansion."""
-    residual_det_indices = residual_detection_indices_after_expansion(
+    """Create internal births from detections unused by the supplied frontier."""
+    residual_det_indices = residual_detection_indices_for_frontier(
         active_leaf_nodes=tree_store.active_leaf_nodes(),
         ctx=ctx,
     )

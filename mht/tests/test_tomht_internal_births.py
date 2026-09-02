@@ -20,7 +20,7 @@ from mht.tomht_tracker import TOMHTParams
 
 
 class TOMHTInternalBirthsIntegrationTest(unittest.TestCase):
-    def test_internal_births_use_step2_residual_detections(self) -> None:
+    def test_internal_births_use_end_of_scan_residual_detections(self) -> None:
         t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
         t1 = t0 + datetime.timedelta(seconds=1)
 
@@ -46,6 +46,92 @@ class TOMHTInternalBirthsIntegrationTest(unittest.TestCase):
         self.assertEqual([det1], capture_initiator.last_received)
         self.assertIn(1, tracker.track_trees_by_track_id)
         self.assertEqual([], tracker.get_unused_detections())
+
+    def test_detection_claimed_only_by_pruned_leaf_becomes_unused(self) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+        hypothesiser = _ScriptedHypothesiser()
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            params=TOMHTParams(
+                max_global_hypotheses=1,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        hypothesiser.set_options(
+            timestamp=t1,
+            track_id=0,
+            options=[(0, -1.0), (None, 0.0)],
+        )
+        detection = _detection(1.0, 1.0, t1)
+
+        tracker.update_tracker(t1, [detection])
+
+        self.assertEqual([detection], tracker.get_unused_detections())
+        surviving_leaves = tracker.track_trees_by_track_id[0].active_leaf_node_ids
+        self.assertTrue(
+            all(
+                tracker.nodes_by_id[node_id].used_det_key is None
+                for node_id in surviving_leaves
+            )
+        )
+
+    def test_detection_claimed_only_by_pruned_leaf_is_offered_for_birth(
+        self,
+    ) -> None:
+        t0 = datetime.datetime(2026, 3, 28, 10, 0, 0)
+        t1 = t0 + datetime.timedelta(seconds=1)
+        hypothesiser = _ScriptedHypothesiser()
+        capture_initiator = _CaptureInitiator([_track_start(99.0, t1)])
+        tracker = _build_tracker(
+            hypothesiser=hypothesiser,
+            updater=_ScriptedUpdater(),
+            initiator=cast(SimpleMeasurementInitiator, capture_initiator),
+            params=TOMHTParams(
+                max_global_hypotheses=1,
+                initiator_start_initial_existence_probability=0.95,
+                debug_display_scan_stats=False,
+                debug_display_hypotheses=False,
+                debug_display_births=False,
+                collect_stats=False,
+            ),
+        )
+        tracker.update_tracker(t0, [])
+        tracker.add_external_starts(t0, [_track_start(0.0, t0)])
+        hypothesiser.set_options(
+            timestamp=t1,
+            track_id=0,
+            options=[(0, -1.0), (None, 0.0)],
+        )
+        detection = _detection(1.0, 1.0, t1)
+
+        _, output_tracks = tracker.update_tracker(t1, [detection])
+
+        self.assertEqual([detection], capture_initiator.last_received)
+        self.assertEqual([], tracker.get_unused_detections())
+        self.assertIn(1, tracker.track_trees_by_track_id)
+        self.assertEqual(2, len(output_tracks))
+        map_snapshot = tracker.get_map_hypothesis_snapshot()
+        self.assertIsNotNone(map_snapshot)
+        assert map_snapshot is not None
+        self.assertIn(1, map_snapshot.leaf_nodes_by_track_id)
+        self.assertIsNotNone(tracker.last_scan_stats)
+        assert tracker.last_scan_stats is not None
+        self.assertEqual(
+            1, tracker.last_scan_stats.expansion_frontier.trees_after_lifecycle
+        )
+        self.assertEqual(
+            2,
+            tracker.last_scan_stats.expansion_frontier.trees_after_end_of_scan_births,
+        )
+        self.assertEqual(1, tracker.last_scan_stats.birth_candidates)
+        self.assertEqual(1, tracker.last_scan_stats.birth_tracks_kept)
 
     def test_no_initiator_leaves_residuals_available(self) -> None:
         timestamp = datetime.datetime(2026, 3, 28, 10, 0, 0)

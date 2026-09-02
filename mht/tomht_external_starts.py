@@ -137,9 +137,27 @@ def insert_external_start_trees(
         for start in starts
     ]
 
-    # External starts are assumed to be from currently unused detections, so add
-    # them directly to the last MAP view.
-    merged = dict(last_map_global.leaf_nodes_by_track_id)
+    map_global = merge_new_single_leaf_trees_into_map(
+        tree_store=tree_store,
+        map_global=last_map_global,
+        new_roots=new_roots,
+    )
+    return ExternalStartInsertionResult(
+        map_global=map_global,
+        new_roots=new_roots,
+    )
+
+
+def merge_new_single_leaf_trees_into_map(
+    *,
+    tree_store: TrackTreeStore,
+    map_global: GlobalHypothesis,
+    new_roots: list[TrackHypothesisNode],
+) -> GlobalHypothesis:
+    """Merge newly inserted singleton trees into the current full-scan MAP view."""
+    # Starts are assumed to come from detections unused by the current frontier,
+    # so add their singleton trees directly to the current MAP view.
+    merged = dict(map_global.leaf_nodes_by_track_id)
     for track_id, tree in tree_store.track_trees_by_track_id.items():
         if track_id in merged:
             continue
@@ -148,12 +166,8 @@ def insert_external_start_trees(
         only_leaf_id = next(iter(tree.active_leaf_node_ids))
         merged[track_id] = tree_store.nodes_by_id[only_leaf_id]
 
-    map_global = GlobalHypothesis(
+    return GlobalHypothesis(
         leaf_nodes_by_track_id=merged,
-        log_weight=float(last_map_global.log_weight)
+        log_weight=float(map_global.log_weight)
         + sum(float(root.log_delta) for root in new_roots),
-    )
-    return ExternalStartInsertionResult(
-        map_global=map_global,
-        new_roots=new_roots,
     )

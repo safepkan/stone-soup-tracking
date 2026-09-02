@@ -13,7 +13,7 @@ from mht.tomht_births import (
     birth_existence_probability_sort_value,
     birth_track_sort_key,
     format_birth_state_vector,
-    residual_detection_indices_after_expansion,
+    residual_detection_indices_for_frontier,
     select_internal_birth_candidates,
 )
 from mht.tomht_model import DetectionKey, ScanContext, TrackHypothesisNode
@@ -109,7 +109,7 @@ class TOMHTBirthHelpersTest(unittest.TestCase):
             birth_scan_index=0,
         )
 
-        residual_indices = residual_detection_indices_after_expansion(
+        residual_indices = residual_detection_indices_for_frontier(
             active_leaf_nodes=[hit_leaf, miss_leaf],
             ctx=ctx,
         )

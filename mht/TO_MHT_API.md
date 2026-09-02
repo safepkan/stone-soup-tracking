@@ -127,6 +127,8 @@ represent the same output boundary.
 
 `get_unused_detections()` returns residual detections from the most recent scan
 primarily for external-start workflows where no internal initiator is configured.
+A detection is residual when no active leaf surviving the full scan uses it,
+including after supported-leaf pruning, N-scan pruning, and whole-track deletion.
 
 `add_external_starts(...)` injects caller-vetted external starts after an
 `update_tracker(...)` call at the same timestamp.
@@ -380,12 +382,13 @@ remain available through `get_unused_detections()`, allowing an external process
 to decide whether and when to start tracks.
 
 If an initiator is provided, TOMHT passes residual detections to it and treats
-the returned Stone Soup tracks as candidate internal starts. Candidate starts may
-be capped or skipped by current internal-start guardrails before insertion. The
-tracker does not apply state-layout-specific candidate validity checks; those
-belong in the configured initiator. The exact guardrail details are
-implementation controls and should not be treated as a stable integration
-contract.
+the returned Stone Soup tracks as candidate internal starts. Residuals are
+evaluated after all current-scan pruning and whole-track deletion. Candidate
+starts may be capped or skipped by current internal-start guardrails before
+post-scan insertion. The tracker does not apply state-layout-specific candidate
+validity checks; those belong in the configured initiator. The exact guardrail
+details are implementation controls and should not be treated as a stable
+integration contract.
 
 Conceptually, the tracker does not distinguish between simple one-detection
 initializers, M/N initiators, or domain-specific initiators. They are all
@@ -838,12 +841,19 @@ Stone Soup initiator.
 If an initiator is supplied, TOMHT:
 
 1. expands existing track trees,
-2. determines residual detections unused by surviving active leaves,
-3. passes residual detections to the initiator,
-4. treats returned tracks as candidate internal starts,
-5. applies current internal-start capping/guardrails,
-6. inserts retained candidates as new internal track trees,
-7. scores their roots using an initial existence prior.
+2. solves clusters and applies supported-leaf and N-scan pruning,
+3. applies whole-track confirmation and deletion,
+4. determines residual detections unused by any active leaf surviving the full
+   scan,
+5. passes residual detections to the initiator,
+6. treats returned tracks as candidate internal starts and applies the current
+   capping/guardrails,
+7. inserts retained candidates as new internal track trees, scores their roots
+   using an initial existence prior, and merges them into the post-scan MAP view.
+
+Internal births and external starts therefore share the same post-scan insertion,
+confirmation, and publication semantics. New internal-birth trees first
+participate in expansion, clustering, and pruning on the following scan.
 
 The tracker does not conceptually care whether the initiator is:
 
@@ -899,7 +909,11 @@ implementation detail.
 
 `get_unused_detections()` is primarily intended for integrations that do not
 configure an internal initiator and instead run an external start process. In
-that mode, TOMHT returns the residual detections from the most recent scan.
+that mode, TOMHT returns the residual detections from the most recent scan. A
+detection is residual if it is not used by any active leaf surviving the full
+scan, including supported-leaf pruning, N-scan pruning, and whole-track
+deletion. Consequently, a detection claimed only by a leaf or tree removed
+during the scan is residual.
 
 If an internal initiator is configured, residual detections passed to that
 initiator should generally be considered consumed by the internal-start path,
@@ -939,7 +953,7 @@ initiator and environment.
 Use an internal initiator when TOMHT should own the residual-detection handoff:
 residual detections are passed to the initiator, candidate starts may be subject
 to internal capping/guardrails, and retained starts enter the normal tree
-lifecycle.
+lifecycle through post-scan MAP insertion, confirmation, and publication.
 
 Use external starts when another caller-side process has already decided which
 starts should enter the tracker. External starts bypass the internal initiator
@@ -948,6 +962,9 @@ TOMHT trees. After insertion, TOMHT updates the MAP view, runs the same
 score-based confirmation pass used in the normal scan lifecycle, and then
 applies output publication. Full lifecycle deletion, N-scan pruning, cluster
 rebuild, and scan stats are not run from `add_external_starts(...)`.
+Internal starts use that same insertion/confirmation/publication sequence inside
+`update_tracker(...)`, after full lifecycle deletion; unlike external starts,
+their insertion is included in the scan stats.
 For immediate publication of an externally started track, ensure that its
 existence probability exceeds the confirmation and publication thresholds.
 

@@ -69,10 +69,10 @@ class TOMHTStatsIntegrationTest(unittest.TestCase):
         self.assertEqual(1, frontier.leaves_before_expansion)
         self.assertEqual(3, frontier.leaves_after_expansion)
         self.assertEqual(3, frontier.leaves_after_empty_tree_removal)
-        self.assertEqual(3, frontier.leaves_after_births)
         self.assertEqual(3, frontier.leaves_after_post_solve_supported_pruning)
         self.assertEqual(3, frontier.leaves_after_n_scan_pruning)
         self.assertEqual(3, frontier.leaves_after_lifecycle)
+        self.assertEqual(3, frontier.leaves_after_end_of_scan_births)
         self.assertEqual(1, frontier.expanded_leaf_count)
         self.assertEqual(0, frontier.expanded_leaves_tentative)
         self.assertEqual(1, frontier.expanded_leaves_confirmed)
@@ -157,8 +157,9 @@ class TOMHTStatsIntegrationTest(unittest.TestCase):
         self.assertEqual(
             "EXPANSION_FRONTIER scan=1 t=2026-03-28 10:00:01 "
             "leaves_before=1 leaves_after_expansion=3 leaves_after_empty=3 "
-            "leaves_after_births=3 leaves_after_supported_prune=3 "
-            "leaves_after_nscan=3 leaves_after_lifecycle=3 trees_before=1 "
+            "leaves_after_supported_prune=3 "
+            "leaves_after_nscan=3 leaves_after_lifecycle=3 "
+            "leaves_after_end_scan_births=3 trees_before=1 "
             "trees_after_lifecycle=1 expanded=1 expanded_tentative=0 "
             "expanded_confirmed=1 child_candidates=3 children_created=3 "
             "children_retained=3 miss_children=1 detection_children=2 "

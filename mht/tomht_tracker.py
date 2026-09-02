@@ -49,7 +49,8 @@ from stonesoup.tracker.base import Tracker, _TrackerMixInUpdate
 from stonesoup.updater.base import Updater
 
 from .tomht_births import (
-    run_internal_births_after_expansion,
+    InternalBirthResult,
+    run_internal_births_for_frontier,
 )
 from .tomht_clustering import (
     ClusterWorkItem as _ClusterWorkItem,
@@ -66,6 +67,7 @@ from .tomht_cluster_solver import ClusterSolver
 from .tomht_cluster_solver_factory import make_cluster_solver
 from .tomht_external_starts import (
     insert_external_start_trees,
+    merge_new_single_leaf_trees_into_map,
     validate_external_starts_timestamp,
 )
 from .tomht_expansion import (
@@ -151,23 +153,24 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     1. Sort detections deterministically.
     2. Expand active leaves in every persistent ``TrackTree``.
     3. Apply simple local filtering (drop trees with no surviving active leaves).
-    4. Optionally create internal birth trees from detections unused by the union
-       of surviving active leaves after Step 3.
-    5. Recompute measurement-exclusivity clusters from current trees.
-    6. Rebuild feasible globals per cluster through the exact cluster-solver
+    4. Recompute measurement-exclusivity clusters from current trees.
+    5. Rebuild feasible globals per cluster through the exact cluster-solver
        contract (default backend = branch-and-bound exact search) and choose MAP per
        cluster; overloaded clusters may first be approximately decomposed by
        severing weakest live conflict edges.
-    7. Post-solve prune each cluster tree frontier to leaves supported by at
+    6. Post-solve prune each cluster tree frontier to leaves supported by at
        least one retained rebuilt top-K global for that cluster.
-    8. Merge cluster MAP selections into full-scan MAP.
-    9. Apply MAP-only N-scan tree pruning: root promotion, committed states,
+    7. Merge cluster MAP selections into full-scan MAP.
+    8. Apply MAP-only N-scan tree pruning: root promotion, committed states,
        active leaves, and disagreement stats.
-    10. Apply whole-track lifecycle: sticky score-based confirmation, then
+    9. Apply whole-track lifecycle: sticky score-based confirmation, then
         post-N-scan termination. Score deletion always runs; TOMHT resolves an
         internal miss-count deleter by default, and an optional Stone Soup
         deleter can replace that default as a domain-specific hook.
-    11. Update sticky output-publication state for MAP-selected live trees.
+    10. Evaluate residual detections against the surviving active-leaf frontier,
+        optionally create internal birth roots, and merge those roots into MAP.
+    11. Re-apply score confirmation when births were inserted, then update sticky
+        output-publication state for MAP-selected live trees.
     12. Keep last-scan debug snapshots and return published MAP output tracks.
 
     Behavior notes for readability:
@@ -463,15 +466,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         post_expand_prune_validate_ms = elapsed_ms(phase_start_ns)
         phase_start_ns = start_timer()
 
-        # 3) Internal births from Step-2 residual detections.
-        birth_stats = self._run_internal_births(ctx)
-        frontier_after_births = frontier_stage_counts_for_store(
-            tree_store=self._tree_store
-        )
-        births_ms = elapsed_ms(phase_start_ns)
-        phase_start_ns = start_timer()
-
-        # 4) Build clusters and rebuild globals per cluster (fresh each scan).
+        # 3) Build clusters and rebuild globals per cluster (fresh each scan).
         cluster_work = self._build_track_clusters(ctx)
         cluster_snapshots, rebuild_stats = self._rebuild_cluster_globals(
             cluster_work, ctx
@@ -479,7 +474,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         cluster_build_and_solve_ms = elapsed_ms(phase_start_ns)
         phase_start_ns = start_timer()
 
-        # 5) Post-solve cluster-local supported-leaf pruning from rebuilt top-K.
+        # 4) Post-solve cluster-local supported-leaf pruning from rebuilt top-K.
         supported_pruning_stats = self._apply_post_solve_supported_leaf_pruning(
             cluster_snapshots
         )
@@ -497,7 +492,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         map_merge_ms = elapsed_ms(phase_start_ns)
         phase_start_ns = start_timer()
 
-        # 6) MAP-only N-scan pruning on explicit trees + disagreement stats.
+        # 5) MAP-only N-scan pruning on explicit trees + disagreement stats.
         (
             nscan_boundary_scan_index,
             nscan_tracks_in_scope,
@@ -515,7 +510,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         nscan_prune_ms = elapsed_ms(phase_start_ns)
         phase_start_ns = start_timer()
 
-        # 7) Whole-track lifecycle: sticky score-based confirmation,
+        # 6) Whole-track lifecycle: sticky score-based confirmation,
         # then post-N-scan termination policy.
         lifecycle_deleter_stats = LifecycleDeleterStats()
         self._apply_score_based_track_confirmation()
@@ -534,6 +529,22 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             tree_store=self._tree_store
         )
         lifecycle_ms = elapsed_ms(phase_start_ns)
+        phase_start_ns = start_timer()
+
+        # 7) End-of-scan residual extraction and optional internal births.
+        birth_result = self._run_internal_births(ctx)
+        birth_stats = birth_result.stats
+        if birth_result.new_roots:
+            map_global = merge_new_single_leaf_trees_into_map(
+                tree_store=self._tree_store,
+                map_global=map_global,
+                new_roots=birth_result.new_roots,
+            )
+            self._apply_score_based_track_confirmation()
+        frontier_after_end_of_scan_births = frontier_stage_counts_for_store(
+            tree_store=self._tree_store
+        )
+        births_ms = elapsed_ms(phase_start_ns)
         phase_start_ns = start_timer()
 
         # 8) Sticky output publication state for MAP-selected live trees.
@@ -572,7 +583,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             before_expansion=frontier_before_expansion,
             after_expansion=frontier_after_expansion,
             after_empty_tree_removal=frontier_after_empty_tree_removal,
-            after_births=frontier_after_births,
+            after_end_of_scan_births=frontier_after_end_of_scan_births,
             after_post_solve_supported_pruning=(
                 frontier_after_post_solve_supported_pruning
             ),
@@ -601,7 +612,6 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             expand_update_calls=int(expansion_call_stats.update_calls),
             expand_update_ms=ns_to_ms(expansion_call_stats.update_wall_ns),
             post_expand_prune_validate_ms=float(post_expand_prune_validate_ms),
-            births_ms=float(births_ms),
             cluster_build_and_solve_ms=float(cluster_build_and_solve_ms),
             post_solve_prune_ms=float(post_solve_prune_ms),
             map_merge_ms=float(map_merge_ms),
@@ -617,6 +627,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
                 lifecycle_deleter_stats.default_miss_fast_path_calls
             ),
             lifecycle_deleter_check_ms=ns_to_ms(lifecycle_deleter_stats.check_wall_ns),
+            births_ms=float(births_ms),
             publication_ms=float(publication_ms),
             cleanup_ms=float(cleanup_ms),
         )
@@ -674,7 +685,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
         self._apply_output_publication(self._last_map_global)
 
     def get_unused_detections(self) -> list[Detection]:
-        """Return residual detections from the most recent completed update."""
+        """Return detections unused by the surviving end-of-scan frontier."""
         if self._last_update_timestamp is None:
             raise RuntimeError(
                 "get_unused_detections() requires a completed update_tracker() first."
@@ -908,9 +919,9 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
     # Internal Birth Handling
     # =========================================================================
 
-    def _run_internal_births(self, ctx: ScanContext) -> BirthStats:
-        """Create simple internal birth trees from Step-2 residual detections."""
-        result = run_internal_births_after_expansion(
+    def _run_internal_births(self, ctx: ScanContext) -> InternalBirthResult:
+        """Create internal birth trees from the end-of-scan active frontier."""
+        result = run_internal_births_for_frontier(
             ctx=ctx,
             initiator=self.initiator,
             tree_store=self._tree_store,
@@ -918,7 +929,7 @@ class TOMHTTracker(_TrackerMixInUpdate, Tracker):
             assoc_pad_label=TOMHTTracker.ASSOC_PAD,
         )
         self._last_unused_detections = result.unused_detections
-        return result.stats
+        return result
 
     # =========================================================================
     # Per-Scan Clustering + Global Rebuild

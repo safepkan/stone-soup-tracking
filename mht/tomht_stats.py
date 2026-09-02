@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class BirthStats:
+    """End-of-scan residual and retained internal-birth counts."""
+
     residual_detections_considered: int = 0
     birth_tracks_created: int = 0
     birth_tracks_kept: int = 0
@@ -50,22 +52,24 @@ class FrontierStageCounts:
 
 @dataclass(frozen=True)
 class ExpansionFrontierStats:
-    """Per-scan aggregate expansion volume and retained-frontier counters."""
+    """Per-scan aggregate expansion volume and ordered frontier counters."""
 
     leaves_before_expansion: int = 0
     leaves_after_expansion: int = 0
     leaves_after_empty_tree_removal: int = 0
-    leaves_after_births: int = 0
     leaves_after_post_solve_supported_pruning: int = 0
     leaves_after_n_scan_pruning: int = 0
     leaves_after_lifecycle: int = 0
+    # Frontier after end-of-scan residual processing and birth insertion.
+    leaves_after_end_of_scan_births: int = 0
     trees_before_expansion: int = 0
     trees_after_expansion: int = 0
     trees_after_empty_tree_removal: int = 0
-    trees_after_births: int = 0
     trees_after_post_solve_supported_pruning: int = 0
     trees_after_n_scan_pruning: int = 0
     trees_after_lifecycle: int = 0
+    # Tree count after end-of-scan residual processing and birth insertion.
+    trees_after_end_of_scan_births: int = 0
     expanded_leaf_count: int = 0
     expanded_leaves_tentative: int = 0
     expanded_leaves_confirmed: int = 0
@@ -94,7 +98,6 @@ class ScanTimingBreakdown:
     expand_update_calls: int = 0
     expand_update_ms: float = 0.0
     post_expand_prune_validate_ms: float = 0.0
-    births_ms: float = 0.0
     cluster_build_and_solve_ms: float = 0.0
     post_solve_prune_ms: float = 0.0
     map_merge_ms: float = 0.0
@@ -104,6 +107,9 @@ class ScanTimingBreakdown:
     lifecycle_deleter_track_reconstruct_ms: float = 0.0
     lifecycle_default_miss_deleter_fast_path_calls: int = 0
     lifecycle_deleter_check_ms: float = 0.0
+    # End-of-scan residual extraction, initiation, root insertion, MAP merge, and
+    # post-insertion confirmation time.
+    births_ms: float = 0.0
     publication_ms: float = 0.0
     cleanup_ms: float = 0.0
 
@@ -189,10 +195,10 @@ def build_expansion_frontier_stats(
     before_expansion: FrontierStageCounts,
     after_expansion: FrontierStageCounts,
     after_empty_tree_removal: FrontierStageCounts,
-    after_births: FrontierStageCounts,
     after_post_solve_supported_pruning: FrontierStageCounts,
     after_n_scan_pruning: FrontierStageCounts,
     after_lifecycle: FrontierStageCounts,
+    after_end_of_scan_births: FrontierStageCounts,
     expansion_call_stats: ExpansionCallStats,
     supported_pruning_stats: SupportedLeafPruningStats,
     cluster_snapshots: list[ClusterRebuildSnapshot],
@@ -202,21 +208,21 @@ def build_expansion_frontier_stats(
         leaves_before_expansion=before_expansion.active_leaves,
         leaves_after_expansion=after_expansion.active_leaves,
         leaves_after_empty_tree_removal=after_empty_tree_removal.active_leaves,
-        leaves_after_births=after_births.active_leaves,
         leaves_after_post_solve_supported_pruning=(
             after_post_solve_supported_pruning.active_leaves
         ),
         leaves_after_n_scan_pruning=after_n_scan_pruning.active_leaves,
         leaves_after_lifecycle=after_lifecycle.active_leaves,
+        leaves_after_end_of_scan_births=(after_end_of_scan_births.active_leaves),
         trees_before_expansion=before_expansion.active_trees,
         trees_after_expansion=after_expansion.active_trees,
         trees_after_empty_tree_removal=after_empty_tree_removal.active_trees,
-        trees_after_births=after_births.active_trees,
         trees_after_post_solve_supported_pruning=(
             after_post_solve_supported_pruning.active_trees
         ),
         trees_after_n_scan_pruning=after_n_scan_pruning.active_trees,
         trees_after_lifecycle=after_lifecycle.active_trees,
+        trees_after_end_of_scan_births=(after_end_of_scan_births.active_trees),
         expanded_leaf_count=int(expansion_call_stats.expanded_leaf_count),
         expanded_leaves_tentative=int(expansion_call_stats.expanded_leaves_tentative),
         expanded_leaves_confirmed=int(expansion_call_stats.expanded_leaves_confirmed),
@@ -527,7 +533,6 @@ def print_scan_stats(
         f"expand_other_ms={expand_other_ms:.3f} "
         "post_expand_prune_validate_ms="
         f"{breakdown.post_expand_prune_validate_ms:.3f} "
-        f"births_ms={breakdown.births_ms:.3f} "
         f"cluster_build_solve_ms={breakdown.cluster_build_and_solve_ms:.3f} "
         f"post_solve_prune_ms={breakdown.post_solve_prune_ms:.3f} "
         f"map_merge_ms={breakdown.map_merge_ms:.3f} "
@@ -542,6 +547,7 @@ def print_scan_stats(
         "lifecycle_deleter_check_ms="
         f"{breakdown.lifecycle_deleter_check_ms:.3f} "
         f"lifecycle_other_ms={lifecycle_other_ms:.3f} "
+        f"births_ms={breakdown.births_ms:.3f} "
         f"publication_ms={breakdown.publication_ms:.3f} "
         f"cleanup_ms={breakdown.cleanup_ms:.3f} "
         f"other_ms={phase_other_ms:.3f}"
@@ -580,11 +586,12 @@ def print_expansion_frontier_stats(
         f"leaves_before={stats.leaves_before_expansion} "
         f"leaves_after_expansion={stats.leaves_after_expansion} "
         f"leaves_after_empty={stats.leaves_after_empty_tree_removal} "
-        f"leaves_after_births={stats.leaves_after_births} "
         "leaves_after_supported_prune="
         f"{stats.leaves_after_post_solve_supported_pruning} "
         f"leaves_after_nscan={stats.leaves_after_n_scan_pruning} "
         f"leaves_after_lifecycle={stats.leaves_after_lifecycle} "
+        "leaves_after_end_scan_births="
+        f"{stats.leaves_after_end_of_scan_births} "
         f"trees_before={stats.trees_before_expansion} "
         f"trees_after_lifecycle={stats.trees_after_lifecycle} "
         f"expanded={stats.expanded_leaf_count} "
@@ -849,7 +856,6 @@ def print_summary_stats(
         f"med={median(expand_update_calls):.1f} mean={_mean(expand_update_calls):.2f} max={max(expand_update_calls):.1f} "
         "post_expand_prune_validate_ms "
         f"med={median(post_expand_prune_validate_ms):.1f} p65={_percentile(post_expand_prune_validate_ms, 0.65):.1f} p80={_percentile(post_expand_prune_validate_ms, 0.80):.1f} p90={_percentile(post_expand_prune_validate_ms, 0.90):.1f} p95={_percentile(post_expand_prune_validate_ms, 0.95):.1f} max={max(post_expand_prune_validate_ms):.1f} "
-        f"births_ms med={median(births_ms):.1f} p65={_percentile(births_ms, 0.65):.1f} p80={_percentile(births_ms, 0.80):.1f} p90={_percentile(births_ms, 0.90):.1f} p95={_percentile(births_ms, 0.95):.1f} max={max(births_ms):.1f} "
         "cluster_build_solve_ms "
         f"med={median(cluster_build_and_solve_ms):.1f} p65={_percentile(cluster_build_and_solve_ms, 0.65):.1f} p80={_percentile(cluster_build_and_solve_ms, 0.80):.1f} p90={_percentile(cluster_build_and_solve_ms, 0.90):.1f} p95={_percentile(cluster_build_and_solve_ms, 0.95):.1f} max={max(cluster_build_and_solve_ms):.1f} "
         f"post_solve_prune_ms med={median(post_solve_prune_ms):.1f} p65={_percentile(post_solve_prune_ms, 0.65):.1f} p80={_percentile(post_solve_prune_ms, 0.80):.1f} p90={_percentile(post_solve_prune_ms, 0.90):.1f} p95={_percentile(post_solve_prune_ms, 0.95):.1f} max={max(post_solve_prune_ms):.1f} "
@@ -866,6 +872,7 @@ def print_summary_stats(
         f"med={median(lifecycle_deleter_check_ms):.1f} p65={_percentile(lifecycle_deleter_check_ms, 0.65):.1f} p80={_percentile(lifecycle_deleter_check_ms, 0.80):.1f} p90={_percentile(lifecycle_deleter_check_ms, 0.90):.1f} p95={_percentile(lifecycle_deleter_check_ms, 0.95):.1f} max={max(lifecycle_deleter_check_ms):.1f} "
         "lifecycle_other_ms "
         f"med={median(lifecycle_other_ms):.1f} p65={_percentile(lifecycle_other_ms, 0.65):.1f} p80={_percentile(lifecycle_other_ms, 0.80):.1f} p90={_percentile(lifecycle_other_ms, 0.90):.1f} p95={_percentile(lifecycle_other_ms, 0.95):.1f} max={max(lifecycle_other_ms):.1f} "
+        f"births_ms med={median(births_ms):.1f} p65={_percentile(births_ms, 0.65):.1f} p80={_percentile(births_ms, 0.80):.1f} p90={_percentile(births_ms, 0.90):.1f} p95={_percentile(births_ms, 0.95):.1f} max={max(births_ms):.1f} "
         f"publication_ms med={median(publication_ms):.1f} p65={_percentile(publication_ms, 0.65):.1f} p80={_percentile(publication_ms, 0.80):.1f} p90={_percentile(publication_ms, 0.90):.1f} p95={_percentile(publication_ms, 0.95):.1f} max={max(publication_ms):.1f} "
         f"cleanup_ms med={median(cleanup_ms):.1f} p65={_percentile(cleanup_ms, 0.65):.1f} p80={_percentile(cleanup_ms, 0.80):.1f} p90={_percentile(cleanup_ms, 0.90):.1f} p95={_percentile(cleanup_ms, 0.95):.1f} max={max(cleanup_ms):.1f} "
         f"other_ms med={median(other_ms):.1f} p65={_percentile(other_ms, 0.65):.1f} p80={_percentile(other_ms, 0.80):.1f} p90={_percentile(other_ms, 0.90):.1f} p95={_percentile(other_ms, 0.95):.1f} max={max(other_ms):.1f}"
